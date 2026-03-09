@@ -8,7 +8,37 @@ Tracks architectural reasoning, deviations from spec, and key decisions made dur
 
 ### 2026-03-09: Plan Review & Gap Resolution
 
-Full spec review against `Build_plan.md`. All 8 required smart contract functions, all 4 trade paths, all invariants, all testing requirements, and all success criteria are tracked. 15 total instructions (spec requires 8; extras are `place_order` (3 side types + merge/burn), `cancel_order`, `crank_cancel`, `admin_override_settlement`, `close_market`, `treasury_redeem`, `cleanup_market` — all necessary for a complete custom CLOB implementation with mainnet lifecycle).
+Full spec review against `Build_plan.md`. All 8 required smart contract functions, all 4 trade paths, all invariants, all testing requirements, and all success criteria are tracked. 15 total instructions (spec requires 8).
+
+### 2026-03-09: Why 15 Instructions When the Spec Requires 8
+
+**The spec defines 8 smart contract functions.** Our build plan delivers 15 instructions across Phases 1–6. This is not scope creep — every additional instruction is either a necessary decomposition of a spec requirement, a safety mechanism required by the custom CLOB architecture, or a mainnet sustainability feature (stretch goal).
+
+**Mapping spec functions → our instructions:**
+
+| Spec Function | Our Instruction(s) | Why |
+|---|---|---|
+| Initialize Config | `initialize_config` | 1:1 match |
+| Create Contract | `create_strike_market` | 1:1 match. Also serves as `add_strike` — same logic, PDA prevents duplicates. |
+| Add Strike | (folded into `create_strike_market`) | Separate instruction would duplicate 100% of the code. See Spec Deviations section. |
+| Mint Pair | `mint_pair` | 1:1 match |
+| Place Order | `place_order` | 1:1 match. Handles all 3 side types (Buy Yes, Sell Yes, Sell No) in one instruction via `side` parameter. |
+| Cancel Order | `cancel_order` | 1:1 match |
+| Settle Market | `settle_market` + `admin_settle` | Spec requires both oracle-based and admin settlement. Two instructions because they have different access control (anyone vs admin-only) and different timing constraints (`>= market_close` vs `>= market_close + 1hr`). |
+| Redeem | `redeem` | 1:1 match. Handles winner redeem, loser burn, and Yes+No pair redeem. |
+
+**Beyond-spec instructions (7 total):**
+
+| Instruction | Category | Justification |
+|---|---|---|
+| `admin_override_settlement` | Safety | 1hr correction window for bad oracle settlements. Without this, a single bad oracle price causes irreversible incorrect payouts. Required by the override window architecture. |
+| `crank_cancel` | Operational | Permissionless batch cleanup of resting orders post-settlement. Without this, users must individually cancel every open order after settlement — impractical at scale. Settlement service cranks automatically. |
+| `pause` / `unpause` | Safety | Emergency stop for global or per-market freeze. Standard practice for any DeFi protocol handling user funds. The spec doesn't mention pause, but deploying a system that handles real money without an emergency brake is indefensible. |
+| `close_market` | Mainnet (stretch) | Reclaims rent from expired markets. Without this, on-chain storage cost grows without bound on mainnet. Not needed for devnet prototype. |
+| `treasury_redeem` | Mainnet (stretch) | Late-claim path for users who missed the 90-day vault window. Ensures users always have recourse to their funds, even after market accounts are partially closed. |
+| `cleanup_market` | Mainnet (stretch) | Final cleanup once all tokens are burned. Closes remaining settlement record for zero on-chain footprint. |
+
+**Summary**: 8 instructions are direct spec implementations (with `add_strike` folded into `create_strike_market`). 4 are safety/operational necessities for a production-grade CLOB (`admin_override_settlement`, `crank_cancel`, `pause`, `unpause`). 3 are mainnet stretch goals (`close_market`, `treasury_redeem`, `cleanup_market`). The core Phases 1–3 deliver 12 instructions; Phase 6 adds 3 more.
 
 ### 2026-03-09: Mainnet Phase — `close_market` Instruction & Treasury PDA
 

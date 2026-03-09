@@ -41,7 +41,7 @@ Decision log: `/Users/js/dev/peak6/docs/DEV_LOG.md`
 | Package manager | Yarn | Consistent with Anchor ecosystem defaults |
 | Anchor version | `anchor-lang = "0.30.1"` (pinned) | Exact version avoids breaking changes between patch releases |
 | Service runtime | npm scripts, `Makefile` for orchestration | `make services` starts oracle-feeder + amm-bot + market-initializer + event-indexer. No Docker/pm2 for prototype. |
-| Admin keypair | `~/.config/solana/id.json` (Solana CLI default) | Same keypair = deployer, admin, oracle authority for devnet. Document in README. |
+| Admin keypair | `~/.config/solana/id.json` (Solana CLI default) | Same keypair = deployer, admin, oracle authority for devnet. **Faucet uses a separate dedicated keypair** (USDC mint authority only — cannot deploy or act as admin). Document in README. |
 | Program upgrade authority | Upgradeable on devnet, deployer holds authority | Solana default — programs are upgradeable via BPF Loader Upgradeable. Allows iteration without redeploying to new program IDs (preserves all existing PDAs/accounts). Mainnet: transfer authority to multisig or revoke with `--final` flag once stable. |
 | Transaction format | v0 versioned transactions + per-market ALTs | Every market gets an ALT at creation time, pre-loaded with all market PDAs + programs. 1-byte index vs 32-byte key per account. No legacy tx path. All major wallets support v0. |
 | Devnet RPC | Default `https://api.devnet.solana.com` | Zero-config. Helius documented as recommended upgrade. `SOLANA_RPC_URL` in `.env.example`. |
@@ -215,7 +215,7 @@ SettlementEvent {
 
 **Frontend**: All transaction builders use `VersionedTransaction` with the market's ALT. Single code path. All major wallets (Phantom, Solflare) support v0.
 
-**ALT lifecycle**: Created at market creation, never modified or closed. Populated with `AddressLookupTable.extendLookupTable` in the same script that creates the market. ALT address stored or derivable — frontend fetches via `connection.getAddressLookupTable()`.
+**ALT lifecycle**: Created at market creation, never modified or closed. Populated with `AddressLookupTable.extendLookupTable` in the same script that creates the market. **Activation delay**: ALTs require ~1 slot (~400ms) after `extendLookupTable` before entries are usable in transactions. The market creation script must wait for the extend transaction to finalize (confirm with `confirmed` commitment), then wait 1 additional slot before the ALT is passed to any transaction builder. Without this wait, the first trade on a newly-created market will fail with an invalid ALT error. ALT address stored or derivable — frontend fetches via `connection.getAddressLookupTable()`.
 
 ---
 
@@ -289,8 +289,10 @@ SettlementEvent {
 
 ### Compute Budget
 - Simple instructions (mint, cancel, redeem): default 200k CUs
-- Matching-heavy instructions (place_order with fills): request 400k CUs via `ComputeBudgetProgram.setComputeUnitLimit`
-- `place_order` accepts `max_fills` parameter (default 10). If order can't fully fill within N matches, remainder rests as limit order. Bounds compute predictably.
+- Standard matching instructions (place_order with swap fills only): request 400k CUs via `ComputeBudgetProgram.setComputeUnitLimit`
+- **Merge/burn matching** (place_order where No-backed bid matches Yes ask): request **800k CUs**. Each merge/burn fill involves 2 token burns + 2 USDC transfers + invariant check (~20,000–28,000 CUs per fill). At `max_fills=10`, worst case is ~280k CUs for fills alone plus overhead — 800k gives ~2x headroom while staying well under Solana's 1,400,000 CU per-transaction maximum.
+- `place_order` accepts `max_fills` parameter (default 10). If order can't fully fill within N matches, remainder rests as limit order. Bounds compute predictably. **`max_fills` is the primary CU safety valve** — if Phase 2 CU measurements come in higher than estimated, lower the default before adjusting the CU request.
+- **CU measurement gate (Phase 2C)**: Run a dedicated test that executes a 10-fill merge/burn sweep (worst-case path), reads `compute_units_consumed` from transaction metadata, and logs the actual number. This measurement locks the `max_fills` default and CU request values for the rest of the build. If actual CU per merge/burn fill exceeds 35,000, lower `max_fills` default to 8; if under 20,000, raise to 12–15.
 - Monitor program binary size during Phase 2 — if instructions + matching engine (with merge/burn) exceed 200KB BPF limit, use `solana program deploy --max-len`
 
 ### Prerequisites — What the Developer Needs Before Building
@@ -479,6 +481,7 @@ On-chain unit tests (matching engine — run these first, they validate the core
 - [ ] Matching engine: 20+ scenarios (exact fill, partial fill, sweep multiple levels, no cross, book full at level, price-time priority, market order fills, limit order rests)
 - [ ] Escrow: USDC locked on bid (→escrow_vault), Yes locked on ask (→yes_escrow), No locked on No-backed bid (→no_escrow), returned on cancel, correct asset transferred on fill
 - [ ] Merge/burn vault math: vault decrements by quantity, total_redeemed increments, invariant holds
+- [ ] **CU measurement (merge/burn worst-case)**: Execute a 10-fill merge/burn sweep (No-backed bid sweeping 10 Yes asks across price levels). Read `compute_units_consumed` from transaction metadata. Log actual CU. **This test locks the `max_fills` default and CU request values**: if per-fill CU > 35,000 → lower `max_fills` default to 8; if < 20,000 → raise to 12–15. Record the measurement in DEV_LOG.
 
 On-chain integration tests (need deployed instructions — parallel with each other):
 - [ ] Place order: happy path, insufficient balance, paused market, settled market, min quantity, price bounds
@@ -501,7 +504,7 @@ Run `/audit` against all Phase 2 code. Verify:
 - Matching engine correctness: price-time priority, partial fills, no fund leaks across all three side types
 - Escrow balances (USDC, Yes, No) always match outstanding orders by side
 - Merge/burn correctness: vault decrements exactly, total_redeemed increments, Yes+No supply stays equal after burns
-- No CU overflows on max_fills sweeps (test with 400k CU budget), especially merge/burn path (extra token burns)
+- No CU overflows on max_fills sweeps: verify standard swap path stays under 400k CUs, merge/burn path stays under 800k CUs. Confirm `max_fills` default matches the CU measurement gate results from Stage 2C.
 - Frontend: no direct RPC calls in components (hooks only)
 - TypeScript strict mode, no `any` types
 
@@ -564,14 +567,19 @@ Gates (must complete before parallel work begins):
 Once gates are complete, the following run in parallel:
 
 Frontend items (parallel with each other and with services). **Parallel safety rule**: Each task writes only to its own page directory and components. No task modifies `layout.tsx`, navigation, or shared layout components — those are locked after gate 3.
+
+**Page ownership** (prevents conflicts on shared pages):
+- `app/markets/page.tsx` — **owned by the Onboarding flow task**. This is the only task that modifies the Markets page layout. All other Markets page content (SettlementStatus, oracle prices, payoff display) is delivered as **standalone components in `components/`** that the Onboarding task imports. If the Onboarding task finishes first, it integrates the components; if other component tasks finish first, they leave an import-ready component and the Onboarding task wires it in.
+- `app/trade/[ticker]/page.tsx` — **not modified by any Phase 3B task**. Phase 2B already built this page. Phase 3B tasks deliver components (SettlementStatus, payoff, oracle) that are imported by the existing page — edits to the Trade page are a single integration step after all components are ready, not a parallel task.
+
 - [ ] Portfolio page (`app/portfolio/`): active positions, settled outcomes, P&L (entry vs current/exit), redeem buttons, "Cancel & Recover" for unfilled Buy No limit orders
 - [ ] History page (`app/history/`): trade execution log sourced from the event indexer (`/api/events/*` proxy routes). Filterable by market, side, and date. Paginated. Falls back to on-the-fly `getSignaturesForAddress` parsing if indexer is unavailable. **Depends on event indexer API contract** (route shape + response schema) but NOT on the indexer being fully operational — frontend can develop against the contract and fall back to direct parsing.
 - [ ] **Market Maker dashboard** (`app/market-maker/`): dedicated view for liquidity providers, separate from the Portfolio page. Components: (1) inventory summary — Yes/No token balances across all active markets in a single table, (2) open orders panel with per-market grouping and bulk-cancel button, (3) quick mint+quote workflow — mint pairs for a market and immediately post bid/ask limit orders in one flow, (4) fill history with per-trade P&L and realized/unrealized breakdown, (5) net exposure heatmap — visual grid showing long/short/neutral per ticker×strike. Data sourced from existing `usePortfolio`, `useOrderBook`, and `useMarkets` hooks + a new `useMarketMaker` aggregation hook. This is the spec's "Market Maker — Mint & Quote" user story given first-class treatment rather than being folded into Portfolio. **Mainnet access control**: On devnet, the page is accessible to all connected wallets. On mainnet, gated by wallet allowlist — `NEXT_PUBLIC_MM_WALLETS` env var contains a comma-separated list of approved wallet addresses. The `useNetwork()` hook + a `useMMAccess()` hook check connected wallet against the list; page returns a "Request Access" message for non-listed wallets. This is a **frontend-only gate** — the underlying instructions (`mint_pair`, `place_order`, `cancel_order`) remain permissionless on-chain. The page is a UX convenience for approved LPs, not a security boundary. Allowlist managed via Railway env vars, updatable without redeploy.
-- [ ] **Settlement status component** (`components/SettlementStatus.tsx`): single shared component consumed by Trade and Markets pages. Includes both the settlement countdown timer to 4:00 PM ET AND the override window indicator ("Settlement under review — redemptions available at [time]"). Combined into one task to prevent two parallel agents building overlapping UI for the same data.
-- [ ] Payoff display: Yes side: "You pay $X. You win $1.00 if [STOCK] closes above [STRIKE]." No side: "You pay $X. You win $1.00 if [STOCK] closes below [STRIKE]." Adapts based on trade side.
-- [ ] Real-time oracle price display per stock (WebSocket subscription to PriceFeed accounts)
-- [ ] Transaction status toasts with Solana Explorer links
-- [ ] **Onboarding flow**: contextual banner for new users (no positions, first visit). 3-step guide: "Fund Wallet → Pick a Market → Place Your First Trade." Each step highlights the relevant UI element. Dismisses permanently after first trade (tracked in `localStorage`). Not a modal wizard — inline nudges that coexist with the real UI. **Renders on the Markets page only** — no other parallel task should modify the Markets page layout.
+- [ ] **Settlement status component** (`components/SettlementStatus.tsx`): standalone component, no page modifications. Consumed by Trade and Markets pages via import. Includes both the settlement countdown timer to 4:00 PM ET AND the override window indicator ("Settlement under review — redemptions available at [time]"). Combined into one task to prevent two parallel agents building overlapping UI for the same data.
+- [ ] Payoff display (`components/PayoffDisplay.tsx`): standalone component, no page modifications. Yes side: "You pay $X. You win $1.00 if [STOCK] closes above [STRIKE]." No side: "You pay $X. You win $1.00 if [STOCK] closes below [STRIKE]." Adapts based on trade side.
+- [ ] Real-time oracle price display per stock (`components/OraclePrice.tsx`): standalone component, no page modifications. WebSocket subscription to PriceFeed accounts.
+- [ ] Transaction status toasts with Solana Explorer links (`components/TxToast.tsx`): standalone component, no page modifications.
+- [ ] **Onboarding flow** (`app/markets/page.tsx` — **page owner**): contextual banner for new users (no positions, first visit). 3-step guide: "Fund Wallet → Pick a Market → Place Your First Trade." Each step highlights the relevant UI element. Dismisses permanently after first trade (tracked in `localStorage`). Not a modal wizard — inline nudges that coexist with the real UI. **This task owns the Markets page layout** — it integrates SettlementStatus, OraclePrice, and PayoffDisplay components into the page alongside the onboarding flow.
 
 Services (parallel with each other, except where noted):
 - [ ] Oracle feeder service: Tradier streaming → on-chain `update_price` calls
@@ -634,7 +642,7 @@ Run `/audit` against all Phase 3 code. Verify:
 - Automation: retry logic correct, timezone handling (DST), alert on failure
 - Invariants hold across entire lifecycle (vault, supply, payout sum)
 - Unredeemed tokens remain redeemable indefinitely
-- Fee handling: no fees touch the vault (fees to separate account if any)
+- Fee handling: this system charges **zero fees** — no trading fees, no minting fees, no redemption fees. The vault holds only collateral ($1 × pairs minted). No fee logic exists anywhere in the codebase.
 
 **Demo checkpoint**: Full daily lifecycle works end-to-end on devnet. Settlement via Tradier data. Crank clears book. Winners redeem.
 
@@ -1221,7 +1229,7 @@ Every spec requirement mapped to a phase:
 - [P6] cleanup_market (admin, closes remaining StrikeMarket + mints once all token supply is burned)
 
 **Invariants (enforced on-chain):**
-- [P1] Vault balance = $1.00 x total pairs minted (fees to separate account if any)
+- [P1] Vault balance = $1.00 x total pairs minted (zero fees — vault holds only collateral)
 - [P3] Yes payout + No payout = $1.00 always
 - [P1] Tokens only created via mint_pair, only destroyed via redeem
 - [P3] Settlement outcome immutable after override window (1hr post-settlement)
@@ -1335,7 +1343,7 @@ Every spec requirement mapped to a phase:
 
 ### Mock USDC on Devnet
 Real USDC doesn't exist on Solana devnet. We create our own SPL token:
-- `scripts/create-mock-usdc.ts` — creates an SPL mint with 6 decimals, authority = deployer
+- `scripts/create-mock-usdc.ts` — generates a dedicated faucet keypair, creates an SPL mint with 6 decimals using the faucet keypair as mint authority (not the deployer), outputs the faucet keypair's base58 secret key for `FAUCET_KEYPAIR` in `.env`
 - `scripts/airdrop-usdc.ts` — mints mock USDC to test wallets (deployer, test users)
 - GlobalConfig stores the mock USDC mint address; all program instructions reference it
 - Frontend `.env` includes `NEXT_PUBLIC_USDC_MINT` pointing to our devnet mock mint
@@ -1352,8 +1360,8 @@ Two paths — CLI for developers, in-app for end users:
 - SOL: `/api/faucet/sol` — calls `connection.requestAirdrop(wallet, 2 SOL)`. Button in header when SOL balance < 0.01.
 - USDC: `/api/faucet/usdc` — server-side `mintTo(wallet, 1000 USDC)` using faucet keypair (USDC mint authority). Button in header when USDC balance is 0.
 - Rate limit: 1 request per wallet per 60 seconds (in-memory map). Prevents abuse without needing a database.
-- Faucet keypair stored as `FAUCET_KEYPAIR` env var (base58-encoded secret key). Same keypair that created the mock USDC mint — it's the mint authority.
-- On mainnet: faucet routes return 403. Users acquire real USDC from exchanges.
+- **Faucet keypair**: A **dedicated keypair** used only as the mock USDC mint authority. Generated separately from the deployer keypair — `create-mock-usdc.ts` generates a new keypair, creates the mint with it as authority, and outputs the base58-encoded secret key for `FAUCET_KEYPAIR` in `.env`. This keypair can mint mock USDC but cannot deploy programs, act as admin, or sign any other instruction. Principle of least privilege — consistent with the mainnet keypair separation strategy. Stored as `FAUCET_KEYPAIR` env var (base58-encoded secret key).
+- On mainnet: faucet routes return 403. No `FAUCET_KEYPAIR` exists. Users acquire real USDC from exchanges.
 
 ### Deployment
 
@@ -1399,7 +1407,7 @@ Railway project: meridian
 
 ### Transaction Size & Compute Budget
 - Solana tx limit: 1,232 bytes. All transactions use v0 + ALTs, so account key overhead is ~1 byte each instead of 32. Size is never a constraint, even for heaviest instructions (Buy No, Sell No merge/burn via `place_order`).
-- Default compute: 200,000 CUs. Simple operations (mint, cancel) are well under. Matching engine sweeps across multiple price levels could exceed. Add `ComputeBudgetProgram.setComputeUnitLimit()` to matching-heavy transactions (400k CUs). Test and measure in Phase 2.
+- Default compute: 200,000 CUs. Simple operations (mint, cancel) are well under. Standard swap fills: request 400k CUs. **Merge/burn fills (No-backed bid × Yes ask): request 800k CUs** — each merge/burn involves 2 burns + 2 transfers (~20k–28k CUs per fill). 800k gives ~2x headroom at `max_fills=10`. Solana max is 1,400,000 CUs. Exact values locked by CU measurement gate in Phase 2C.
 
 ### Order Book Account Sizing
 - ZeroCopy account with 99 price levels (1-99 cents). Each level has N order slots.

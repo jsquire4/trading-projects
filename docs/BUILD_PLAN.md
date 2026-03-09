@@ -429,6 +429,8 @@ Once IDL is generated, the following run in parallel (no dependencies on each ot
 - [ ] `useTransaction` hook: sign → send → confirm lifecycle with loading states ("Signing...", "Confirming...", toast)
 - [ ] `MarketCard` component: strike, Yes price, No price ($1 - Yes), implied probability (Yes price as %), active order count
 - [ ] Wallet USDC balance display (always visible in header)
+- [ ] **Devnet faucet**: `/api/faucet/sol` (calls `connection.requestAirdrop`, 2 SOL per click) + `/api/faucet/usdc` (server-side mint-to using faucet keypair, 1000 USDC per click). Rate-limited: 1 request per wallet per 60 seconds (in-memory map, no DB). Faucet keypair = USDC mint authority, stored in `FAUCET_KEYPAIR` env var (base58-encoded secret key).
+- [ ] **Wallet state awareness**: App-wide state machine for connected wallet — (1) no wallet: read-only markets, "Connect Wallet" CTA; (2) wallet connected, zero SOL: SOL faucet prompt; (3) wallet connected, zero USDC: USDC faucet prompt; (4) wallet connected, funded: full trading UI; (5) wallet connected, has positions: portfolio badge in nav. State derived from on-chain balances via `useWalletState` hook.
 
 Once `lib/orderbook.ts` and wallet adapter are complete:
 - [ ] `useMarkets` / `useMarket` / `useOrderBook` hooks (TanStack Query, polling + WebSocket subscription)
@@ -533,6 +535,7 @@ Frontend items (parallel with each other and with services):
 - [ ] Payoff display: Yes side: "You pay $X. You win $1.00 if [STOCK] closes above [STRIKE]." No side: "You pay $X. You win $1.00 if [STOCK] closes below [STRIKE]." Adapts based on trade side.
 - [ ] Real-time oracle price display per stock (WebSocket subscription to PriceFeed accounts)
 - [ ] Transaction status toasts with Solana Explorer links
+- [ ] **Onboarding flow**: contextual banner for new users (no positions, first visit). 3-step guide: "Fund Wallet → Pick a Market → Place Your First Trade." Each step highlights the relevant UI element. Dismisses permanently after first trade (tracked in `localStorage`). Not a modal wizard — inline nudges that coexist with the real UI.
 
 Services (parallel with each other, except where noted):
 - [ ] Oracle feeder service: Tradier streaming → on-chain `update_price` calls
@@ -650,8 +653,8 @@ Run `/complexity-sweep` across entire codebase (Phases 1–4). Focus areas:
 **Goal**: Demo-ready. Clean README, reproducible scripts, CI green.
 
 **Stage 5A — Parallel: docs + polish (independent of each other)**
-- [ ] Landing page: product explanation, live prices, connect wallet CTA
-- [ ] README: finalize with one-command setup (`make dev`), prerequisites, architecture overview, testing instructions
+- [ ] Landing page: product explanation, "How it works" 3-step visual (Fund → Trade → Settle), live market summary (tickers, active strikes, current prices — visible without connecting wallet), connect wallet CTA. Not just a splash — a real preview of what's inside.
+- [ ] README: finalize with one-command setup (`make dev`), prerequisites, architecture overview, testing instructions. Add "Deploy to Railway" section (see Deployment below).
 - [ ] `.env.example`: verify all required variables present (see Environment Variables section)
 - [ ] Architecture doc: chain choice rationale, custom order book design, oracle strategy, trade-offs
 - [ ] HyperLiquid feasibility note (see `docs/DEV_LOG.md` for content — extract to standalone doc)
@@ -662,11 +665,19 @@ Run `/complexity-sweep` across entire codebase (Phases 1–4). Focus areas:
   - **Frontend job**: Install Node 18, Yarn. Run `yarn install --frozen-lockfile`, `yarn lint` (ESLint), `yarn typecheck` (tsc --noEmit), `yarn test` (Vitest). Working directory: `app/meridian-web/`.
   - **Services job**: Install Node 18, Yarn. Run lint + typecheck + unit tests for `services/oracle-feeder/`, `services/amm-bot/`, `services/market-initializer/`, `services/shared/`.
   - **Triggers**: push to `main`, pull requests to `main`. All three jobs run in parallel.
+- [ ] **Railway deployment config**: Single Railway project with 5 services deployed from monorepo:
+  - `meridian-web` — Next.js frontend + faucet API routes. Root: `app/meridian-web/`. Build: `yarn build`, Start: `yarn start`.
+  - `oracle-feeder` — long-running WebSocket process. Root: `services/oracle-feeder/`.
+  - `market-initializer` — scheduled morning + afternoon jobs. Root: `services/market-initializer/`.
+  - `amm-bot` — long-running liquidity bot. Root: `services/amm-bot/`.
+  - Shared env vars across all services via Railway project variables. `FAUCET_KEYPAIR` (USDC mint authority, base58) set only on `meridian-web` service.
+  - `railway.toml` per service with build/start commands + health check paths.
+  - Deploy trigger: push to `main` (auto-deploy via Railway GitHub integration).
 
 **Stage 5B — Sequential: validation (once 5A is complete)**
 These depend on 5A outputs (README, CI, scripts) and on each other.
 1. Idempotent `deploy-devnet.sh` — verify reproducible from clean clone. **Idempotence rules**: `anchor deploy` uses `--program-keypair` for stable program IDs across redeploys; `create-mock-usdc.ts` checks if mint exists before creating; `init-config.ts` catches `ConfigAlreadyInitialized` and skips; `init-oracle-feeds.ts` catches `OracleFeedAlreadyInitialized` per ticker and skips; `create-test-markets.ts` catches `AccountAlreadyInUse` per market and skips. Script exits 0 on full or partial skip (already-initialized state is success).
-2. Load test: 100 simulated orders across 5 markets on devnet (needs deploy to succeed first). **Success criteria**: all 100 orders land on-chain without CU exhaustion, no vault invariant violations, order book state consistent after all fills, settlement completes for all 5 markets, crank_cancel clears all resting orders, total test completes within 10 minutes.
+2. Load test: 100 simulated orders across 5 markets on devnet using **5+ distinct wallets** (not single-wallet — validates multi-user matching, cross-wallet escrow, and concurrent ATA creation). Needs deploy to succeed first. **Success criteria**: all 100 orders land on-chain without CU exhaustion, no vault invariant violations, order book state consistent after all fills, settlement completes for all 5 markets, crank_cancel clears all resting orders, all wallets can redeem correctly, total test completes within 10 minutes.
 
 **Stage 5C — Final Audit**
 Run `/audit` against entire codebase. Verify:
@@ -1077,6 +1088,9 @@ settle_market -> crank_cancel -> redeem -> IDL generation -> frontend hooks -> c
 - `app/meridian-web/src/lib/orderbook.ts` — Order book data transforms: `buildNoView(book)` separates orders by side and applies price inversions for No perspective. Depth aggregation, spread calculation.
 - `app/meridian-web/src/components/analytics/*.tsx` — All differentiator components
 - `app/meridian-web/src/app/api/tradier/` — Next.js API routes (CORS proxy for Tradier)
+- `app/meridian-web/src/app/api/faucet/sol/route.ts` — Devnet SOL airdrop endpoint (calls `connection.requestAirdrop`)
+- `app/meridian-web/src/app/api/faucet/usdc/route.ts` — Devnet mock USDC mint endpoint (server-side `mintTo` using faucet keypair)
+- `app/meridian-web/src/hooks/useWalletState.ts` — Wallet state machine: no-wallet → zero-sol → zero-usdc → funded → has-positions
 - `app/meridian-web/next.config.js` — webpack fallback for crypto/buffer/stream polyfills
 
 **Services (TypeScript/Node):**
@@ -1094,6 +1108,12 @@ settle_market -> crank_cancel -> redeem -> IDL generation -> frontend hooks -> c
 - `scripts/init-oracle-feeds.ts` — Initialize PriceFeed for all 7 tickers
 - `scripts/create-test-markets.ts` — Create strikes for demo
 - `scripts/deploy-devnet.sh` — Idempotent full deployment (runs in order: deploy → mock USDC → init config → init feeds)
+
+**Deployment:**
+- `app/meridian-web/railway.toml` — Railway config for Next.js frontend
+- `services/oracle-feeder/railway.toml` — Railway config for oracle feeder
+- `services/market-initializer/railway.toml` — Railway config for market initializer + settlement
+- `services/amm-bot/railway.toml` — Railway config for AMM bot
 
 **Tests:**
 - `tests/meridian/*.test.ts` — Lifecycle, trade paths, matching, settlement, escrow, crank_cancel
@@ -1235,11 +1255,31 @@ Real USDC doesn't exist on Solana devnet. We create our own SPL token:
 - Frontend `.env` includes `NEXT_PUBLIC_USDC_MINT` pointing to our devnet mock mint
 - On mainnet, swap to real USDC mint address — zero code changes needed
 
-### Wallet Funding for Demo
+### Wallet Funding
+Two paths — CLI for developers, in-app for end users:
+
+**CLI (developer/testing):**
 - Devnet SOL: `solana airdrop 5 <wallet>` (built into Solana CLI, free on devnet)
 - Mock USDC: `scripts/airdrop-usdc.ts <wallet> <amount>` — mints tokens to any wallet
-- README documents both steps in "Getting Started"
-- Frontend displays a "Get Devnet USDC" helper link or button for new users
+
+**In-app faucet (end users — devnet only):**
+- SOL: `/api/faucet/sol` — calls `connection.requestAirdrop(wallet, 2 SOL)`. Button in header when SOL balance < 0.01.
+- USDC: `/api/faucet/usdc` — server-side `mintTo(wallet, 1000 USDC)` using faucet keypair (USDC mint authority). Button in header when USDC balance is 0.
+- Rate limit: 1 request per wallet per 60 seconds (in-memory map). Prevents abuse without needing a database.
+- Faucet keypair stored as `FAUCET_KEYPAIR` env var (base58-encoded secret key). Same keypair that created the mock USDC mint — it's the mint authority.
+- On mainnet: faucet routes return 403. Users acquire real USDC from exchanges.
+
+### Deployment (Railway)
+All services deploy to a single Railway project. No Vercel, no split infrastructure.
+
+- **Railway project**: `meridian` with 4 services, all deployed from the same GitHub repo
+- **Frontend**: `meridian-web` service. Railway auto-detects Next.js, builds and serves. Includes faucet API routes + Tradier proxy routes as serverless-compatible API handlers.
+- **Services**: `oracle-feeder`, `market-initializer`, `amm-bot` — each a separate Railway service with its own `railway.toml`. Long-running processes (not serverless).
+- **Shared env vars**: Railway project-level variables shared across all services (Solana RPC, program IDs, Tradier keys). Service-specific vars (e.g. `FAUCET_KEYPAIR`) set per service.
+- **Deploy trigger**: push to `main` auto-deploys all services via Railway's GitHub integration.
+- **Domain**: `meridian-web` gets a `.up.railway.app` subdomain (free). Custom domain optional.
+- **Cost**: Railway's $5/mo free credit covers devnet prototype usage easily.
+- **Local dev**: `make dev` still works for local development. Railway is the production deployment target.
 
 ### Transaction Size & Compute Budget
 - Solana tx limit: 1,232 bytes. All transactions use v0 + ALTs, so account key overhead is ~1 byte each instead of 32. Size is never a constraint, even for heaviest instructions (Buy No, Sell No merge/burn via `place_order`).
@@ -1296,6 +1336,9 @@ NEXT_PUBLIC_SOLANA_RPC_URL=https://api.devnet.solana.com
 NEXT_PUBLIC_MERIDIAN_PROGRAM_ID=
 NEXT_PUBLIC_MOCK_ORACLE_PROGRAM_ID=
 NEXT_PUBLIC_USDC_MINT=
+
+# Faucet (devnet only — USDC mint authority keypair, base58-encoded secret key)
+FAUCET_KEYPAIR=
 
 # Services
 ORACLE_UPDATE_INTERVAL_MS=5000                        # Oracle feeder update frequency

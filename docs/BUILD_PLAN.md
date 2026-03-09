@@ -37,7 +37,7 @@ Decision log: `/Users/js/dev/peak6/docs/DEV_LOG.md`
 | Position constraints | Frontend-only (not on-chain) | Standard SPL tokens are transferable. A user could transfer No tokens to wallet B, Buy Yes from wallet A. Documented limitation. |
 | Overflow protection | `overflow-checks = true` in `[profile.release]` Cargo.toml | All arithmetic checked at compile time. Small CU cost, major safety gain. |
 | Pause scope | Both global and per-market | `is_paused` on GlobalConfig (global) + `is_paused` on StrikeMarket (per-market). Instructions check both. |
-| `add_strike` | Folded into `create_strike_market` (spec enhancement) | No separate instruction needed — `create_strike_market` is admin-only and callable anytime (morning or intraday). PDA seeds (`[b"market", ticker, strike, expiry_day]`) guarantee deduplication — duplicate calls fail with `AccountAlreadyInUse`. See DEV_LOG "Spec Deviations" for rationale. 15 total instructions (12 in Phases 1-3, `close_market` + `treasury_redeem` + `cleanup_market` added in Phase 6). |
+| `add_strike` | Folded into `create_strike_market` (spec enhancement) | No separate instruction needed — `create_strike_market` is admin-only and callable anytime (morning or intraday). PDA seeds (`[b"market", ticker, strike, expiry_day]`) guarantee deduplication — duplicate calls fail with `AccountAlreadyInUse`. See DEV_LOG "Spec Deviations" for rationale. See "Smart Contract Instructions" section for the full 15-instruction breakdown. |
 | Package manager | Yarn | Consistent with Anchor ecosystem defaults |
 | Anchor version | `anchor-lang = "0.30.1"` (pinned) | Exact version avoids breaking changes between patch releases |
 | Service runtime | npm scripts, `Makefile` for orchestration | `make services` starts oracle-feeder + amm-bot + market-initializer + event-indexer. No Docker/pm2 for prototype. |
@@ -187,8 +187,8 @@ SettlementEvent {
 |---|---|---|
 | `initialize_config` | Admin (deployer) | One-time only. Sets admin, USDC mint, oracle program. |
 | `create_strike_market` | Admin | Creates market + order book + mints + vaults. Accepts `market_close_unix` param (automation calculates from "4 PM ET today" with DST). |
-| `mint_pair` | Any user | Market must not be settled or paused. **Position constraint: user's Yes ATA balance must be 0** (prevents entering No position while holding Yes). Creates Yes/No ATAs via `init_if_needed`. |
-| `place_order` | Any user | Market not settled, not paused. Three side types: `side=0` (USDC bid, Buy Yes), `side=1` (Yes ask, Sell Yes), `side=2` (No-backed bid, Sell No). **Position constraint on side=0: user's No ATA balance must be 0** (prevents buying Yes while holding No). Escrows USDC, Yes, or No tokens respectively. `max_fills` param caps compute (default 10). Min size: 1_000_000 lamports (1 token). When a No-backed bid matches a Yes ask, the engine merge/burns the pair and releases $1 from vault. |
+| `mint_pair` | Any user | Market must not be settled or paused. **Position constraint: user's Yes ATA balance must be 0** (prevents entering No position while holding Yes). Constraint fires during Anchor account deserialization, **before** any CPI — see "Position Constraint Timing" section. Creates Yes/No ATAs via `init_if_needed`. |
+| `place_order` | Any user | Market not settled, not paused. Three side types: `side=0` (USDC bid, Buy Yes), `side=1` (Yes ask, Sell Yes), `side=2` (No-backed bid, Sell No). **Position constraint on side=0: user's No ATA balance must be 0** — see "Position Constraint Timing" section. Escrows USDC, Yes, or No tokens respectively. `max_fills` param caps compute (default 10). Min size: 1_000_000 lamports (1 token). When a No-backed bid matches a Yes ask, the engine merge/burns the pair — see "Merge/Burn Vault Math" section. |
 | `cancel_order` | Order owner only | Can cancel anytime, including post-settlement. Returns escrowed asset (USDC, Yes, or No) based on order's `side` field. |
 | `settle_market` | Anyone | `Clock::get() >= market_close_unix`. Oracle staleness (120s settlement threshold) + confidence (0.5% bps) validated. Sets outcome + `override_deadline = settled_at + 3600`. |
 | `admin_settle` | Admin only | `Clock::get() >= market_close_unix + 3600` (1hr delay). Accepts manual price. Fails if already settled. |
@@ -293,9 +293,22 @@ SettlementEvent {
 - `place_order` accepts `max_fills` parameter (default 10). If order can't fully fill within N matches, remainder rests as limit order. Bounds compute predictably.
 - Monitor program binary size during Phase 2 — if instructions + matching engine (with merge/burn) exceed 200KB BPF limit, use `solana program deploy --max-len`
 
+### Prerequisites — What the Developer Needs Before Building
+
+**No manual setup required.** Tradier API key is already in `.env`. Everything else is handled automatically by the build/deploy scripts.
+
+**Everything below is automated — do NOT do these manually:**
+- Devnet SOL: airdropped by deploy scripts (free, unlimited on devnet)
+- Mock USDC mint: created by `create-mock-usdc.ts`
+- GlobalConfig, oracle feeds, test markets: created by init scripts
+- ATAs, escrow accounts, vaults: created by on-chain instructions via `init_if_needed`
+- Solana keypair: already exists at `~/.config/solana/id.json` (Solana CLI default)
+
+A zero SOL balance is expected and normal — scripts handle funding as step 1.
+
 ### Initialization Order
-Script dependencies must run in this order:
-1. `solana airdrop` — fund deployer wallet with SOL
+Script dependencies must run in this order (all automated by `make dev`):
+1. `solana airdrop` — fund deployer wallet with SOL (devnet, free)
 2. `anchor deploy` — deploy both programs
 3. `scripts/create-mock-usdc.ts` — create mock USDC mint
 4. `scripts/init-config.ts` — initialize GlobalConfig with admin, USDC mint, oracle program
@@ -315,7 +328,7 @@ Each phase is broken into **stages**. Stages use three execution modes:
 
 Dependency graphs are shown in ASCII where the flow isn't obvious. Every phase ends with an **audit** checkpoint.
 
-All smart contract tests use `solana-bankrun` for clock manipulation (settlement timing, admin delays, oracle staleness). Fallback: `solana-test-validator` with `warp_to_slot` if bankrun has ZeroCopy deserialization issues with the ~126 KB OrderBook account. **Validate bankrun + ZeroCopy compatibility early in Phase 2 before building all tests on it.**
+All smart contract tests use `solana-bankrun` for clock manipulation (settlement timing, admin delays, oracle staleness). Fallback: `solana-test-validator` with `warp_to_slot` if bankrun has ZeroCopy deserialization issues with the ~126 KB OrderBook account. **See "Bankrun + ZeroCopy Decision Point" section — compatibility must be validated in Stage 1D and the decision locked before Phase 2.**
 
 ### Phase 1: Foundation
 **Goal**: Both programs deployed on devnet. Can mint Yes/No token pairs via CLI.
@@ -398,7 +411,7 @@ Steps 1–3 are strictly sequential — each defines data structures or logic th
 1. Order book state design: ZeroCopy account, 99 price levels (1-99 cents), 16 order slots per level, `OrderSlot` struct (with `side: u8` — 0=USDC bid, 1=Yes ask, 2=No-backed bid), `PriceLevel` struct
 2. Matching engine (`matching/engine.rs`): pure functions — price-time priority, partial fills, fill events. Market orders (take best available) + limit orders (rest on book). `max_fills` param caps compute. **Three settlement paths based on order side types:**
    - USDC bid × Yes ask → standard swap (USDC to seller, Yes to buyer)
-   - No-backed bid × Yes ask → merge/burn (Yes + No burned, $1 from vault split between both parties, `total_redeemed += quantity`)
+   - No-backed bid × Yes ask → merge/burn (see "Merge/Burn Vault Math" section for exact payout formula and invariant checks)
    - USDC bid × USDC bid or ask × ask → never match (same side)
    **30+ unit test scenarios before integration** (up from 20+ — need to cover all side-type combinations and merge/burn vault math).
 3. Escrow logic: three escrow types — lock USDC (USDC bids → `escrow_vault`), Yes tokens (Yes asks → `yes_escrow`), or No tokens (No-backed bids → `no_escrow`) on order placement. Unlock and return correct asset on cancel. **Tested independently for all three types.**
@@ -565,7 +578,7 @@ Services (parallel with each other, except where noted):
 - [ ] Market-initializer service: morning job reads Tradier previous close, calculates strikes, calls `create_strike_market` + creates ALT per market
 - [ ] Settlement service: afternoon reads Tradier close, updates oracle, calls `settle_market`, then `crank_cancel` loop. Retry logic (30s × 15min), admin alert on failure. **Note: e2e testing requires oracle feeder to be running** (needs fresh on-chain prices to settle). Build independently, test integration after oracle feeder is operational.
 - [ ] Automation scheduler: timed jobs with DST-aware ET conversion using `America/New_York` timezone
-- [ ] **Event indexer** (`services/event-indexer/`): Lightweight service that watches for Anchor events (FillEvent, SettlementEvent, cancel, redeem) via `connection.onLogs(programId)` and persists them to JSON files in `data/events/` (one file per market per day). On startup, backfills by scanning recent transactions via `getSignaturesForAddress` + log parsing. Exposes a simple REST API (`GET /api/events?market=X&type=fill&limit=50`) consumed by the frontend History page and Settlement Analytics. Eliminates the History page's dependency on slow on-the-fly transaction parsing — queries go to the indexer's cached data instead. TanStack Query in the frontend hits `/api/events/*` Next.js proxy routes. No database — JSON files are sufficient for prototype scale. Indexer runs as a 5th Railway service in both environments.
+- [ ] **Event indexer** (`services/event-indexer/`): Lightweight service that watches for Anchor events (FillEvent, SettlementEvent, cancel, redeem) via `connection.onLogs(programId)` and persists them to a SQLite database (`events.db` via `better-sqlite3`). On startup, backfills from last-processed checkpoint via `getSignaturesForAddress` + log parsing (incremental — not a full rescan). Exposes a REST API (`GET /api/events?market=X&type=fill&limit=50`) consumed by the frontend History page and Settlement Analytics. SQL filtering replaces file scanning — queries are fast regardless of data volume. TanStack Query in the frontend hits `/api/events/*` Next.js proxy routes. On Railway, a 1GB persistent volume mounted at `/data` holds `events.db` — survives redeploys. See "Trade History & Event Storage" section for full schema and deployment details. Indexer runs as a 5th Railway service in both environments.
 
 **Automation service timing (spec requirement):**
 - **8:00 AM ET**: Morning job reads previous close from Tradier, calculates strikes (±3/6/9%, $10 rounding, dedup)
@@ -585,7 +598,10 @@ On-chain tests (parallel with each other):
 - [ ] Oracle validation: stale price rejected (>120s), wide confidence rejected (>0.5%), valid price accepted
 - [ ] `admin_settle`: delay enforced (1hr after market close), succeeds after delay, fails if already settled
 - [ ] `admin_override_settlement`: succeeds within window, fails after deadline, flips outcome correctly, resets deadline
-- [ ] `redeem` blocked during override window, succeeds after deadline passes
+- [ ] `redeem` blocked during override window (`RedemptionBlockedOverride`), succeeds immediately after deadline passes
+- [ ] `crank_cancel` succeeds during override window (escrow refunds are outcome-independent)
+- [ ] Admin overrides outcome during window → post-deadline `redeem` pays based on corrected outcome, not original
+- [ ] `crank_cancel` mid-flight during admin override → crank unaffected (returns same assets regardless of outcome flip)
 - [ ] Redeem: winning tokens paid $1, losing tokens zeroed, vault empties after full redemption
 - [ ] Redeem Yes+No pair: burns both for $1 USDC
 - [ ] `crank_cancel`: batch processing (32 slots), skip inactive, reject unsettled market, returns 0 when empty
@@ -600,7 +616,7 @@ Integration tests (sequential — these exercise the full pipeline):
 - [ ] Settlement executes within 10 minutes of market close (success criterion)
 
 Service tests (vitest — parallel with on-chain and frontend tests):
-- [ ] Event indexer: log parser correctly extracts FillEvent/SettlementEvent from Anchor program logs, backfill recovers missed events on restart, REST API returns correct filtered/paginated results, JSON persistence writes and reads correctly, handles malformed logs gracefully
+- [ ] Event indexer: log parser correctly extracts FillEvent/SettlementEvent from Anchor program logs, incremental backfill resumes from checkpoint on restart (not full rescan), REST API returns correct filtered/paginated results, SQLite persistence writes and reads correctly (atomic transactions, no partial writes), handles malformed logs gracefully
 
 Frontend tests (vitest — parallel with on-chain tests):
 - [ ] Real-time price display from oracle (mock `onAccountChange`, verify re-render)
@@ -707,7 +723,7 @@ Run `/complexity-sweep` across entire codebase (Phases 1–4). Focus areas:
   - `oracle-feeder` — long-running WebSocket process. Root: `services/oracle-feeder/`.
   - `market-initializer` — scheduled morning + afternoon jobs. Root: `services/market-initializer/`.
   - `amm-bot` — long-running liquidity bot. Root: `services/amm-bot/`.
-  - `event-indexer` — long-running log watcher + REST API for trade history. Root: `services/event-indexer/`.
+  - `event-indexer` — long-running log watcher + REST API for trade history. Root: `services/event-indexer/`. 1GB persistent volume mounted at `/data` for SQLite DB.
   - Shared env vars across all services via Railway project variables. `FAUCET_KEYPAIR` (USDC mint authority, base58) set only on `meridian-web` in `devnet` env.
   - `railway.toml` per service with build/start commands + health check paths.
   - `devnet` env deploy trigger: push to `main`. `mainnet` env deploy trigger: push to `release` (Phase 6).
@@ -1081,20 +1097,24 @@ make clean        # remove build artifacts + target dirs
 
 ---
 
-## Smart Contract Instructions (15 total)
+## Smart Contract Instructions (15 total: 12 core + 3 mainnet)
+
+**Phases 1–3** deliver **12 instructions** — all spec requirements plus extras (`crank_cancel`, `admin_override_settlement`, `pause`, `unpause`). These are the core instructions; every file in `programs/meridian/src/instructions/` during Phases 1–3 corresponds to exactly one of these 12.
+
+**Phase 6** adds **3 mainnet-only instructions** (`close_market`, `treasury_redeem`, `cleanup_market`) for rent sustainability. These are beyond spec scope and not required for the devnet prototype.
 
 | # | Instruction | Phase | Notes |
 |---|---|---|---|
 | 1 | `initialize_config` | 1 | Admin, USDC mint, oracle program, staleness/confidence thresholds, tickers. Also creates TreasuryPDA (`[b"treasury"]`) USDC token account. |
 | 2 | `create_strike_market` | 1 | Admin-only. Creates market PDA + Yes/No mints + vaults (including No Escrow) + order book. Accepts `market_close_unix`. Also serves as `add_strike` (callable anytime by admin). |
-| 3 | `mint_pair` | 1 | Any user deposits 1 USDC → 1 Yes + 1 No. Creates ATAs via `init_if_needed`. Market must not be settled/paused. |
-| 4 | `place_order` | 2 | Three side types: `side=0` (USDC bid, Buy Yes), `side=1` (Yes ask, Sell Yes), `side=2` (No-backed bid, Sell No). Escrows USDC, Yes, or No tokens respectively. Market or Limit. `max_fills` param caps compute. Min size: 1 token. When No-backed bid matches Yes ask → merge/burn: both tokens burned, $1 from vault split between parties. |
+| 3 | `mint_pair` | 1 | Any user deposits 1 USDC → 1 Yes + 1 No. Creates ATAs via `init_if_needed`. Market must not be settled/paused. Position constraint: rejects if user's Yes ATA balance > 0 (checked via Anchor account constraint **before** any CPI — see Position Constraint Timing below). |
+| 4 | `place_order` | 2 | Three side types: `side=0` (USDC bid, Buy Yes), `side=1` (Yes ask, Sell Yes), `side=2` (No-backed bid, Sell No). Escrows USDC, Yes, or No tokens respectively. Market or Limit. `max_fills` param caps compute. Min size: 1 token. When No-backed bid matches Yes ask → merge/burn (see Merge/Burn Vault Math below). Position constraint on side=0: rejects if user's No ATA balance > 0 (checked **before** matching — see Position Constraint Timing below). |
 | 5 | `cancel_order` | 2 | Owner only. Refund from escrow (USDC, Yes, or No based on order's `side`). Works post-settlement too. Cancel by `(price_level, order_id)`. |
 | 6 | `settle_market` | 3 | Anyone calls. Requires `Clock >= market_close_unix`. Oracle staleness (120s) + confidence (0.5% bps) validated. Sets outcome + `override_deadline = settled_at + 3600`. Phase 6 adds Pyth oracle path via `oracle_type` flag in GlobalConfig. |
 | 7 | `admin_settle` | 3 | Admin only. Requires `Clock >= market_close_unix + 3600`. Accepts manual price. Fails if already settled. |
 | 8 | `admin_override_settlement` | 3 | Admin only. `Clock < override_deadline`. Corrects outcome + settlement_price. Resets `override_deadline = now + 3600`. After deadline, outcome is truly final. |
 | 9 | `redeem` | 3 | Burns tokens → pay USDC. Winners: $1/token. Losers: $0. Also: burn Yes+No pair → $1. **Blocked during override window** (1hr post-settlement). |
-| 10 | `crank_cancel` | 3 | Permissionless. Market must be settled. Iterates up to 32 order slots per call, returns escrow (USDC, Yes, or No) to owners. **Not blocked by override window** (escrow refunds are outcome-independent). |
+| 10 | `crank_cancel` | 3 | Permissionless. Market must be settled. Iterates up to 32 order slots per call, returns escrow (USDC, Yes, or No) to owners. **Not blocked by override window** (escrow refunds are outcome-independent — see Override Window Safety below). |
 | 11 | `pause` | 3 | Admin only. Global (`GlobalConfig.is_paused`) or per-market (`StrikeMarket.is_paused`). |
 | 12 | `unpause` | 3 | Admin only. Resume. |
 | 13 | `close_market` | 6 | Admin only. Standard close (all redeemed): closes all 8 accounts. Partial close (90 days, tokens remain): closes 5 big accounts (OrderBook + USDC Vault + Escrow Vault + Yes Escrow + No Escrow), keeps StrikeMarket + mints as settlement record, revokes mint authority, sweeps vault to treasury. |
@@ -1120,7 +1140,7 @@ settle_market -> crank_cancel -> redeem -> IDL generation -> frontend hooks -> c
 - `programs/meridian/src/state/order_book.rs` — ZeroCopy OrderBook + PriceLevel + OrderSlot (see Account Schemas)
 - `programs/meridian/src/state/events.rs` — FillEvent, SettlementEvent (Anchor `emit!`)
 - `programs/meridian/src/matching/engine.rs` — Price-time priority matching (market + limit, max_fills)
-- `programs/meridian/src/instructions/` — All 12 instruction handlers (one file each, including `place_order.rs` with three-side matching + merge/burn, `crank_cancel.rs`, and `admin_override_settlement.rs`)
+- `programs/meridian/src/instructions/` — 12 core instruction handlers in Phases 1–3 (one file each): `initialize_config.rs`, `create_strike_market.rs`, `mint_pair.rs`, `place_order.rs` (three-side matching + merge/burn), `cancel_order.rs`, `settle_market.rs`, `admin_settle.rs`, `admin_override_settlement.rs`, `redeem.rs`, `crank_cancel.rs`, `pause.rs`, `unpause.rs`. Phase 6 adds 3 more: `close_market.rs`, `treasury_redeem.rs`, `cleanup_market.rs`.
 - `programs/meridian/src/error.rs` — Full `#[error_code]` enum (see Error Codes section — 40+ variants across 11 categories)
 - `programs/mock-oracle/src/state/price_feed.rs` — PriceFeed (see Account Schemas)
 - `programs/mock-oracle/src/instructions/` — initialize_feed, update_price
@@ -1158,9 +1178,10 @@ settle_market -> crank_cancel -> redeem -> IDL generation -> frontend hooks -> c
 - `services/market-initializer/src/scheduler.ts` — Timed jobs with DST-aware ET conversion
 - `services/shared/src/tradier-client.ts` — Shared HTTP client with token-bucket rate limiter
 - `services/shared/src/alerting.ts` — Logging + admin alerting for failures
-- `services/event-indexer/src/watcher.ts` — `connection.onLogs` listener, parses Anchor events, writes to JSON
-- `services/event-indexer/src/backfill.ts` — Startup backfill via `getSignaturesForAddress` + log parsing
-- `services/event-indexer/src/api.ts` — Express/Fastify REST API for querying cached events
+- `services/event-indexer/src/db.ts` — SQLite schema setup (`better-sqlite3`), table definitions (`fills`, `settlements`, `cancels`, `redeems`, `checkpoints`), query helpers
+- `services/event-indexer/src/watcher.ts` — `connection.onLogs` listener, parses Anchor events, writes to SQLite
+- `services/event-indexer/src/backfill.ts` — Incremental backfill from checkpoint via `getSignaturesForAddress` + log parsing
+- `services/event-indexer/src/api.ts` — Express/Fastify REST API for querying events (SQL-backed filtering, pagination)
 
 **Scripts:**
 - `scripts/create-mock-usdc.ts` — Create SPL token mint (6 decimals) on devnet
@@ -1183,7 +1204,7 @@ settle_market -> crank_cancel -> redeem -> IDL generation -> frontend hooks -> c
 - `tests/meridian/*.test.ts` — Lifecycle, trade paths, matching, settlement, escrow, crank_cancel
 - `tests/mock-oracle/oracle.test.ts` — Price feed CRUD + validation + staleness
 - `tests/helpers/` — Mock wallet context, mock Anchor program, test data factories, mock WebSocket subscription (`onAccountChange`) for testing real-time oracle price updates (verify component re-renders on price change)
-- Uses `solana-bankrun` for clock manipulation (settle timing, admin_settle delay, oracle staleness). Fallback: `solana-test-validator` with `warp_to_slot` if bankrun has ZeroCopy deserialization issues with the ~126 KB OrderBook account.
+- Uses `solana-bankrun` for clock manipulation (settle timing, admin_settle delay, oracle staleness). See "Bankrun + ZeroCopy Decision Point" section for fallback rules — decision is locked in Stage 1D, no mixed runtimes after that.
 
 ---
 
@@ -1362,7 +1383,7 @@ Railway project: meridian
 │   ├── oracle-feeder       (Tradier streaming → mock oracle)
 │   ├── market-initializer  (morning strikes + afternoon settlement)
 │   ├── amm-bot             (liquidity seeder)
-│   └── event-indexer       (log watcher + trade history API)
+│   └── event-indexer       (log watcher + trade history API, 1GB volume at /data)
 └── Environment: mainnet
     ├── meridian-web        (Next.js frontend, faucet disabled)
     ├── oracle-feeder       (Tradier streaming → Pyth price verification)
@@ -1373,7 +1394,7 @@ Railway project: meridian
 
 - **Deploy triggers**: `devnet` env auto-deploys from `main` branch. `mainnet` env deploys from `release` branch (manual merge from `main` → `release` for controlled rollout).
 - **Domain**: `devnet` gets `meridian-devnet.up.railway.app`. `mainnet` gets `meridian.up.railway.app` (or custom domain).
-- **Cost**: Railway $5/mo free credit covers devnet. Mainnet adds ~$5-10/mo for 5 always-on services.
+- **Cost**: Railway $5/mo free credit covers devnet. Mainnet adds ~$5-10/mo for 5 always-on services. Persistent volumes add ~$0.25/mo per environment (1GB each for event-indexer).
 - **Local dev**: `make dev` and `make dev:mainnet` run the full stack locally. Railway is the deployed target.
 
 ### Transaction Size & Compute Budget
@@ -1387,11 +1408,102 @@ Railway project: meridian
 - Solana max account: 10 MB. We're well under. Rent cost: ~1 SOL on devnet (free via airdrop).
 - If 16 slots/level proves too small: split into BidBook/AskBook accounts later.
 
+### Devnet Rollback Strategy
+
+If a deployment or initialization fails partway through, use the following recovery approach:
+
+**Programs (anchor deploy failure):**
+- Solana programs are upgradeable by default. A failed `anchor deploy` leaves the old program intact — just fix and redeploy.
+- If deploying for the first time and the BPF upload fails mid-stream: the program ID is unused. Retry `anchor deploy` — it will overwrite the incomplete buffer.
+- If a deployed program is fundamentally broken (bad state transitions, wrong PDA seeds): deploy a new version with `anchor deploy`. All existing PDAs remain addressable because seeds are deterministic. If PDA seeds changed, you must redeploy to a **new program ID** (delete `target/deploy/*.json` keypairs, `anchor deploy` generates fresh ones). This orphans all old accounts — acceptable on devnet.
+
+**Initialization scripts (partial init):**
+- All init scripts are idempotent (see Initialization Order section). Re-running after partial failure picks up where it left off.
+- If `init-config.ts` succeeds but `init-oracle-feeds.ts` fails: just re-run the full init sequence. `init-config.ts` catches `ConfigAlreadyInitialized` and skips.
+- If state is irrecoverably wrong (e.g., GlobalConfig initialized with wrong USDC mint): redeploy both programs to new program IDs. On devnet, this is free and fast — no data to preserve.
+
+**Nuclear option (devnet only):**
+- Delete `target/deploy/meridian-keypair.json` and `target/deploy/mock_oracle-keypair.json`.
+- Run `anchor deploy` — generates new program IDs, deploys fresh.
+- Re-run all init scripts from scratch.
+- Cost: ~2 SOL airdrop (free on devnet). Time: ~2 minutes.
+- **Never do this on mainnet** — it orphans all existing user accounts and tokens.
+
+**Mainnet recovery (Phase 6):**
+- Programs are upgradeable. Fix the bug, `anchor deploy` with the same program ID.
+- If upgrade authority was revoked (`--final`): you're stuck. This is why the plan keeps programs upgradeable until stable.
+- Account state errors: deploy a migration instruction that corrects bad state. Never redeploy to a new program ID on mainnet.
+
+### Bankrun + ZeroCopy Decision Point
+
+`solana-bankrun` is the preferred test runtime (fast, clock manipulation, no validator process). However, bankrun's deserialization of large ZeroCopy accounts (~126 KB OrderBook) is unproven.
+
+**Decision rule**: Test bankrun + ZeroCopy compatibility in **Stage 1D** (first test that touches OrderBook). If the OrderBook initialization test can create, write to, and read back a ZeroCopy OrderBook account in bankrun without deserialization errors:
+- **Pass**: Use bankrun for all test suites. No further action.
+- **Fail**: Switch **immediately** to `solana-test-validator` with `warp_to_slot` for clock manipulation. Do not spend time debugging bankrun internals — the ROI is negative. Update all test helpers to use `solana-test-validator` before proceeding to Phase 2.
+
+This decision must be made and documented in DEV_LOG before any Phase 2 test work begins. Every test file after this point uses whichever runtime was chosen — no mixed runtimes.
+
+### Position Constraint Timing
+
+Position constraints in `mint_pair` and `place_order` must fire **before** any state mutation (token minting, escrow transfers, order book writes). Implementation:
+
+- **`mint_pair`**: The user's Yes ATA is passed as a read-only account in the Anchor `#[derive(Accounts)]` struct. An Anchor `constraint` attribute checks `user_yes_ata.amount == 0` (or the account doesn't exist). This validation runs during Anchor's account deserialization phase — before the instruction handler body executes. If the user holds any Yes tokens, the tx fails with `ConflictingPosition` before any USDC is transferred or tokens minted.
+- **`place_order` (side=0, Buy Yes)**: Same pattern — user's No ATA passed as read-only, `constraint` checks `amount == 0`. Fires before matching engine runs.
+- **ATA doesn't exist yet**: If the user has never received Yes/No tokens for this market, the ATA won't exist. Use `Option<Account<TokenAccount>>` — if `None`, constraint passes (no tokens = no conflict). If `Some`, check `amount == 0`.
+
+**Why this matters**: If the constraint checked *after* minting (in `mint_pair`), the tx would always fail — `mint_pair` itself creates Yes tokens. The check must see the user's balance as of the start of the transaction, not mid-execution.
+
+### Merge/Burn Vault Math
+
+When a No-backed bid (side=2) matches a Yes ask (side=1), both tokens are merge/burned and $1 USDC is released from the vault. The payout split follows the **resting order's price** (price-time priority — the resting order's terms are honored):
+
+**Example**: Resting Yes ask at price 60 ($0.60). Incoming No-backed bid at price 45 ($0.45 for No = willing to pay up to $0.55 for the merge). Fill price = 60 (resting order's price).
+
+- **Yes seller (maker, resting ask)**: Receives $0.60 USDC per token from vault. They had escrowed Yes tokens; those are burned.
+- **No seller (taker, incoming No-backed bid)**: Receives $0.40 USDC per token from vault (= $1.00 − $0.60). They had escrowed No tokens; those are burned.
+- **Vault**: Decrements by `quantity` (in token lamports) — exactly $1.00 per merged pair.
+- **`total_redeemed`**: Increments by `quantity` — these pairs are economically settled.
+- **Token supplies**: Yes supply decreases by `quantity`, No supply decreases by `quantity`. Both supplies remain equal.
+
+**Payout formula** (per unit, in USDC lamports):
+```
+fill_price_usdc = fill_price * 10_000  // price 60 → 60 * 10_000 = 600_000 (= $0.60 at 6 decimals)
+yes_seller_payout = fill_price_usdc    // resting ask gets their price
+no_seller_payout = 1_000_000 - fill_price_usdc  // taker gets the remainder
+vault_debit = quantity                 // exactly $1.00 per pair in token lamports
+```
+
+**Invariant check after merge/burn**: `vault.amount == (total_minted - total_redeemed) * 1_000_000`. This must hold after every merge/burn fill. If it doesn't, the matching engine has a bug — fail the transaction with `VaultBalanceMismatch`.
+
+**Edge cases to test**:
+- Fill at price 1: Yes seller gets $0.01, No seller gets $0.99
+- Fill at price 99: Yes seller gets $0.99, No seller gets $0.01
+- Fill at price 50: symmetric $0.50 / $0.50 split
+- Partial fill: merge/burn applies only to the filled quantity, remainder stays on book
+- Multiple merge/burns in one `place_order` call (sweeping across price levels): vault must decrement by total merged quantity across all fills
+
+### Override Window Safety
+
+`crank_cancel` is deliberately **not blocked** during the override window because escrow refunds are outcome-independent — a cancelled order returns the same asset (USDC, Yes, or No tokens) regardless of who won. The override window only blocks `redeem`, where the payout amount depends on the outcome.
+
+**Required test cases (Stage 3C)**:
+- [ ] `crank_cancel` succeeds during override window (within 1hr of settlement): orders cancelled, escrow returned correctly
+- [ ] `crank_cancel` succeeds after override window expires: same behavior
+- [ ] `redeem` fails during override window with `RedemptionBlockedOverride`
+- [ ] `redeem` succeeds immediately after override window expires
+- [ ] Admin overrides outcome during window → `redeem` after new deadline pays based on corrected outcome
+- [ ] Admin overrides outcome during window while `crank_cancel` is in progress → crank unaffected (returns same assets regardless of outcome flip)
+
+
 ### Trade History & Event Storage
 - **On-chain**: Anchor `emit!` events for every fill, cancel, settle, redeem. Events are in transaction logs.
-- **Event indexer** (`services/event-indexer/`): Long-running service that watches `connection.onLogs(programId)` for Anchor events, parses them, and persists to JSON files in `data/events/` (one file per market per day). On startup, backfills missed events via `getSignaturesForAddress`. Exposes a REST API consumed by the frontend History page and Settlement Analytics. Eliminates slow on-the-fly transaction parsing.
+- **Event indexer** (`services/event-indexer/`): Long-running service that watches `connection.onLogs(programId)` for Anchor events, parses them, and persists to a **SQLite database** (`events.db`). On startup, backfills missed events via `getSignaturesForAddress` (starting from last-processed signature checkpoint in the DB — incremental, not full rescan). Exposes a REST API consumed by the frontend History page and Settlement Analytics. Eliminates slow on-the-fly transaction parsing.
+- **Storage**: SQLite via `better-sqlite3`. Tables: `fills`, `settlements`, `cancels`, `redeems`, plus a `checkpoints` table (last processed tx signature per program). Queries use SQL filtering (market, type, date range, pagination) instead of scanning files. Atomic writes — no partial-file corruption risk.
+- **Railway deployment**: 1GB persistent volume attached to the `event-indexer` service, mounted at `/data`. SQLite DB at `/data/events.db`. Volume survives redeploys, restarts, and service rebuilds ($0.25/month). Volume is single-attach — only the event-indexer reads/writes the DB; frontend hits the indexer's REST API. Backfill runs once on first deploy; subsequent deploys resume from checkpoint.
+- **Local development**: DB file at `data/events.db` (gitignored). Created automatically on first run.
 - **Frontend History page**: Queries the event indexer via `/api/events/*` Next.js proxy routes. TanStack Query with polling. Falls back to direct `getSignaturesForAddress` parsing if indexer is down.
-- **Settlement analytics (Phase 4)**: Settlement records also captured by the event indexer (SettlementEvent). Analytics components read from the same API. No separate JSON write needed — the indexer is the single source of truth for all historical events.
+- **Settlement analytics (Phase 4)**: Settlement records also captured by the event indexer (SettlementEvent). Analytics components read from the same API. The indexer is the single source of truth for all historical events.
 
 ### Real-Time Updates
 - **Order book + positions**: Solana `connection.onAccountChange(orderBookPDA)` WebSocket subscription — instant updates when any order is placed/filled/cancelled. Used alongside TanStack Query (polling as fallback).
@@ -1399,11 +1511,11 @@ Railway project: meridian
 - **Tradier streaming**: `stream.tradier.com/v1/markets/events` for live intraday stock prices in the oracle feeder. REST polling as fallback if streaming has issues. Streaming doesn't count against rate limits.
 
 ### Prerequisites (README)
-- Rust 1.75+ (for Anchor 0.30.x)
-- Solana CLI 1.18+
-- Anchor CLI 0.30.x
-- Node.js 18+ (LTS)
-- Yarn (workspace-aware, consistent with Anchor ecosystem)
+- Rust 1.94+ (tested with 1.94.0; Anchor 0.30.x requires 1.75+ minimum)
+- Solana CLI 2.1+ (tested with 2.1.21; 1.18+ minimum for Anchor compatibility)
+- Anchor CLI 0.30.1 (pinned — do not use 0.30.0 or 0.31.x)
+- Node.js 24+ (tested with v24.11.1; 18+ minimum)
+- Yarn 1.22+ (workspace-aware, consistent with Anchor ecosystem)
 - Tradier API key (brokerage account, GET-only access)
 - A Solana wallet (Phantom recommended for browser testing)
 

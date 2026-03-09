@@ -425,7 +425,7 @@ OrderBook component + OrderForm + position constraints (parallel, need hooks)
 
 Once IDL is generated, the following run in parallel (no dependencies on each other):
 - [ ] Frontend wallet adapter + Anchor program client hooks (`useAnchorProgram`)
-- [ ] `lib/orderbook.ts`: `buildNoView(book)` — separates USDC bids, Yes asks, and No-backed bids into Yes/No depth views. Depth aggregation, spread calculation. No-backed bids at price X appear as No asks at price (100-X) in the Yes perspective.
+- [ ] `lib/orderbook.ts`: `buildNoView(book)` — separates USDC bids, Yes asks, and No-backed bids into Yes/No depth views. Depth aggregation, spread calculation. No-backed bids at price X appear as No asks at price (100-X) in the Yes perspective. **Verification requirement**: unit tests must confirm that the No perspective correctly inverts prices for all three order side types — a USDC bid at price 60 (Buy Yes at $0.60) must appear as a No ask at price 40 ($0.40) in the No view; a Yes ask at price 70 must appear as a No bid at price 30; a No-backed bid at price 55 must appear as real No depth at price 55 (no inversion — it's already a No-native order). Test edge cases: price 1 → 99, price 99 → 1, price 50 → 50.
 - [ ] `useTransaction` hook: sign → send → confirm lifecycle with loading states ("Signing...", "Confirming...", toast)
 - [ ] `MarketCard` component: strike, Yes price, No price ($1 - Yes), implied probability (Yes price as %), active order count
 - [ ] Wallet USDC balance display (always visible in header)
@@ -528,8 +528,8 @@ Once gates are complete, the following run in parallel:
 
 Frontend items (parallel with each other and with services):
 - [ ] Portfolio page: active positions, settled outcomes, P&L (entry vs current/exit), redeem buttons, "Cancel & Recover" for unfilled Buy No limit orders
-- [ ] History page: trade execution log (parsed from tx events via `getSignaturesForAddress`)
-- [ ] Market Maker / Mint & Quote flow: mint pairs, post limit orders, see exposure/fills/P&L in portfolio view
+- [ ] History page: trade execution log sourced from the event indexer (`/api/events/*` proxy routes). Filterable by market, side, and date. Paginated. Falls back to on-the-fly `getSignaturesForAddress` parsing if indexer is unavailable.
+- [ ] **Market Maker dashboard** (`/market-maker` page): dedicated view for liquidity providers, separate from the Portfolio page. Components: (1) inventory summary — Yes/No token balances across all active markets in a single table, (2) open orders panel with per-market grouping and bulk-cancel button, (3) quick mint+quote workflow — mint pairs for a market and immediately post bid/ask limit orders in one flow, (4) fill history with per-trade P&L and realized/unrealized breakdown, (5) net exposure heatmap — visual grid showing long/short/neutral per ticker×strike. Data sourced from existing `usePortfolio`, `useOrderBook`, and `useMarkets` hooks + a new `useMarketMaker` aggregation hook. This is the spec's "Market Maker — Mint & Quote" user story given first-class treatment rather than being folded into Portfolio. **Mainnet access control**: On devnet, the page is accessible to all connected wallets. On mainnet, gated by wallet allowlist — `NEXT_PUBLIC_MM_WALLETS` env var contains a comma-separated list of approved wallet addresses. The `useNetwork()` hook + a `useMMAccess()` hook check connected wallet against the list; page returns a "Request Access" message for non-listed wallets. This is a **frontend-only gate** — the underlying instructions (`mint_pair`, `place_order`, `cancel_order`) remain permissionless on-chain. The page is a UX convenience for approved LPs, not a security boundary. Allowlist managed via Railway env vars, updatable without redeploy.
 - [ ] Settlement countdown timer to 4:00 PM ET
 - [ ] Override window indicator: "Settlement under review — redemptions available at [time]". Countdown to override expiry.
 - [ ] Payoff display: Yes side: "You pay $X. You win $1.00 if [STOCK] closes above [STRIKE]." No side: "You pay $X. You win $1.00 if [STOCK] closes below [STRIKE]." Adapts based on trade side.
@@ -542,6 +542,7 @@ Services (parallel with each other, except where noted):
 - [ ] Market-initializer service: morning job reads Tradier previous close, calculates strikes, calls `create_strike_market` + creates ALT per market
 - [ ] Settlement service: afternoon reads Tradier close, updates oracle, calls `settle_market`, then `crank_cancel` loop. Retry logic (30s × 15min), admin alert on failure. **Note: e2e testing requires oracle feeder to be running** (needs fresh on-chain prices to settle). Build independently, test integration after oracle feeder is operational.
 - [ ] Automation scheduler: timed jobs with DST-aware ET conversion using `America/New_York` timezone
+- [ ] **Event indexer** (`services/event-indexer/`): Lightweight service that watches for Anchor events (FillEvent, SettlementEvent, cancel, redeem) via `connection.onLogs(programId)` and persists them to JSON files in `data/events/` (one file per market per day). On startup, backfills by scanning recent transactions via `getSignaturesForAddress` + log parsing. Exposes a simple REST API (`GET /api/events?market=X&type=fill&limit=50`) consumed by the frontend History page and Settlement Analytics. Eliminates the History page's dependency on slow on-the-fly transaction parsing — queries go to the indexer's cached data instead. TanStack Query in the frontend hits `/api/events/*` Next.js proxy routes. No database — JSON files are sufficient for prototype scale. Indexer runs as a 5th Railway service in both environments.
 
 **Automation service timing (spec requirement):**
 - **8:00 AM ET**: Morning job reads previous close from Tradier, calculates strikes (±3/6/9%, $10 rounding, dedup)
@@ -658,7 +659,7 @@ Run `/complexity-sweep` across entire codebase (Phases 1–4). Focus areas:
 - [ ] `.env.example`: verify all required variables present (see Environment Variables section)
 - [ ] Architecture doc: chain choice rationale, custom order book design, oracle strategy, trade-offs
 - [ ] HyperLiquid feasibility note (see `docs/DEV_LOG.md` for content — extract to standalone doc)
-- [ ] Risks/limitations note (no regulatory claims)
+- [ ] Risks/limitations note — must include known technical limitations, trust assumptions, and economic edge cases. **Must NOT make any regulatory or compliance claims** (per spec: "no regulatory or compliance claims"). State that the system is a prototype and does not constitute a regulated financial product. Do not assert compliance with SEC, CFTC, or any other regulatory body.
 - [ ] Dependency justification doc (see `docs/DEV_LOG.md` for table — extract to standalone doc)
 - [ ] CI workflows (GitHub Actions, `.github/workflows/ci.yml`):
   - **Anchor tests job**: Install Rust 1.75, Solana CLI 1.18, Anchor CLI 0.30.1. Run `anchor build`, then `anchor test` (bankrun, no validator needed). Cache `~/.cargo` and `target/` across runs.
@@ -666,11 +667,12 @@ Run `/complexity-sweep` across entire codebase (Phases 1–4). Focus areas:
   - **Services job**: Install Node 18, Yarn. Run lint + typecheck + unit tests for `services/oracle-feeder/`, `services/amm-bot/`, `services/market-initializer/`, `services/shared/`.
   - **Triggers**: push to `main`, pull requests to `main`. All three jobs run in parallel.
 - [ ] **Railway deployment config**: Single Railway project, `devnet` environment (Phase 5). `mainnet` environment added in Phase 6.
-  - 4 services per environment: `meridian-web`, `oracle-feeder`, `market-initializer`, `amm-bot`.
+  - 5 services per environment: `meridian-web`, `oracle-feeder`, `market-initializer`, `amm-bot`, `event-indexer`.
   - `meridian-web` — Next.js frontend + faucet API routes. Root: `app/meridian-web/`. Build: `yarn build`, Start: `yarn start`.
   - `oracle-feeder` — long-running WebSocket process. Root: `services/oracle-feeder/`.
   - `market-initializer` — scheduled morning + afternoon jobs. Root: `services/market-initializer/`.
   - `amm-bot` — long-running liquidity bot. Root: `services/amm-bot/`.
+  - `event-indexer` — long-running log watcher + REST API for trade history. Root: `services/event-indexer/`.
   - Shared env vars across all services via Railway project variables. `FAUCET_KEYPAIR` (USDC mint authority, base58) set only on `meridian-web` in `devnet` env.
   - `railway.toml` per service with build/start commands + health check paths.
   - `devnet` env deploy trigger: push to `main`. `mainnet` env deploy trigger: push to `release` (Phase 6).
@@ -1098,6 +1100,8 @@ settle_market -> crank_cancel -> redeem -> IDL generation -> frontend hooks -> c
 - `app/meridian-web/src/hooks/use*.ts` — Anchor + Tradier hooks (useMarkets, useOrderBook, usePortfolio)
 - `app/meridian-web/src/components/markets/OrderBook.tsx` — Bid/ask depth (both perspectives), WebSocket subscriptions. Accepts `perspective: "yes" | "no"` prop. Yes view: USDC bids + No-backed bids on left, Yes asks on right. No view: real No depth from No-backed bids, inverted Yes asks. Uses `buildNoView()` from `lib/orderbook.ts`.
 - `app/meridian-web/src/lib/orderbook.ts` — Order book data transforms: `buildNoView(book)` separates orders by side and applies price inversions for No perspective. Depth aggregation, spread calculation.
+- `app/meridian-web/src/app/market-maker/page.tsx` — Market Maker dashboard page
+- `app/meridian-web/src/hooks/useMarketMaker.ts` — Aggregation hook: inventory, open orders, fill history across all markets
 - `app/meridian-web/src/components/analytics/*.tsx` — All differentiator components
 - `app/meridian-web/src/app/api/tradier/` — Next.js API routes (CORS proxy for Tradier)
 - `app/meridian-web/src/app/api/faucet/sol/route.ts` — Devnet SOL airdrop endpoint (calls `connection.requestAirdrop`)
@@ -1113,6 +1117,9 @@ settle_market -> crank_cancel -> redeem -> IDL generation -> frontend hooks -> c
 - `services/market-initializer/src/scheduler.ts` — Timed jobs with DST-aware ET conversion
 - `services/shared/src/tradier-client.ts` — Shared HTTP client with token-bucket rate limiter
 - `services/shared/src/alerting.ts` — Logging + admin alerting for failures
+- `services/event-indexer/src/watcher.ts` — `connection.onLogs` listener, parses Anchor events, writes to JSON
+- `services/event-indexer/src/backfill.ts` — Startup backfill via `getSignaturesForAddress` + log parsing
+- `services/event-indexer/src/api.ts` — Express/Fastify REST API for querying cached events
 
 **Scripts:**
 - `scripts/create-mock-usdc.ts` — Create SPL token mint (6 decimals) on devnet
@@ -1129,6 +1136,7 @@ settle_market -> crank_cancel -> redeem -> IDL generation -> frontend hooks -> c
 - `services/oracle-feeder/railway.toml` — Railway config for oracle feeder
 - `services/market-initializer/railway.toml` — Railway config for market initializer + settlement
 - `services/amm-bot/railway.toml` — Railway config for AMM bot
+- `services/event-indexer/railway.toml` — Railway config for event indexer
 
 **Tests:**
 - `tests/meridian/*.test.ts` — Lifecycle, trade paths, matching, settlement, escrow, crank_cancel
@@ -1182,7 +1190,8 @@ Every spec requirement mapped to a phase:
 - [P2] Markets: grid of 7 stocks with live prices and active contract counts
 - [P2] Trade: strike list, order book (Yes + No perspectives), Buy/Sell panel
 - [P3] Portfolio: active positions, settled outcomes, P&L, redeem buttons
-- [P3] History: trade execution log
+- [P3] History: trade execution log (sourced from event indexer)
+- [P3] Market Maker: dedicated dashboard — inventory, open orders, quick mint+quote, fill history, net exposure
 
 **Frontend UI Elements (Phase 2-3):**
 - [P2] Wallet USDC balance display (always visible)
@@ -1311,17 +1320,19 @@ Railway project: meridian
 │   ├── meridian-web        (Next.js frontend + faucet + Tradier proxy)
 │   ├── oracle-feeder       (Tradier streaming → mock oracle)
 │   ├── market-initializer  (morning strikes + afternoon settlement)
-│   └── amm-bot             (liquidity seeder)
+│   ├── amm-bot             (liquidity seeder)
+│   └── event-indexer       (log watcher + trade history API)
 └── Environment: mainnet
     ├── meridian-web        (Next.js frontend, faucet disabled)
     ├── oracle-feeder       (Tradier streaming → Pyth price verification)
     ├── market-initializer  (morning strikes + afternoon settlement)
-    └── amm-bot             (liquidity seeder)
+    ├── amm-bot             (liquidity seeder)
+    └── event-indexer       (log watcher + trade history API)
 ```
 
 - **Deploy triggers**: `devnet` env auto-deploys from `main` branch. `mainnet` env deploys from `release` branch (manual merge from `main` → `release` for controlled rollout).
 - **Domain**: `devnet` gets `meridian-devnet.up.railway.app`. `mainnet` gets `meridian.up.railway.app` (or custom domain).
-- **Cost**: Railway $5/mo free credit covers devnet. Mainnet adds ~$5-10/mo for 4 always-on services.
+- **Cost**: Railway $5/mo free credit covers devnet. Mainnet adds ~$5-10/mo for 5 always-on services.
 - **Local dev**: `make dev` and `make dev:mainnet` run the full stack locally. Railway is the deployed target.
 
 ### Transaction Size & Compute Budget
@@ -1337,8 +1348,9 @@ Railway project: meridian
 
 ### Trade History & Event Storage
 - **On-chain**: Anchor `emit!` events for every fill, cancel, settle, redeem. Events are in transaction logs.
-- **Frontend History page**: Query recent transactions using `connection.getSignaturesForAddress(marketPDA)` + parse logs. TanStack Query caches results.
-- **Settlement analytics (Phase 4)**: Store settlement records as JSON in `data/settlements/` (local file per day). The market-initializer/settlement service writes these after each settlement run. Analytics components read them via a Next.js API route. Lightweight — no database needed for a prototype.
+- **Event indexer** (`services/event-indexer/`): Long-running service that watches `connection.onLogs(programId)` for Anchor events, parses them, and persists to JSON files in `data/events/` (one file per market per day). On startup, backfills missed events via `getSignaturesForAddress`. Exposes a REST API consumed by the frontend History page and Settlement Analytics. Eliminates slow on-the-fly transaction parsing.
+- **Frontend History page**: Queries the event indexer via `/api/events/*` Next.js proxy routes. TanStack Query with polling. Falls back to direct `getSignaturesForAddress` parsing if indexer is down.
+- **Settlement analytics (Phase 4)**: Settlement records also captured by the event indexer (SettlementEvent). Analytics components read from the same API. No separate JSON write needed — the indexer is the single source of truth for all historical events.
 
 ### Real-Time Updates
 - **Order book + positions**: Solana `connection.onAccountChange(orderBookPDA)` WebSocket subscription — instant updates when any order is placed/filled/cancelled. Used alongside TanStack Query (polling as fallback).

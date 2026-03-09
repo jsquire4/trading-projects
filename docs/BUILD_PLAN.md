@@ -1,0 +1,1187 @@
+# Meridian — Implementation Plan
+
+## Context
+
+Building a binary stock outcome trading platform on Solana as a Peak6 assignment. Users trade Yes/No tokens on whether MAG7 stocks (AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA) close above a strike price today. Contracts are 0DTE, settle at 4 PM ET via Tradier API data, pay $1 USDC to winners. The goal is a working devnet prototype that meets all spec requirements plus 6 differentiator features.
+
+Full spec: `/Users/js/dev/peak6/docs/Meridian - Binary Stock Outcome Markets on Blockchain.md`
+Order book specification: `/Users/js/dev/peak6/docs/ORDER_BOOK.md`
+Decision log: `/Users/js/dev/peak6/docs/DEV_LOG.md`
+
+## Locked Decisions
+
+- **Chain**: Solana devnet (Anchor 0.30.x)
+- **Order book**: Custom built-in (not Phoenix) — full control, simpler atomic Buy No
+- **Oracle**: Mock oracle program fed by Tradier brokerage API (real MAG7 stock data)
+- **Frontend**: Next.js 14/15 + wallet adapter + TanStack Query + Tailwind
+- **Token model**: SPL mint-pair (1 USDC = 1 Yes + 1 No)
+
+---
+
+## Architectural Decisions
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| Token program | SPL Token (not Token-2022) | Simpler, better tooling, transfer restrictions not needed for prototype |
+| Token decimals | 6 for Yes, No, and mock USDC | Matches USDC precision, simplifies 1:1 arithmetic (1 pair = 1_000_000 lamports) |
+| Freeze authority | Market PDA holds freeze authority on Yes/No mints | `pause` can freeze both mints, blocking all token movement |
+| Mint authority | Market PDA is sole mint authority | Tokens only created via `mint_pair` instruction |
+| Escrow model | **Separate escrow vault** per market | PDA: `[b"escrow", market.key]`. Holds USDC bids + Yes token asks. Main vault holds only mint collateral. Preserves invariant: main vault = $1 × pairs minted. |
+| Staleness thresholds | Two-tier: 60s general, 120s settlement | General (trading display): 60s per Pyth/Drift Solana DeFi standard. Settlement: 120s — closing price is written once post-4PM, more buffer needed for tx confirmation. Both configurable in GlobalConfig. |
+| Confidence threshold | 0.5% of price | For a $200 stock, confidence band must be < $1.00. Stock closing prices are precise; anything wider indicates bad data. Configurable in GlobalConfig. |
+| Order IDs | Global u64 counter in OrderBook account | `next_order_id` increments on each placement. Cancel by `(price_level, order_id)` tuple. |
+| Price representation | u8 in range [1, 99] | Price 50 = $0.50. Market buy sends price=99 (take any ask). Market sell sends price=1 (take any bid). Fill when bid >= ask. Execution at resting order's price. |
+| Settlement operator | `>=` (at-or-above) | Price >= strike → Yes wins. Anyone can call `settle_market` (deterministic oracle read). |
+| Post-settlement order cleanup | `crank_cancel` instruction | `settle_market` sets `is_settled=true`. Permissionless `crank_cancel` iterates up to N slots per call, returns escrow to owners. Settlement service cranks in a loop until book is empty. Manual `cancel_order` still works alongside. |
+| Self-trade prevention | Allow (prototype) | Documented as known limitation. No economic harm, just wasteful. |
+| Position constraints | Frontend-only (not on-chain) | Standard SPL tokens are transferable. A user could transfer No tokens to wallet B, Buy Yes from wallet A. Documented limitation. |
+| Overflow protection | `overflow-checks = true` in `[profile.release]` Cargo.toml | All arithmetic checked at compile time. Small CU cost, major safety gain. |
+| Pause scope | Both global and per-market | `is_paused` on GlobalConfig (global) + `is_paused` on StrikeMarket (per-market). Instructions check both. |
+| `add_strike` | Same as `create_strike_market` with admin-only access | No separate instruction needed — `create_strike_market` is admin-only and callable anytime. PDA dedup prevents duplicates. 15 total instructions (12 in Phases 1-3, `close_market` + `treasury_redeem` + `cleanup_market` added in Phase 6). |
+| Package manager | Yarn | Consistent with Anchor ecosystem defaults |
+| Anchor version | `anchor-lang = "0.30.1"` (pinned) | Exact version avoids breaking changes between patch releases |
+| Service runtime | npm scripts, `Makefile` for orchestration | `make services` starts oracle-feeder + amm-bot + market-initializer. No Docker/pm2 for prototype. |
+| Admin keypair | `~/.config/solana/id.json` (Solana CLI default) | Same keypair = deployer, admin, oracle authority for devnet. Document in README. |
+| Program upgrade authority | Upgradeable on devnet, deployer holds authority | Solana default — programs are upgradeable via BPF Loader Upgradeable. Allows iteration without redeploying to new program IDs (preserves all existing PDAs/accounts). Mainnet: transfer authority to multisig or revoke with `--final` flag once stable. |
+| Transaction format | v0 versioned transactions + per-market ALTs | Every market gets an ALT at creation time, pre-loaded with all market PDAs + programs. 1-byte index vs 32-byte key per account. No legacy tx path. All major wallets support v0. |
+| Devnet RPC | Default `https://api.devnet.solana.com` | Zero-config. Helius documented as recommended upgrade. `SOLANA_RPC_URL` in `.env.example`. |
+
+---
+
+## PDA Registry
+
+Every PDA in the system with exact seeds. Rust and TypeScript must match byte-for-byte.
+
+| Account | Seeds | Bump | Notes |
+|---|---|---|---|
+| GlobalConfig | `[b"config"]` | stored | One per program deployment |
+| StrikeMarket | `[b"market", ticker_bytes, strike_price_le_bytes, expiry_day_le_bytes]` | stored | `ticker_bytes`: UTF-8 padded to 8 bytes. `strike_price`: u64 LE (USDC lamports, e.g. 680_000_000 for $680). `expiry_day`: u32 LE = `floor(market_close_unix / 86400)`. |
+| Yes Mint | `[b"yes_mint", market.key().as_ref()]` | stored | Authority = market PDA. Freeze authority = market PDA. Decimals = 6. |
+| No Mint | `[b"no_mint", market.key().as_ref()]` | stored | Same authorities. |
+| USDC Vault | `[b"vault", market.key().as_ref()]` | stored | Token account owned by market PDA. Holds mint collateral only. |
+| Escrow Vault | `[b"escrow", market.key().as_ref()]` | stored | Token account (USDC) owned by market PDA. Holds bid escrow. |
+| Yes Escrow | `[b"yes_escrow", market.key().as_ref()]` | stored | Token account (Yes) owned by market PDA. Holds ask escrow (Sell Yes limit orders). |
+| No Escrow | `[b"no_escrow", market.key().as_ref()]` | stored | Token account (No) owned by market PDA. Holds No-backed bid escrow (Sell No limit orders). |
+| OrderBook | `[b"order_book", market.key().as_ref()]` | stored | ZeroCopy account. One per market. |
+| PriceFeed | `[b"price_feed", ticker_bytes]` | stored | Mock oracle. `ticker_bytes` same encoding as StrikeMarket. |
+| Treasury | `[b"treasury"]` | stored | USDC token account owned by GlobalConfig PDA. Created during `initialize_config`. Receives unclaimed USDC from force-closed markets (Phase 6). |
+
+**TypeScript derivation**: `PublicKey.findProgramAddressSync([Buffer.from("market"), tickerBuffer, strikePriceBuffer, expiryDayBuffer], programId)` — `tickerBuffer` is UTF-8 padded to 8 bytes with zeros, `strikePriceBuffer` is `Buffer.alloc(8)` with `writeBigUInt64LE`, `expiryDayBuffer` is `Buffer.alloc(4)` with `writeUInt32LE`.
+
+---
+
+## Account Schemas
+
+### GlobalConfig (~208 bytes)
+```
+admin: Pubkey              // 32 — admin authority
+usdc_mint: Pubkey          // 32 — mock USDC mint on devnet
+oracle_program: Pubkey     // 32 — mock oracle program ID
+staleness_threshold: u64   // 8  — max oracle age for general ops (default 60s, per Pyth/Drift standard)
+settlement_staleness: u64  // 8  — max oracle age for settlement (default 120s, closing price is written once)
+confidence_bps: u64        // 8  — max confidence band as basis points of price (default 50 = 0.5%)
+is_paused: bool            // 1  — global pause flag
+oracle_type: u8            // 1  — 0=Mock, 1=Pyth. Set at init, used by settle_market to branch deserialization.
+tickers: [[u8; 8]; 7]     // 56 — 7 supported tickers, padded
+ticker_count: u8           // 1  — number of active tickers
+bump: u8                   // 1  — PDA bump
+_padding: [u8; 4]          // 4  — alignment (was 5, oracle_type took 1)
+```
+
+### StrikeMarket (~308 bytes)
+```
+config: Pubkey             // 32 — parent GlobalConfig
+ticker: [u8; 8]            // 8  — stock ticker (UTF-8, zero-padded)
+strike_price: u64          // 8  — in USDC lamports (680_000_000 = $680.00)
+market_close_unix: i64     // 8  — UTC timestamp for 4 PM ET on this trading day
+yes_mint: Pubkey           // 32
+no_mint: Pubkey            // 32
+usdc_vault: Pubkey         // 32 — collateral vault
+escrow_vault: Pubkey       // 32 — bid escrow (USDC)
+yes_escrow: Pubkey         // 32 — ask escrow (Yes tokens, Sell Yes limits)
+no_escrow: Pubkey          // 32 — No-backed bid escrow (No tokens, Sell No limits)
+order_book: Pubkey         // 32 — OrderBook account
+oracle_feed: Pubkey        // 32 — PriceFeed to read at settlement
+total_minted: u64          // 8  — total pairs minted (in token lamports)
+total_redeemed: u64        // 8  — total pairs redeemed
+is_settled: bool           // 1
+outcome: u8                // 1  — 0=unsettled, 1=YesWins, 2=NoWins
+settlement_price: u64      // 8  — oracle price at settlement (0 if unsettled)
+is_paused: bool            // 1  — per-market pause
+is_closed: bool            // 1  — true after partial close_market (Phase 6). Vault swept to treasury, OrderBook closed.
+previous_close: u64        // 8  — reference price for display
+settled_at: i64            // 8  — settlement timestamp (0 if unsettled)
+override_deadline: i64     // 8  — settled_at + 3600; admin can override until this time. 0 if unsettled.
+bump: u8                   // 1
+_padding: [u8; 5]          // 5  — alignment (was 6, is_closed took 1)
+```
+
+### OrderBook (ZeroCopy, ~126 KB)
+```
+market: Pubkey             // 32
+next_order_id: u64         // 8  — monotonically incrementing
+levels: [PriceLevel; 99]   // 99 price levels (index 0 = price 1, index 98 = price 99)
+bump: u8                   // 1
+```
+
+Each `PriceLevel`:
+```
+orders: [OrderSlot; 16]    // 16 slots per level
+count: u8                  // active orders at this level
+```
+
+Each `OrderSlot` (~73 bytes):
+```
+owner: Pubkey              // 32 — order placer
+order_id: u64              // 8  — unique ID from next_order_id
+quantity: u64              // 8  — remaining quantity (token lamports)
+original_quantity: u64     // 8  — original quantity (for fill tracking)
+side: u8                   // 1  — 0=USDC bid (Buy Yes), 1=Yes ask (Sell Yes), 2=No-backed bid (Sell No)
+timestamp: i64             // 8  — Clock::get() at placement
+is_active: bool            // 1  — false = slot is empty/cancelled
+_padding: [u8; 7]          // 7
+```
+
+### PriceFeed (Mock Oracle, ~100 bytes)
+```
+ticker: [u8; 8]            // 8
+price: u64                 // 8  — current price in USDC lamports
+confidence: u64            // 8  — confidence band width in USDC lamports
+timestamp: i64             // 8  — last update time
+authority: Pubkey           // 32 — who can update (oracle feeder wallet)
+is_initialized: bool       // 1
+bump: u8                   // 1
+_padding: [u8; 6]          // 6
+```
+
+### Anchor Events (emitted, not stored)
+```
+FillEvent {
+  market: Pubkey,
+  maker: Pubkey,
+  taker: Pubkey,
+  price: u8,
+  quantity: u64,
+  maker_side: u8,       // 0=USDC bid, 1=Yes ask, 2=No-backed bid
+  taker_side: u8,       // 0=USDC bid, 1=Yes ask, 2=No-backed bid
+  is_merge: bool,       // true if fill was a merge/burn (No-backed bid matched Yes ask)
+  maker_order_id: u64,
+  timestamp: i64,
+}
+
+SettlementEvent {
+  market: Pubkey,
+  ticker: [u8; 8],
+  strike_price: u64,
+  settlement_price: u64,
+  outcome: u8,           // 1=YesWins, 2=NoWins
+  timestamp: i64,
+}
+```
+
+---
+
+## Access Control Matrix
+
+| Instruction | Who Can Call | Key Constraints |
+|---|---|---|
+| `initialize_config` | Admin (deployer) | One-time only. Sets admin, USDC mint, oracle program. |
+| `create_strike_market` | Admin | Creates market + order book + mints + vaults. Accepts `market_close_unix` param (automation calculates from "4 PM ET today" with DST). |
+| `mint_pair` | Any user | Market must not be settled or paused. **Position constraint: user's Yes ATA balance must be 0** (prevents entering No position while holding Yes). Creates Yes/No ATAs via `init_if_needed`. |
+| `place_order` | Any user | Market not settled, not paused. Three side types: `side=0` (USDC bid, Buy Yes), `side=1` (Yes ask, Sell Yes), `side=2` (No-backed bid, Sell No). **Position constraint on side=0: user's No ATA balance must be 0** (prevents buying Yes while holding No). Escrows USDC, Yes, or No tokens respectively. `max_fills` param caps compute (default 10). Min size: 1_000_000 lamports (1 token). When a No-backed bid matches a Yes ask, the engine merge/burns the pair and releases $1 from vault. |
+| `cancel_order` | Order owner only | Can cancel anytime, including post-settlement. Returns escrowed asset (USDC, Yes, or No) based on order's `side` field. |
+| `settle_market` | Anyone | `Clock::get() >= market_close_unix`. Oracle staleness (120s settlement threshold) + confidence (0.5% bps) validated. Sets outcome + `override_deadline = settled_at + 3600`. |
+| `admin_settle` | Admin only | `Clock::get() >= market_close_unix + 3600` (1hr delay). Accepts manual price. Fails if already settled. |
+| `admin_override_settlement` | Admin only | `Clock::get() < override_deadline` (within 1hr of original settlement). Accepts corrected price. Rewrites outcome + settlement_price. Resets `override_deadline = now + 3600` (one more hour for further correction). After deadline, outcome is truly final. |
+| `redeem` | Any token holder | Burns winning tokens → $1 USDC per token. Burns losing tokens → $0. Also callable with Yes+No pair → $1 (user-facing auto-redeem, not just internal). **Blocked during override window** (first hour after settlement) to prevent redemptions based on potentially incorrect outcome. |
+| `crank_cancel` | Anyone (permissionless) | Market must be settled. Iterates up to 32 order slots per call, cancels each and returns escrow (USDC, Yes, or No tokens based on order's `side`) to owner. Returns count of cancelled orders. Settlement service cranks until 0 remain. **Not blocked by override window** — escrow refunds are outcome-independent. |
+| `pause` / `unpause` | Admin only | Sets `is_paused` on GlobalConfig (global) or StrikeMarket (per-market). |
+
+**ATA Creation Strategy**: `mint_pair`, `place_order` (when filling — taker/maker may receive Yes, No, or USDC depending on side types), and `redeem` all use Anchor's `init_if_needed` for the recipient's ATA. This requires the `init_if_needed` feature flag in `Cargo.toml`. Payer = the user calling the instruction. Cost: ~0.002 SOL per new ATA (rent-exempt minimum).
+
+---
+
+## Transaction Size Strategy
+
+**All transactions use v0 versioned transactions with Address Lookup Tables (ALTs).** No legacy transaction path.
+
+**Per-market ALT**: Created as part of `create_strike_market` flow (script/service creates ALT immediately after market PDA). Pre-loaded with all market-related accounts:
+- Market PDA, GlobalConfig, OrderBook, Yes Mint, No Mint, USDC Vault, Escrow Vault, Yes Escrow, No Escrow, Oracle PriceFeed
+- Token Program, Associated Token Program, System Program, Rent Sysvar
+
+**Cost**: ~0.002 SOL per ALT (rent-exempt minimum). Trivial on devnet.
+
+**Benefit**: Each account reference costs 1 byte (ALT index) instead of 32 bytes. A 22-account transaction drops from ~700 bytes of keys to ~22 bytes. Transaction size is never a constraint, even for the heaviest instructions (Sell No merge/burn, Buy No with 3 ATA inits).
+
+**Frontend**: All transaction builders use `VersionedTransaction` with the market's ALT. Single code path. All major wallets (Phantom, Solflare) support v0.
+
+**ALT lifecycle**: Created at market creation, never modified or closed. Populated with `AddressLookupTable.extendLookupTable` in the same script that creates the market. ALT address stored or derivable — frontend fetches via `connection.getAddressLookupTable()`.
+
+---
+
+## Known Limitations (Document in Architecture Doc)
+
+1. **Self-trades are allowed** — a user can fill their own orders. No economic harm, just wasteful.
+2. **Admin trust assumption** — admin can call `admin_settle` with arbitrary price after 1hr delay, or `admin_override_settlement` to correct a bad oracle settlement within 1hr. No on-chain governance. Mitigated: override window is time-limited and resets only once per override call; outcome becomes truly immutable after deadline.
+3. **Market account closure is phased** (Phase 6) — on devnet, settled markets remain on-chain forever (free airdrops cover rent). On mainnet, three-phase lifecycle: `close_market` (partial close at 90 days, reclaims ~98% of rent), `treasury_redeem` (indefinite late claims), `cleanup_market` (final close once supply = 0). Orphaned mints from lost wallets (~0.004 SOL/market) remain indefinitely — acceptable cost. See DEV_LOG for future cleanup paths (Token-2022 migration, governance-gated burns, economic incentives).
+4. **Mock oracle is centralized** — single authority keypair. Compromise = bad prices. Swap for Pyth on mainnet (Phase 6).
+5. **Order book depth** — 16 orders per price level. If exceeded, new orders at that level are rejected. Sufficient for prototype.
+6. **No partial redemption** — `redeem` burns all of a user's tokens for a market in one call. (Simpler than partial.)
+7. **Multi-wallet position constraint bypass** — On-chain position checks (`ConflictingPosition`) enforce single-wallet constraints, but SPL tokens are freely transferable. A user could transfer No to wallet B, then Buy Yes from wallet A. This requires deliberate effort and is the user's own capital inefficiency — not a safety risk.
+
+---
+
+## Operational Details
+
+### Trading Day Detection
+- Automation service calls Tradier `/v1/markets/clock` at startup
+- If `state != "open"` and today is not a trading day, skip all operations
+- Half-days: use the clock's `next_close` timestamp instead of hardcoded 4 PM ET
+- Weekends and holidays are automatically handled
+
+### Timezone Handling
+- All on-chain timestamps are UTC unix seconds
+- `create_strike_market` accepts `market_close_unix` (UTC) as a parameter
+- Automation service converts "4:00 PM ET today" → UTC using `America/New_York` timezone
+- DST transitions (March, November) handled automatically by timezone library
+- No hardcoded UTC offsets (-5 or -4)
+
+### Idempotent Market Creation
+- `create_strike_market` will fail with `AccountAlreadyInUse` if PDA already exists (same ticker + strike + date)
+- Market-initializer catches this error and logs "market already exists, skipping"
+- Re-running the morning job is safe
+
+### Settlement Service Recovery
+- On startup/restart, queries all StrikeMarket accounts for today
+- Filters by `is_settled == false`
+- Attempts settlement for each unsettled market
+- Already-settled markets are naturally skipped
+- Idempotent by design
+
+### Rate Limiting Budget (Tradier: 60 req/min REST)
+
+**Batch optimization**: Tradier's `/v1/markets/quotes` accepts comma-separated symbols (`symbols=AAPL,MSFT,GOOGL,AMZN,NVDA,META,TSLA`) — all 7 MAG7 in 1 call. The quote response includes `prevclose` (previous closing price), so no separate call needed for strike calculation inputs. History and options chains do NOT support batching — 1 symbol per request.
+
+**Call budget by service:**
+- **Oracle feeder**: Tradier streaming (WebSocket session via `POST /v1/markets/events/session`, then `stream.tradier.com`) — **0 REST calls during operation**. All 7 symbols on one stream.
+- **Market initializer (morning, one-time)**:
+  - 1 batch quote call (all 7 prev closes via `prevclose` field) = **1 call**
+  - 7 history calls (60-day OHLCV for HV calculation, no batch support) = **7 calls**
+  - 1 market calendar call (cache monthly, pre-fetch trading days/holidays/half-days) = **1 call**
+  - 1 market clock call (current session state, half-day close time) = **1 call**
+  - **Total morning burst: 10 calls** (was 14)
+- **Frontend proxy (user-triggered, cached 60s TTL)**:
+  - 1 batch quote call (all 7 live prices, bid/ask, volume) = **1 call**
+  - 7 options chain calls (per-symbol + expiration, `greeks=true`) = **7 calls**
+  - **Total per cache refresh: 8 calls** (was 14)
+- **AMM bot**: Reads oracle on-chain, not Tradier directly. **0 REST calls.**
+- **Total steady-state REST**: well under 60/min. Morning burst of 10, then near-zero until a frontend user triggers a cache miss.
+- Shared Tradier client with token-bucket rate limiter in `services/shared/src/tradier-client.ts`
+
+### Frontend Setup Notes
+- `"use client"` directive required on all wallet/Anchor components
+- `next.config.js`: webpack fallback for `crypto`, `stream`, `buffer` (Node.js polyfills)
+- All Tradier API calls go through `/api/tradier/*` Next.js API routes (CORS restriction)
+- Anchor error mapping in `lib/errors.ts`: error code → user-friendly message
+- `useTransaction` hook wraps sign → send → confirm with loading states ("Signing...", "Confirming...", success/failure toast)
+- Wallet adapter: Phantom + Solflare. Network = devnet. RPC from `NEXT_PUBLIC_SOLANA_RPC_URL` env var. All transactions use `VersionedTransaction` (v0) with per-market ALTs.
+- Mock wallet provider for Vitest + React Testing Library tests in `tests/helpers/`
+
+### Compute Budget
+- Simple instructions (mint, cancel, redeem): default 200k CUs
+- Matching-heavy instructions (place_order with fills): request 400k CUs via `ComputeBudgetProgram.setComputeUnitLimit`
+- `place_order` accepts `max_fills` parameter (default 10). If order can't fully fill within N matches, remainder rests as limit order. Bounds compute predictably.
+- Monitor program binary size during Phase 2 — if instructions + matching engine (with merge/burn) exceed 200KB BPF limit, use `solana program deploy --max-len`
+
+### Initialization Order
+Script dependencies must run in this order:
+1. `solana airdrop` — fund deployer wallet with SOL
+2. `anchor deploy` — deploy both programs
+3. `scripts/create-mock-usdc.ts` — create mock USDC mint
+4. `scripts/init-config.ts` — initialize GlobalConfig with admin, USDC mint, oracle program
+5. `scripts/init-oracle-feeds.ts` — initialize PriceFeed for all 7 tickers
+6. `scripts/create-test-markets.ts` — create markets for today's strikes
+7. Start oracle feeder → start AMM bot → start frontend
+
+---
+
+## Build Phases
+
+Each phase is broken into **stages**. Within a stage, tasks are either **sequential** (must be done in listed order) or **parallel** (can all run concurrently). Every phase ends with an **audit** checkpoint.
+
+### Phase 1: Foundation
+**Goal**: Both programs deployed on devnet. Can mint Yes/No token pairs via CLI.
+
+**Stage 1A — Sequential: PDA seeds + state accounts**
+These define the on-chain data model. Everything else in Phase 1 depends on them.
+1. PDA seed definitions (Rust side) — all seeds from PDA Registry, exact byte encoding
+2. Meridian state accounts: `GlobalConfig`, `StrikeMarket` (with Yes/No mints + USDC vault as PDAs)
+3. Mock oracle state: `PriceFeed` account
+4. Error enum (`error.rs`) — all Phase 1 error codes (6000–6016, 6030–6036, 6040–6044, 6060–6066, 6100–6101)
+
+**Stage 1B — Parallel: scaffolding + isolated modules (no dependencies on each other)**
+All depend on Stage 1A seeds/state being defined, but not on each other.
+- [ ] Anchor workspace scaffolding (Cargo.toml, Anchor.toml, npm workspaces, directory structure)
+- [ ] Mock oracle program: `initialize_feed`, `update_price` instructions
+- [ ] Meridian instructions: `initialize_config`, `create_strike_market`, `mint_pair`
+- [ ] Tradier client library (`services/shared/src/tradier-client.ts` — pure HTTP, no chain interaction)
+- [ ] Frontend lib layer: `greeks.ts`, `volatility.ts`, `strikes.ts` (pure math, no deps)
+- [ ] PDA derivation helpers `pda.ts` (TypeScript side — mirrors Rust seeds from 1A)
+- [ ] Strike selection baseline: ±3%, ±6%, ±9% from previous close, rounded to nearest $10, deduplicate (`lib/strikes.ts`)
+- [ ] Deploy + init scripts (`deploy-devnet.sh`, `init-config.ts`, `init-oracle-feeds.ts`, `create-mock-usdc.ts`)
+
+**Stage 1C — Sequential: integration + deploy**
+Depends on all of 1B being complete.
+1. `anchor build` — verify both programs compile
+2. Deploy to devnet — verify both programs deploy
+3. Run init scripts — create mock USDC, initialize config, initialize oracle feeds, create test markets
+4. Verify: mint a Yes/No pair via CLI script, confirm vault balance = $1 × pairs minted
+
+**Stage 1D — Tests**
+- [ ] Oracle CRUD: initialize feed, update price, authority validation, staleness check
+- [ ] Config init: admin set, tickers stored, thresholds stored
+- [ ] Market creation: PDA derivation correct, mints created, vaults created, duplicate rejected
+- [ ] Mint pair: vault balance invariant (vault = $1 × pairs minted), Yes supply = No supply, ATAs created
+- [ ] Mint pair position constraint: rejects with `ConflictingPosition` if user holds Yes tokens for the market
+
+**Stage 1E — Audit**
+Run `/audit` against all Phase 1 code. Verify:
+- All error codes used correctly
+- No `unwrap()` in production code
+- PDA seeds match between Rust and TypeScript
+- Vault invariant tested
+- No dead code, no commented-out code
+
+**Demo checkpoint**: `anchor test` passes locally. Programs deployed on devnet. Mint a pair via CLI.
+
+---
+
+### Phase 1.5: Complexity Sweep
+Run `/complexity-sweep` across all Phase 1 code. Focus areas:
+- Rust: instruction handler length (max ~300 lines/file), state account complexity, error handling consistency
+- TypeScript: PDA helpers, Tradier client, math libs — flag any function > 40 lines or file > 300 lines
+- Identify any premature abstractions or missing extractions before Phase 2 builds on top
+- If issues found, refactor before proceeding. Chain into `/plan-implementation` if refactoring is non-trivial.
+
+---
+
+### Phase 2: Trading
+**Goal**: Users can place orders. Matching engine fills. All 4 trade paths working.
+
+**Stage 2A — Sequential: order book + matching engine + escrow (funds-critical)**
+Must be done in this exact order. Each step fully tested before moving to the next.
+1. Order book state design: ZeroCopy account, 99 price levels (1-99 cents), 16 order slots per level, `OrderSlot` struct (with `side: u8` — 0=USDC bid, 1=Yes ask, 2=No-backed bid), `PriceLevel` struct
+2. Matching engine (`matching/engine.rs`): pure functions — price-time priority, partial fills, fill events. Market orders (take best available) + limit orders (rest on book). `max_fills` param caps compute. **Three settlement paths based on order side types:**
+   - USDC bid × Yes ask → standard swap (USDC to seller, Yes to buyer)
+   - No-backed bid × Yes ask → merge/burn (Yes + No burned, $1 from vault split between both parties, `total_redeemed += quantity`)
+   - USDC bid × USDC bid or ask × ask → never match (same side)
+   **30+ unit test scenarios before integration** (up from 20+ — need to cover all side-type combinations and merge/burn vault math).
+3. Escrow logic: three escrow types — lock USDC (USDC bids → `escrow_vault`), Yes tokens (Yes asks → `yes_escrow`), or No tokens (No-backed bids → `no_escrow`) on order placement. Unlock and return correct asset on cancel. **Tested independently for all three types.**
+4. `place_order` instruction: wires matching engine + escrow together. Accepts `side: u8` (0/1/2) and `order_type` (Market/Limit). Min size: 1 token. For side=2 (Sell No): user must hold sufficient No tokens; escrowed in no_escrow.
+5. `cancel_order` instruction: owner-only, refund from escrow (checks order's `side` to return USDC, Yes, or No), cancel by `(price_level, order_id)`. Works post-settlement.
+6. Buy No atomic path: `mint_pair` + `place_order(side=1)` (Yes ask) composed in one transaction. Market variant (sell at best bid) and limit variant (post at user-chosen price). A Buy No limit (Yes ask) naturally matches against Sell No limit (No-backed bid) through the book.
+7. Error codes: add Phase 2 codes (6050–6058) to `error.rs`
+
+**Stage 2B — Parallel: frontend trading UI (once 2A is complete)**
+All depend on 2A's IDL being generated, but not on each other.
+- [ ] IDL generation: `anchor build` → copy IDL to `app/meridian-web/src/idl/` and `services/shared/src/idl/`
+- [ ] Frontend wallet adapter + Anchor program client hooks (`useAnchorProgram`)
+- [ ] `useMarkets` / `useMarket` / `useOrderBook` hooks (TanStack Query, polling + WebSocket subscription)
+- [ ] `OrderBook` component: bid/ask depth with three side types. `perspective: "yes" | "no"` prop. Yes view: USDC bids on left, Yes asks on right. No view: No-backed bids shown as real No depth (not synthetic inversion), Yes asks shown as No asks at inverted price. WebSocket subscriptions.
+- [ ] `lib/orderbook.ts`: `buildNoView(book)` — separates USDC bids, Yes asks, and No-backed bids into Yes/No depth views. Depth aggregation, spread calculation. No-backed bids at price X appear as No asks at price (100-X) in the Yes perspective.
+- [ ] `OrderForm` component: side selector (Buy Yes / Sell Yes / Buy No / Sell No), market/limit toggle, price input, quantity input, submit. Sell No submits `place_order(side=2)` with No token escrow.
+- [ ] `MarketCard` component: strike, Yes price, No price ($1 - Yes), implied probability (Yes price as %), active order count
+- [ ] Wallet USDC balance display (always visible in header)
+- [ ] `useTransaction` hook: sign → send → confirm lifecycle with loading states ("Signing...", "Confirming...", toast)
+- [ ] Position constraint enforcement (frontend UX layer): check Yes/No token balances, block conflicting trades in UI before tx submission, prompt user to exit first. On-chain checks (`ConflictingPosition`) are the backstop; frontend prevents users from ever hitting them.
+
+**Stage 2C — Tests**
+- [ ] Matching engine: 20+ scenarios (exact fill, partial fill, sweep multiple levels, no cross, book full at level, price-time priority, market order fills, limit order rests)
+- [ ] Place order: happy path, insufficient balance, paused market, settled market, min quantity, price bounds
+- [ ] Position constraint (on-chain): place_order side=0 rejects with `ConflictingPosition` when user holds No tokens; mint_pair rejects when user holds Yes tokens; atomic Buy No (mint+sell in one tx) passes when user starts with 0 of both; adding to existing No position via mint+sell passes (Yes balance is 0)
+- [ ] Cancel order: refund correctness, wrong owner rejection, order not found, post-settlement cancel
+- [ ] Buy No (market): atomic mint + sell, user gets No tokens, USDC deducted
+- [ ] Buy No (limit): atomic mint + post sell, user holds both tokens, Yes order on book
+- [ ] Sell No (market): place_order(side=2) with No escrow, sweeps USDC bids, merge/burn if matched against Yes ask
+- [ ] Sell No (limit): place_order(side=2) posts No-backed bid on book, matched later by incoming Yes ask → merge/burn
+- [ ] No-backed bid × Yes ask merge/burn: both tokens burned, $1 from vault released, split correctly
+- [ ] Cross-matching (two sellers): Yes ask + No-backed bid match without any buyer, both exit positions via merge/burn
+- [ ] Escrow: USDC locked on bid (→escrow_vault), Yes locked on ask (→yes_escrow), No locked on No-backed bid (→no_escrow), returned on cancel, correct asset transferred on fill
+- [ ] All 4 trade paths e2e (including Buy No limit variant where user holds both tokens)
+- [ ] Merge/burn vault math: vault decrements by quantity, total_redeemed increments, invariant holds
+- [ ] Frontend: order book rendering (both perspectives), order form validation, position constraint enforcement, wallet connection
+
+**Stage 2D — Audit**
+Run `/audit` against all Phase 2 code. Verify:
+- Matching engine correctness: price-time priority, partial fills, no fund leaks across all three side types
+- Escrow balances (USDC, Yes, No) always match outstanding orders by side
+- Merge/burn correctness: vault decrements exactly, total_redeemed increments, Yes+No supply stays equal after burns
+- No CU overflows on max_fills sweeps (test with 400k CU budget), especially merge/burn path (extra token burns)
+- Frontend: no direct RPC calls in components (hooks only)
+- TypeScript strict mode, no `any` types
+
+**Demo checkpoint**: Two users can trade Yes tokens on a market via the web frontend. All 4 trade paths work.
+
+---
+
+### Phase 2.5: Complexity Sweep
+Run `/complexity-sweep` across all Phase 1 + 2 code. Focus areas:
+- Rust: matching engine complexity (most likely hotspot — partial fills, sweep logic, three escrow types, merge/burn path), `place_order` handler length (handles all three side types)
+- TypeScript: frontend hooks and components — flag state duplication, oversized components (>150 lines), hooks doing too much
+- Order book data flow: is the path from on-chain account → hook → component clean, or are there unnecessary transforms?
+- Identify coupling between matching engine and instruction handlers — engine should be pure functions, handlers should be thin glue
+- If issues found, refactor before proceeding. Phase 3 adds settlement on top of the matching engine — any complexity debt here compounds.
+
+---
+
+### Phase 3: Full Lifecycle
+**Goal**: Complete economic loop. Markets settle, winners get paid. Daily automation running.
+
+**Stage 3A — Sequential: settlement + redemption (funds-critical)**
+Must be done in this exact order. Each step fully tested before moving to the next.
+1. `settle_market` instruction: anyone calls, requires `Clock >= market_close_unix`. Oracle validation (120s settlement staleness, 0.5% confidence bps). Closing price >= strike → Yes wins. Sets `is_settled`, writes `outcome`, `settlement_price`, `settled_at`, `override_deadline = settled_at + 3600`.
+2. `admin_settle` instruction: admin only, requires `Clock >= market_close_unix + 3600`. Accepts manual price. Fails if already settled.
+3. `admin_override_settlement` instruction: admin only, requires `Clock < override_deadline`. Corrects outcome + settlement_price. Resets `override_deadline = now + 3600`. Must correctly flip winning/losing status.
+4. `redeem` instruction: burns winning tokens → $1 USDC. Burns losing tokens → $0. Burns Yes+No pair → $1. **Blocked during override window** (`Clock < override_deadline`).
+5. `crank_cancel` instruction: permissionless, market must be settled. Iterates up to 32 order slots per call. Returns escrowed assets based on order's `side`: USDC (side=0 bids), Yes tokens (side=1 asks), No tokens (side=2 No-backed bids) to owners. Skips already-cancelled slots. Returns count. **Not blocked by override window** (escrow refunds are outcome-independent).
+6. `pause` / `unpause` instructions: admin only. Global (`GlobalConfig.is_paused`) or per-market (`StrikeMarket.is_paused`).
+7. Error codes: add Phase 3 codes (6020–6024, 6070–6074, 6080–6082, 6090) to `error.rs`
+
+**Stage 3B — Parallel: frontend + services (once 3A is complete)**
+All depend on 3A's IDL being regenerated, but not on each other.
+- [ ] IDL regeneration: `anchor build` → copy updated IDL
+- [ ] Portfolio page: active positions, settled outcomes, P&L (entry vs current/exit), redeem buttons, "Cancel & Recover" for unfilled Buy No limit orders
+- [ ] History page: trade execution log (parsed from tx events via `getSignaturesForAddress`)
+- [ ] Market Maker / Mint & Quote flow: mint pairs, post limit orders, see exposure/fills/P&L in portfolio view
+- [ ] Settlement countdown timer to 4:00 PM ET
+- [ ] Override window indicator: "Settlement under review — redemptions available at [time]". Countdown to override expiry.
+- [ ] Payoff display: Yes side: "You pay $X. You win $1.00 if [STOCK] closes above [STRIKE]." No side: "You pay $X. You win $1.00 if [STOCK] closes below [STRIKE]." Adapts based on trade side.
+- [ ] Real-time oracle price display per stock (WebSocket subscription to PriceFeed accounts)
+- [ ] Transaction status toasts with Solana Explorer links
+- [ ] Market-initializer service: morning job reads Tradier previous close, calculates strikes, calls `create_strike_market` + creates ALT per market
+- [ ] Oracle feeder service: Tradier streaming → on-chain `update_price` calls
+- [ ] Settlement service: afternoon reads Tradier close, updates oracle, calls `settle_market`, then `crank_cancel` loop. Retry logic (30s × 15min), admin alert on failure.
+- [ ] Automation scheduler: timed jobs with DST-aware ET conversion using `America/New_York` timezone
+- [ ] Alerting/logging module (`services/shared/src/alerting.ts`)
+
+**Automation service timing (spec requirement):**
+- **8:00 AM ET**: Morning job reads previous close from Tradier, calculates strikes (±3/6/9%, $10 rounding, dedup)
+- **8:30 AM ET**: Creates contracts + order books + ALTs for each strike. Logs results. Alerts on failure. Retries with backoff.
+- **9:00 AM ET**: Markets visible on frontend, minting enabled
+- **9:30 AM ET**: US market open, live trading
+- **4:00 PM ET**: US market close
+- **~4:05 PM ET**: Settlement job reads Tradier closing price, updates oracle, calls `settle_market`. If oracle confidence too wide, retries every 30 seconds for up to 15 minutes. If still failing, alerts admin for manual override.
+- **~4:06 PM ET**: `crank_cancel` loop clears all resting orders, returns escrow to owners.
+- **4:05–5:05 PM ET**: Override window. Admin can call `admin_override_settlement` if oracle price was incorrect. Redemptions blocked. Frontend shows "Settlement under review."
+- **~5:05 PM ET+**: Override window expires. Outcome truly final. Redemption enabled.
+
+**Stage 3C — Tests**
+- [ ] Settlement: at-strike (Yes wins, >= rule), above-strike (Yes wins), below-strike (No wins)
+- [ ] Oracle validation: stale price rejected (>120s), wide confidence rejected (>0.5%), valid price accepted
+- [ ] `admin_settle`: delay enforced (1hr after market close), succeeds after delay, fails if already settled
+- [ ] `admin_override_settlement`: succeeds within window, fails after deadline, flips outcome correctly, resets deadline
+- [ ] `redeem` blocked during override window, succeeds after deadline passes
+- [ ] Redeem: winning tokens paid $1, losing tokens zeroed, vault empties after full redemption
+- [ ] Redeem Yes+No pair: burns both for $1 USDC
+- [ ] `crank_cancel`: batch processing (32 slots), skip inactive, reject unsettled market, returns 0 when empty
+- [ ] Manual `cancel_order` still works post-settlement alongside crank
+- [ ] Add strike intraday: `create_strike_market` callable by admin anytime, PDA prevents duplicates
+- [ ] Pause/unpause: global and per-market, already paused / not paused errors
+- [ ] Invariants: vault balance = total_minted - total_redeemed, Yes supply = No supply
+- [ ] Full lifecycle e2e: create → mint → trade → settle → crank_cancel → redeem (vault empties to zero)
+- [ ] Multi-user: maker mints/quotes, taker fills, both redeem correctly
+- [ ] Settlement executes within 10 minutes of market close (success criterion)
+- [ ] Frontend: real-time price display from oracle (mock `onAccountChange`, verify re-render)
+- [ ] Frontend: portfolio + P&L accuracy
+- [ ] Frontend: settlement display + override window + redeem flow
+
+**Stage 3D — Audit**
+Run `/audit` against all Phase 3 code. Verify:
+- Settlement logic: >= rule correct, immutable after override window, oracle validation tight
+- Override: outcome flip is correct (winners become losers and vice versa)
+- Redemption: blocked during window, unblocked after, pair burn works
+- Crank: no fund leaks, skips inactive correctly, compatible with manual cancel
+- Automation: retry logic correct, timezone handling (DST), alert on failure
+- Invariants hold across entire lifecycle (vault, supply, payout sum)
+- Unredeemed tokens remain redeemable indefinitely
+- Fee handling: no fees touch the vault (fees to separate account if any)
+
+**Demo checkpoint**: Full daily lifecycle works end-to-end on devnet. Settlement via Tradier data. Crank clears book. Winners redeem.
+
+---
+
+### Phase 3.5: Complexity Sweep
+Run `/complexity-sweep` across entire codebase (Phases 1–3). Focus areas:
+- Rust: 12 instructions now complete (3 more in Phase 6: `close_market`, `treasury_redeem`, `cleanup_market`) — scan for duplicated validation logic across handlers (should be extracted to shared `validate_market_active()`, `validate_oracle()` helpers)
+- Settlement + override + crank interaction: are the state transitions clean, or is there spaghetti between `is_settled`, `outcome`, `override_deadline`?
+- Services: oracle feeder, market initializer, settlement service — flag shared logic that should live in `services/shared/`
+- Frontend: full app now has Markets, Trade, Portfolio, History pages + multiple hooks — flag prop drilling, duplicated data fetching, components that grew beyond 150 lines
+- Test files: split any test file > 300 lines by scenario group
+- This is the last sweep before differentiator features — the core must be clean and modular before we add 6 new features on top.
+
+---
+
+### Phase 4: Differentiator Features
+**Goal**: All 6 differentiators operational. These go beyond spec requirements.
+
+**Stage 4A — Parallel: all 6 features (independent of each other)**
+All depend on Phase 3 being complete, but not on each other.
+- [ ] **Vol-aware strikes** (`services/market-initializer/src/strikeSelector.ts`): HV20 from 60-day Tradier history → 1/1.5/2 sigma strike levels. Enhancement to spec's baseline ±3/6/9%. Both available; vol-aware default, baseline fallback.
+- [ ] **AMM bot** (`services/amm-bot/`): Black-Scholes binary pricer (N(d2) formula), inventory skew, circuit breaker, configurable spread. Seeds liquidity so demo has live tradeable markets. Uses existing `place_order`/`cancel_order`.
+- [ ] **Options comparison** (`app/meridian-web/src/components/analytics/OptionsComparison.tsx`): Tradier options chain (greeks=true) delta at each strike vs Meridian Yes price side-by-side ("Options market says 62%, Meridian says 58%"). Data via `/api/tradier/options` route.
+- [ ] **Historical overlay** (`app/meridian-web/src/components/analytics/HistoricalOverlay.tsx`): 252-day daily return distribution from Tradier overlaid on current Yes token probabilities across strikes. Data via `/api/tradier/history` route.
+- [ ] **Settlement analytics** (`app/meridian-web/src/components/analytics/SettlementAnalytics.tsx`): calibration chart (implied prob bucket vs realized frequency), accuracy tracking, leaderboard. Data from settlement records (JSON files written by settlement service).
+- [ ] **Binary Greeks** (`app/meridian-web/src/components/analytics/GreeksDisplay.tsx`): binary delta = N'(d2)/(S*sigma*sqrt(T)), binary gamma. Displayed per market, updated from live Tradier price feed. Math in `lib/greeks.ts`.
+
+**Stage 4B — Tests**
+- [ ] HV calculation: known inputs → known outputs
+- [ ] Binary pricer: boundary conditions (ATM, deep ITM, deep OTM, T=0, T=tiny)
+- [ ] Strike selector: sigma-based strikes produce reasonable levels for various price/vol combos
+- [ ] AMM bot: inventory limit enforcement, circuit breaker triggers, spread calculation
+- [ ] Greeks: binary delta/gamma values match known formulas at boundary conditions
+
+**Stage 4C — Audit**
+Run `/audit` against all Phase 4 code. Verify:
+- Math functions: edge cases handled (division by zero, T=0, extreme vol)
+- AMM bot: circuit breaker actually halts, inventory limits enforced
+- API routes: Tradier calls go through proxy only, cached appropriately (60s TTL)
+- No regressions in Phase 1-3 functionality
+
+**Demo checkpoint**: All 6 differentiator features visible and functional in frontend.
+
+---
+
+### Phase 4.5: Complexity Sweep
+Run `/complexity-sweep` across entire codebase (Phases 1–4). Focus areas:
+- 6 new feature modules just landed — scan for inconsistent patterns across analytics components (should share data-fetching conventions, chart styling, error handling)
+- AMM bot: pricer → quoter → executor pipeline — clean separation or tangled?
+- Tradier API routes: are all 3 routes (quotes, options, history) following the same proxy + cache pattern?
+- `lib/` pure functions: `greeks.ts`, `volatility.ts`, `strikes.ts` — any duplication or functions that grew beyond 40 lines?
+- This is the final sweep before polish — any complexity issues found here get fixed before we write docs and CI, so the codebase we ship is clean.
+
+---
+
+### Phase 5: Polish
+**Goal**: Demo-ready. Clean README, reproducible scripts, CI green.
+
+**Stage 5A — Parallel: all docs + polish (independent of each other)**
+- [ ] Landing page: product explanation, live prices, connect wallet CTA
+- [ ] README: finalize with one-command setup (`make dev`), prerequisites, architecture overview, testing instructions
+- [ ] `.env.example`: verify all required variables present
+- [ ] Architecture doc: chain choice rationale, custom order book design, oracle strategy, trade-offs
+- [ ] HyperLiquid feasibility note (see `docs/DEV_LOG.md` for content — extract to standalone doc)
+- [ ] Risks/limitations note (no regulatory claims)
+- [ ] Dependency justification doc (see `docs/DEV_LOG.md` for table — extract to standalone doc)
+- [ ] CI workflows: Anchor tests, frontend lint/typecheck, services lint/tests
+- [ ] Idempotent `deploy-devnet.sh` — verify reproducible from scratch
+- [ ] Load test: 100 simulated orders across 5 markets on devnet
+
+**Stage 5B — Final Audit**
+Run `/audit` against entire codebase. Verify:
+- All 12 core instructions correct and tested (3 Phase 6 instructions tested separately)
+- All error codes used and mapped to frontend messages
+- All invariants hold under full lifecycle
+- No secrets in repo (.env gitignored, .env.example has placeholders only)
+- No dead code, no commented-out code
+- README `make dev` works from clean clone
+- CI green
+- Load test passes
+
+**Demo checkpoint**: Full system demo-ready. Clean clone → `make dev` → working prototype.
+
+---
+
+### Phase 6: Mainnet Deployment (Bonus)
+**Goal**: Full system running on Solana mainnet-beta with real infrastructure. Real USDC, production oracle feeds, funded automation wallet, monitoring.
+
+**Prerequisites (manual, before any Stage 6 work):**
+- [ ] Generate dedicated mainnet keypair: `solana-keygen new -o ~/.config/solana/mainnet-deployer.json` — never reuse devnet key
+- [ ] Fund mainnet keypair with ~100 SOL (program deploy ~5 SOL, account rent ~75 SOL for 49 markets, automation tx fees ~0.1 SOL/day)
+- [ ] Sign up for Helius RPC (helius.dev, free tier = 50 RPS) — mainnet public RPC is too rate-limited
+- [ ] Set up monitoring endpoint (Discord webhook for alerts — simplest path)
+
+**Stage 6A — Sequential: oracle swap + market closure instructions (funds-critical)**
+Must be done in this exact order. Each step fully tested before moving to the next.
+1. **Pyth oracle integration**: Replace mock oracle CPI with Pyth `PriceUpdateV2` account reads. Two approaches:
+   - Option 1: Feature-flagged dual path in `settle_market` — reads mock oracle on devnet, Pyth on mainnet. Selected by `oracle_type` field in GlobalConfig (0=Mock, 1=Pyth).
+   - Option 2: Separate `settle_market_pyth` instruction. Cleaner separation but adds another instruction.
+   - Decision: Option 1 (feature flag) — avoids instruction proliferation, `oracle_type` already in GlobalConfig schema.
+   - Pyth account validation: check price feed ID matches expected stock, verify status is `Trading`, apply same staleness (120s) and confidence (0.5% bps) thresholds.
+   - **Test with Pyth devnet feeds first** before mainnet. Pyth has limited equity coverage — verify all 7 MAG7 tickers are available. If any are missing, keep mock oracle as fallback for those tickers.
+2. **`close_market` instruction (#14)**: Admin-only. Partial close — reclaims ~98% of rent while preserving settlement record for late claims.
+   - Preconditions: market settled, override window expired, order book empty (crank_cancel completed)
+   - **Standard close** (`total_redeemed == total_minted`): Closes all 8 accounts (OrderBook, USDC Vault, Escrow Vault, Yes Escrow, No Escrow, StrikeMarket, Yes Mint, No Mint). Full rent reclaim. Market leaves zero on-chain footprint.
+   - **Partial close** (90+ days post-settlement, tokens remain): `Clock >= settled_at + 7_776_000` (90 days).
+     - Closes 5 accounts: OrderBook (~126KB, ~0.89 SOL), USDC Vault, Escrow Vault, Yes Escrow, No Escrow. Rent returned to admin.
+     - Keeps 3 accounts: StrikeMarket (~0.003 SOL), Yes Mint (~0.002 SOL), No Mint (~0.002 SOL). These serve as permanent settlement record for `treasury_redeem`.
+     - Revokes mint authority on both Yes and No mints (no new tokens can ever be created).
+     - Sweeps remaining vault USDC to TreasuryPDA (`[b"treasury"]`).
+     - Sets `is_closed: bool` on StrikeMarket — marks market as partially closed, vault funds in treasury.
+   - TreasuryPDA is created during `initialize_config` (Phase 1). Derived at runtime from `[b"treasury"]` seeds.
+3. **`treasury_redeem` instruction (#15)**: Permissionless. No time limit. Late-claim path for users who missed the 90-day vault window.
+   - User passes Yes/No tokens + the still-existing StrikeMarket account.
+   - Requires `StrikeMarket.is_closed == true` (only for partially-closed markets; standard `redeem` handles live markets).
+   - Program reads outcome from StrikeMarket.
+   - Burns winning tokens → pays $1 USDC per token from Treasury PDA.
+   - Burns losing tokens → $0 (just burns them, cleaning up supply).
+   - Available indefinitely. Users always have a path to claim.
+4. **`cleanup_market` instruction (#16)**: Admin-only. Final cleanup once all tokens are burned.
+   - Requires `StrikeMarket.is_closed == true`.
+   - Requires Yes Mint supply == 0 AND No Mint supply == 0 (all tokens burned via `treasury_redeem` or voluntary burn).
+   - Closes remaining 3 accounts: StrikeMarket, Yes Mint, No Mint.
+   - Returns final ~0.007 SOL rent to admin.
+   - Market now has zero on-chain footprint.
+   - If supply never reaches 0 (lost wallets, dust): these accounts stay open at ~0.007 SOL indefinitely. Acceptable cost — see DEV_LOG for rationale.
+5. Add `is_closed: bool` field to StrikeMarket schema (takes 1 byte from existing padding).
+6. Error codes: add Phase 6 codes to `error.rs`:
+   - `6110 CloseMarketNotSettled` — market not settled
+   - `6111 CloseMarketOverrideActive` — override window still open
+   - `6112 CloseMarketOrderBookNotEmpty` — resting orders remain
+   - `6113 CloseMarketGracePeriodActive` — tokens unredeemed and < 90 days post-settlement
+   - `6114 InvalidOracleType` — oracle type flag not recognized
+   - `6115 PythFeedMismatch` — Pyth price feed ID doesn't match expected stock
+   - `6116 MarketNotClosed` — `treasury_redeem` or `cleanup_market` on a market that isn't partially closed
+   - `6117 MintSupplyNotZero` — `cleanup_market` called but tokens still outstanding
+   - `6118 NoTreasuryFunds` — treasury has insufficient USDC to cover redemption
+
+**Stage 6B — Parallel: mainnet deployment infra (once 6A is complete)**
+All depend on 6A being tested on devnet, but not on each other.
+- [ ] `scripts/deploy-mainnet.sh`: Idempotent mainnet deployment script. Uses `~/.config/solana/mainnet-deployer.json`. Sets cluster to mainnet-beta. Deploys both programs. Runs init with real USDC mint (`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`), `oracle_type = 1` (Pyth). Initializes Pyth-backed oracle config.
+- [ ] `.env.mainnet.example`: Mainnet env vars — Helius RPC URL, mainnet deployer keypair path, real USDC mint, Pyth program ID, Tradier production API key.
+- [ ] Monitoring service (`services/monitor/`): Lightweight health checker running on a cron or loop:
+  - Automation wallet SOL balance (alert if < 1 SOL)
+  - Oracle freshness per ticker (alert if stale > 5 min during market hours)
+  - Settlement job completion (alert if any market unsettled 15 min after close)
+  - Failed transaction alerts (parse recent tx for errors)
+  - Output: Discord webhook notifications. Configurable via `DISCORD_WEBHOOK_URL` env var.
+- [ ] Program upgrade authority transfer: Script to transfer upgrade authority from deployer to a Squads multisig. Optional — can also revoke with `solana program set-upgrade-authority --final` once stable. Document both paths in README.
+- [ ] Rent budget calculator: Script that estimates total rent cost for N stocks × M strikes × D days. Outputs SOL needed. Helps plan wallet funding.
+- [ ] `close_market` automation: Extend settlement service to run a daily sweep — find markets > 90 days post-settlement with unredeemed tokens, call `close_market` (partial), log results. Also run `cleanup_market` for any partially-closed markets where mint supply has reached 0.
+- [ ] Frontend: "Market closing in X days" warning for markets approaching 90-day deadline. Post-close: "Redeem via treasury" flow using `treasury_redeem`.
+
+**Stage 6C — Tests**
+- [ ] Pyth oracle: valid price read, stale price rejected, wide confidence rejected, wrong feed ID rejected, `Trading` status required
+- [ ] Pyth + settlement e2e: create market → trade → settle via Pyth → redeem (on devnet with Pyth devnet feeds)
+- [ ] `close_market` standard: all tokens redeemed → all 8 accounts closed, full rent returned
+- [ ] `close_market` partial: 90 days elapsed, tokens remain → 5 accounts closed (OrderBook + USDC Vault + Escrow Vault + Yes Escrow + No Escrow), 3 kept, vault swept to treasury, mint authority revoked
+- [ ] `close_market` rejected: not settled, override active, book not empty, grace period active (all 4 error paths)
+- [ ] `treasury_redeem`: winning tokens pay $1 from treasury, losing tokens burn for $0, rejects if market not closed
+- [ ] `treasury_redeem` with insufficient treasury funds: clear error, no partial payout
+- [ ] `cleanup_market`: closes remaining 3 accounts when supply = 0, rejects when supply > 0
+- [ ] Full closure lifecycle: close_market (partial) → treasury_redeem (all users) → cleanup_market → zero accounts
+- [ ] Treasury PDA: receives swept funds correctly, balance accumulates across multiple partial closes, decreases on treasury_redeem
+- [ ] Mainnet deploy script: dry-run mode that validates all accounts exist without submitting transactions
+- [ ] Monitor: mock alert triggers, verify Discord webhook format
+
+**Stage 6D — Audit**
+Run `/audit` against all Phase 6 code. Verify:
+- Pyth integration: no mock oracle assumptions leak into mainnet path
+- `close_market`: all preconditions enforced, no fund leaks, rent correctly reclaimed, mint authority revoked
+- `treasury_redeem`: outcome read correctly from StrikeMarket, payout math correct, treasury balance decremented
+- `cleanup_market`: only succeeds at supply 0, closes all remaining accounts
+- Treasury sweep: exact USDC amount matches vault remainder
+- Mainnet script: uses correct USDC mint, correct Pyth program, correct keypair
+- No devnet-only assumptions in any shared code (hardcoded URLs, mock mints, test keypairs)
+- Upgrade authority documented: transfer or revoke instructions in README
+
+**Demo checkpoint**: Programs deployed on mainnet-beta. Real USDC markets created for today's MAG7 strikes. Oracle fed by Tradier → Pyth (or mock oracle on mainnet if Pyth coverage gaps). Settlement runs at 4 PM ET. Monitoring alerts to Discord. Full closure lifecycle tested on devnet with simulated 90-day-old markets: close_market → treasury_redeem → cleanup_market.
+
+---
+
+### Execution Model
+
+- **Opus (me)**: all sequential stages (funds-critical logic), synthesis, integration, audit review
+- **Parallel agents**: all parallel stage tasks — each agent gets one module with clear inputs/outputs/tests
+- **Rule**: no agent touches matching engine, escrow, settlement, override, crank, or PDA seeds. Those are sequential-only.
+
+---
+
+## Error Codes (Anchor `#[error_code]` enum in `error.rs`)
+
+Comprehensive error handling is non-negotiable — when money is involved, trust depends on every failure mode producing a clear, specific error. No generic panics, no silent failures. Every error maps to a user-friendly message in `frontend/lib/errors.ts`.
+
+### Authorization & Access Control
+| Code | Name | Trigger |
+|---|---|---|
+| 6000 | `Unauthorized` | Non-admin calling admin-only instruction |
+| 6001 | `InvalidAuthority` | Oracle update from non-authority wallet |
+| 6002 | `SignerMismatch` | Transaction signer doesn't match expected account owner |
+
+### Initialization & Configuration
+| Code | Name | Trigger |
+|---|---|---|
+| 6010 | `ConfigAlreadyInitialized` | `initialize_config` called twice |
+| 6011 | `OracleFeedAlreadyInitialized` | `initialize_feed` for same ticker twice |
+| 6012 | `InvalidTicker` | Ticker not in `GlobalConfig.tickers` list |
+| 6013 | `InvalidMarketCloseTime` | `market_close_unix` is in the past |
+| 6014 | `InvalidStrikePrice` | Strike price is 0 |
+| 6015 | `InvalidStalenessThreshold` | Staleness threshold set to 0 |
+| 6016 | `InvalidConfidenceThreshold` | Confidence bps set to 0 or > 10000 |
+
+### Market State
+| Code | Name | Trigger |
+|---|---|---|
+| 6020 | `MarketAlreadySettled` | Trade/mint on a settled market |
+| 6021 | `MarketNotSettled` | `crank_cancel`, `redeem`, or `admin_override_settlement` on unsettled market |
+| 6022 | `MarketPaused` | Trade/mint while market or global is paused |
+| 6023 | `AlreadyPaused` | `pause` on already-paused target |
+| 6024 | `NotPaused` | `unpause` on non-paused target |
+
+### Account Validation
+| Code | Name | Trigger |
+|---|---|---|
+| 6030 | `InvalidMint` | Token account mint doesn't match expected Yes/No/USDC mint |
+| 6031 | `InvalidVault` | Vault account doesn't match market's stored vault address |
+| 6032 | `InvalidEscrow` | Escrow account doesn't match market's stored escrow address |
+| 6033 | `InvalidOrderBook` | Order book account doesn't match market's stored order book |
+| 6034 | `InvalidMarket` | Market PDA doesn't match order book's stored market ref |
+| 6035 | `AccountNotInitialized` | Required account has not been initialized |
+| 6036 | `InvalidProgramId` | CPI target doesn't match expected program (oracle, token) |
+
+### Oracle
+| Code | Name | Trigger |
+|---|---|---|
+| 6040 | `OracleStale` | Price age > staleness threshold (60s general / 120s settlement) |
+| 6041 | `OracleConfidenceTooWide` | Confidence > `confidence_bps` of price |
+| 6042 | `OracleNotInitialized` | `PriceFeed.is_initialized == false` |
+| 6043 | `OraclePriceInvalid` | Oracle price is 0 or negative-equivalent |
+| 6044 | `OracleProgramMismatch` | Oracle program ID doesn't match `GlobalConfig.oracle_program` |
+
+### Trading & Order Book
+| Code | Name | Trigger |
+|---|---|---|
+| 6050 | `InsufficientBalance` | User can't cover order cost or mint deposit |
+| 6051 | `OrderBookFull` | All 16 slots at price level are active |
+| 6052 | `InvalidPrice` | Price outside [1, 99] range |
+| 6053 | `InvalidQuantity` | Quantity < 1_000_000 (minimum 1 token) |
+| 6054 | `OrderNotFound` | `cancel_order` with bad price_level/order_id combo |
+| 6055 | `OrderNotOwned` | Attempting to cancel someone else's order |
+| 6056 | `NoFillsAvailable` | Market order with empty opposite side |
+| 6057 | `InvalidOrderType` | Order type not Market or Limit |
+| 6058 | `InvalidSide` | Side not 0 (USDC bid), 1 (Yes ask), or 2 (No-backed bid) |
+| 6059 | `ConflictingPosition` | `mint_pair` when user holds Yes tokens, or `place_order` side=0 when user holds No tokens |
+
+### Balance & Token Operations
+| Code | Name | Trigger |
+|---|---|---|
+| 6060 | `VaultBalanceMismatch` | Vault balance doesn't match `total_minted - total_redeemed` (invariant violation) |
+| 6061 | `MintSupplyMismatch` | Yes mint supply != No mint supply after operation (invariant violation) |
+| 6062 | `InsufficientVaultBalance` | Vault can't cover redemption payout |
+| 6063 | `TokenTransferFailed` | SPL token transfer CPI returned error |
+| 6064 | `TokenMintFailed` | SPL token mint_to CPI returned error |
+| 6065 | `TokenBurnFailed` | SPL token burn CPI returned error |
+| 6066 | `ATACreationFailed` | Associated token account init_if_needed failed |
+
+### Settlement
+| Code | Name | Trigger |
+|---|---|---|
+| 6070 | `SettlementTooEarly` | `Clock < market_close_unix` |
+| 6071 | `AdminSettleTooEarly` | `Clock < market_close_unix + 3600` |
+| 6072 | `OverrideWindowExpired` | `admin_override_settlement` after `override_deadline` |
+| 6073 | `AlreadySettled` | `admin_settle` on already-settled market |
+| 6074 | `InvalidOutcome` | Outcome value not 0, 1, or 2 |
+
+### Redemption
+| Code | Name | Trigger |
+|---|---|---|
+| 6080 | `RedemptionBlockedOverride` | `redeem` during override window (1hr post-settlement) |
+| 6081 | `NoTokensToRedeem` | User has 0 balance of relevant tokens |
+| 6082 | `InvalidRedemptionMode` | Not winner-redeem, loser-redeem, or pair-redeem |
+
+### Crank
+| Code | Name | Trigger |
+|---|---|---|
+| 6090 | `CrankNotNeeded` | `crank_cancel` called but book is already empty |
+
+### Arithmetic Safety
+| Code | Name | Trigger |
+|---|---|---|
+| 6100 | `ArithmeticOverflow` | Explicit `checked_mul`/`checked_add`/`checked_sub` failure |
+| 6101 | `DivisionByZero` | Explicit `checked_div` with zero divisor |
+
+### Market Closure (Phase 6)
+| Code | Name | Trigger |
+|---|---|---|
+| 6110 | `CloseMarketNotSettled` | `close_market` on unsettled market |
+| 6111 | `CloseMarketOverrideActive` | `close_market` while override window is open |
+| 6112 | `CloseMarketOrderBookNotEmpty` | `close_market` with resting orders (crank_cancel not finished) |
+| 6113 | `CloseMarketGracePeriodActive` | Partial close attempted before 90 days post-settlement |
+| 6116 | `MarketNotClosed` | `treasury_redeem` or `cleanup_market` on a market that isn't partially closed |
+| 6117 | `MintSupplyNotZero` | `cleanup_market` called but tokens still outstanding |
+| 6118 | `NoTreasuryFunds` | Treasury has insufficient USDC to cover `treasury_redeem` payout |
+
+### Oracle Type (Phase 6)
+| Code | Name | Trigger |
+|---|---|---|
+| 6114 | `InvalidOracleType` | Oracle type flag in GlobalConfig not recognized |
+| 6115 | `PythFeedMismatch` | Pyth price feed ID doesn't match expected stock ticker |
+
+**Design rules:**
+- Every error has a unique code — no code reuse across categories
+- Category ranges (6000s auth, 6010s init, 6020s state, etc.) leave room for additions
+- Invariant violations (6060-6061) should **never** fire in production — they exist as defense-in-depth assertions. If they do fire, something is fundamentally broken.
+- Frontend `errors.ts` maps every code to a user-friendly message: e.g. `6050 → "Insufficient USDC balance. Please add funds and try again."`
+- All errors are logged with full context (market, user, amounts) in transaction logs via `msg!()` before returning the error
+
+---
+
+## IDL Strategy
+
+Anchor IDL JSON is the program's public interface — version-controlled, not generated at build time.
+
+- `anchor build` generates IDL to `target/idl/meridian.json` and `target/idl/mock_oracle.json`
+- Post-build script copies IDL to `app/meridian-web/src/idl/` and `services/shared/src/idl/`
+- IDL files are committed to the repo — any instruction or account change shows up as a diff in code review
+- Frontend and services import IDL directly: `import idl from '@/idl/meridian.json'`
+- `make idl` target runs build + copy
+
+---
+
+## Makefile Targets
+
+```makefile
+# Build & Quality
+make build        # anchor build (both programs)
+make test         # anchor test (all test suites)
+make lint         # cargo clippy + eslint (frontend + services)
+make idl          # anchor build + copy IDL JSON to frontend/services
+
+# Devnet Setup (run once)
+make setup        # install deps, airdrop SOL, create mock USDC mint
+
+# Devnet Deploy & Initialize
+make deploy       # deploy both programs to devnet (idempotent)
+make init         # initialize config + oracle feeds + test markets + ALTs
+make airdrop      # fund test wallets with SOL + mock USDC
+
+# Run Services
+make frontend     # start Next.js dev server
+make services     # start oracle-feeder + amm-bot + market-initializer
+make dev          # build + deploy + init + frontend + services (full stack, one command)
+
+# Cleanup
+make clean        # remove build artifacts + target dirs
+```
+
+`make dev` is the one-command README setup: from zero to running prototype.
+
+---
+
+## Engineering Discipline
+
+### Module boundaries (no god-files)
+
+**Rust/Anchor programs:**
+- One instruction per file: `instructions/initialize_config.rs`, `instructions/place_order.rs`, etc. — never a single `processor.rs` with all match arms
+- State accounts each in their own file: `state/config.rs`, `state/strike_market.rs`, `state/order_book.rs`
+- Matching engine logic in `matching/engine.rs` — pure functions that take order book data and return fills. No account deserialization inside the engine.
+- Error enum in `error.rs` — Anchor error codes, never string messages
+- No `unwrap()` in any production code — proper error propagation with `?` and custom errors
+- Max ~300 lines per file. If a file grows beyond that, extract a helper module.
+
+**Frontend (TypeScript/React):**
+- **lib/** = pure functions (math, PDA derivation, Tradier client). Zero React imports. Independently testable.
+- **hooks/** = data fetching + state management. Each hook does one thing (`useMarkets`, `useOrderBook`, `usePortfolio`). Uses TanStack Query for caching/polling.
+- **components/** = display only. Receive data via props or hooks. No direct RPC calls in components.
+- Strict TypeScript (`strict: true`). Exhaustive switch cases. No `any`.
+- Shared types in `types/` — one canonical definition per domain object, never duplicate.
+
+**Services (TypeScript/Node):**
+- 3-layer pattern per service:
+  - **Client layer**: API calls (Tradier HTTP, Anchor RPC). Pure I/O, no logic.
+  - **Logic layer**: calculations, strike selection, pricing. Pure functions, fully testable without network.
+  - **Executor layer**: orchestration (read price → calculate → submit tx). Thin glue between client and logic.
+- Each service is independently runnable (`npx ts-node services/oracle-feeder/src/index.ts`)
+
+### Code quality rules
+
+- No dead code, no commented-out code (use git history)
+- No barrel exports (`index.ts` re-exporting everything) — import directly from the source file
+- Tests live in `tests/` directory (Anchor convention), not next to source files
+- Every public function has a JSDoc/Rustdoc comment explaining *what* (not *how*)
+- Constants extracted to top of file or shared `constants.ts` / `constants.rs` — no magic numbers
+- Errors are specific: 40+ variants across 11 categories (see Error Codes section). Every failure mode has a unique code. No generic errors.
+
+### Complexity guardrails
+
+- If a function exceeds 40 lines, extract helpers
+- If a component exceeds 150 lines, split into sub-components
+- If a test file exceeds 300 lines, split by scenario group
+- No nested callbacks deeper than 2 levels — use async/await or extract
+- Frontend state: TanStack Query for server state, React state for UI state — never mix or duplicate
+
+---
+
+## Smart Contract Instructions (15 total)
+
+| # | Instruction | Phase | Notes |
+|---|---|---|---|
+| 1 | `initialize_config` | 1 | Admin, USDC mint, oracle program, staleness/confidence thresholds, tickers. Also creates TreasuryPDA (`[b"treasury"]`) USDC token account. |
+| 2 | `create_strike_market` | 1 | Admin-only. Creates market PDA + Yes/No mints + vaults (including No Escrow) + order book. Accepts `market_close_unix`. Also serves as `add_strike` (callable anytime by admin). |
+| 3 | `mint_pair` | 1 | Any user deposits 1 USDC → 1 Yes + 1 No. Creates ATAs via `init_if_needed`. Market must not be settled/paused. |
+| 4 | `place_order` | 2 | Three side types: `side=0` (USDC bid, Buy Yes), `side=1` (Yes ask, Sell Yes), `side=2` (No-backed bid, Sell No). Escrows USDC, Yes, or No tokens respectively. Market or Limit. `max_fills` param caps compute. Min size: 1 token. When No-backed bid matches Yes ask → merge/burn: both tokens burned, $1 from vault split between parties. |
+| 5 | `cancel_order` | 2 | Owner only. Refund from escrow (USDC, Yes, or No based on order's `side`). Works post-settlement too. Cancel by `(price_level, order_id)`. |
+| 6 | `settle_market` | 3 | Anyone calls. Requires `Clock >= market_close_unix`. Oracle staleness (120s) + confidence (0.5% bps) validated. Sets outcome + `override_deadline = settled_at + 3600`. Phase 6 adds Pyth oracle path via `oracle_type` flag in GlobalConfig. |
+| 7 | `admin_settle` | 3 | Admin only. Requires `Clock >= market_close_unix + 3600`. Accepts manual price. Fails if already settled. |
+| 8 | `admin_override_settlement` | 3 | Admin only. `Clock < override_deadline`. Corrects outcome + settlement_price. Resets `override_deadline = now + 3600`. After deadline, outcome is truly final. |
+| 9 | `redeem` | 3 | Burns tokens → pay USDC. Winners: $1/token. Losers: $0. Also: burn Yes+No pair → $1. **Blocked during override window** (1hr post-settlement). |
+| 10 | `crank_cancel` | 3 | Permissionless. Market must be settled. Iterates up to 32 order slots per call, returns escrow (USDC, Yes, or No) to owners. **Not blocked by override window** (escrow refunds are outcome-independent). |
+| 11 | `pause` | 3 | Admin only. Global (`GlobalConfig.is_paused`) or per-market (`StrikeMarket.is_paused`). |
+| 12 | `unpause` | 3 | Admin only. Resume. |
+| 13 | `close_market` | 6 | Admin only. Standard close (all redeemed): closes all 8 accounts. Partial close (90 days, tokens remain): closes 5 big accounts (OrderBook + USDC Vault + Escrow Vault + Yes Escrow + No Escrow), keeps StrikeMarket + mints as settlement record, revokes mint authority, sweeps vault to treasury. |
+| 14 | `treasury_redeem` | 6 | Permissionless, no time limit. Burns tokens from partially-closed markets, pays winners $1 USDC from Treasury PDA. Late-claim path — users always have recourse. |
+| 15 | `cleanup_market` | 6 | Admin only. Closes remaining 3 accounts (StrikeMarket + mints) once Yes and No mint supply both = 0. Final cleanup for zero on-chain footprint. |
+
+Note: `add_strike` folded into `create_strike_market` (same logic, admin access). `auto_redeem` folded into `redeem` (user can burn Yes+No pair for $1 anytime). Sell No is handled via `place_order(side=2)` — No-backed bid paradigm. No tokens are escrowed in `no_escrow`; when matched against a Yes ask, both tokens are merge/burned and $1 released from vault. No separate `sell_no` instruction needed. `crank_cancel` is permissionless post-settlement cleanup — iterates order slots in batches, returns escrow funds (USDC, Yes, or No) to owners. Settlement service calls in a loop; manual `cancel_order` still works alongside for users who act first. `admin_override_settlement` provides a 1hr safety valve — admin can correct a bad oracle settlement within the override window. Redemptions blocked during this window to prevent payouts on a potentially incorrect outcome. Override resets the deadline, giving another hour. After the deadline passes, outcome is truly immutable. `close_market` is the mainnet sustainability instruction — without it, rent accumulates without bound from expired markets. `treasury_redeem` ensures users always have a claim path, even after market accounts are partially closed. `cleanup_market` is the final step — closes the remaining settlement record once all tokens are burned.
+
+---
+
+## Critical Path
+
+```
+workspace setup -> meridian state -> mint_pair -> matching engine -> place_order (all 3 sides + merge/burn) ->
+settle_market -> crank_cancel -> redeem -> IDL generation -> frontend hooks -> components -> pages
+```
+
+## Key Files to Create
+
+**Programs (Rust/Anchor):**
+- `programs/meridian/src/state/config.rs` — GlobalConfig (see Account Schemas)
+- `programs/meridian/src/state/strike_market.rs` — StrikeMarket (see Account Schemas)
+- `programs/meridian/src/state/order_book.rs` — ZeroCopy OrderBook + PriceLevel + OrderSlot (see Account Schemas)
+- `programs/meridian/src/state/events.rs` — FillEvent, SettlementEvent (Anchor `emit!`)
+- `programs/meridian/src/matching/engine.rs` — Price-time priority matching (market + limit, max_fills)
+- `programs/meridian/src/instructions/` — All 12 instruction handlers (one file each, including `place_order.rs` with three-side matching + merge/burn, `crank_cancel.rs`, and `admin_override_settlement.rs`)
+- `programs/meridian/src/error.rs` — Full `#[error_code]` enum (see Error Codes section — 40+ variants across 11 categories)
+- `programs/mock-oracle/src/state/price_feed.rs` — PriceFeed (see Account Schemas)
+- `programs/mock-oracle/src/instructions/` — initialize_feed, update_price
+
+**Frontend (TypeScript/React):**
+- `app/meridian-web/src/lib/pda.ts` — PDA derivation (mirrors PDA Registry seeds exactly)
+- `app/meridian-web/src/lib/greeks.ts` — Binary delta/gamma formulas
+- `app/meridian-web/src/lib/volatility.ts` — HV calculation from OHLCV
+- `app/meridian-web/src/lib/tradier.ts` — Tradier API client (via `/api/tradier/*` routes only, never direct)
+- `app/meridian-web/src/lib/strikes.ts` — Strike selection (±3/6/9%, $10 rounding, dedup)
+- `app/meridian-web/src/lib/errors.ts` — Anchor error code → user-friendly message mapping
+- `app/meridian-web/src/hooks/useTransaction.ts` — Sign → send → confirm lifecycle with loading states
+- `app/meridian-web/src/hooks/use*.ts` — Anchor + Tradier hooks (useMarkets, useOrderBook, usePortfolio)
+- `app/meridian-web/src/components/markets/OrderBook.tsx` — Bid/ask depth (both perspectives), WebSocket subscriptions. Accepts `perspective: "yes" | "no"` prop. Yes view: USDC bids + No-backed bids on left, Yes asks on right. No view: real No depth from No-backed bids, inverted Yes asks. Uses `buildNoView()` from `lib/orderbook.ts`.
+- `app/meridian-web/src/lib/orderbook.ts` — Order book data transforms: `buildNoView(book)` separates orders by side and applies price inversions for No perspective. Depth aggregation, spread calculation.
+- `app/meridian-web/src/components/analytics/*.tsx` — All differentiator components
+- `app/meridian-web/src/app/api/tradier/` — Next.js API routes (CORS proxy for Tradier)
+- `app/meridian-web/next.config.js` — webpack fallback for crypto/buffer/stream polyfills
+
+**Services (TypeScript/Node):**
+- `services/oracle-feeder/src/feeder.ts` — Tradier streaming → on-chain oracle update
+- `services/amm-bot/src/pricer.ts` — Black-Scholes binary option pricing
+- `services/market-initializer/src/strikeSelector.ts` — Strike generation (baseline + vol-aware)
+- `services/market-initializer/src/scheduler.ts` — Timed jobs with DST-aware ET conversion
+- `services/shared/src/tradier-client.ts` — Shared HTTP client with token-bucket rate limiter
+- `services/shared/src/alerting.ts` — Logging + admin alerting for failures
+
+**Scripts:**
+- `scripts/create-mock-usdc.ts` — Create SPL token mint (6 decimals) on devnet
+- `scripts/airdrop-usdc.ts` — Mint mock USDC to test wallets
+- `scripts/init-config.ts` — Initialize GlobalConfig
+- `scripts/init-oracle-feeds.ts` — Initialize PriceFeed for all 7 tickers
+- `scripts/create-test-markets.ts` — Create strikes for demo
+- `scripts/deploy-devnet.sh` — Idempotent full deployment (runs in order: deploy → mock USDC → init config → init feeds)
+
+**Tests:**
+- `tests/meridian/*.test.ts` — Lifecycle, trade paths, matching, settlement, escrow, crank_cancel
+- `tests/mock-oracle/oracle.test.ts` — Price feed CRUD + validation + staleness
+- `tests/helpers/` — Mock wallet context, mock Anchor program, test data factories, mock WebSocket subscription (`onAccountChange`) for testing real-time oracle price updates (verify component re-renders on price change)
+- Uses `solana-bankrun` for clock manipulation (settle timing, admin_settle delay, oracle staleness). Fallback: `solana-test-validator` with `warp_to_slot` if bankrun has ZeroCopy deserialization issues with the ~126 KB OrderBook account.
+
+---
+
+## Spec Coverage Checklist
+
+Every spec requirement mapped to a phase:
+
+**Smart Contract (Phase 1-3 + Phase 6, 15 instructions):**
+- [P1] initialize_config, create_strike_market (also serves as add_strike), mint_pair
+- [P2] place_order (market + limit, `max_fills` param, three side types: USDC bid / Yes ask / No-backed bid, merge/burn on No×Yes match), cancel_order (works anytime including post-settlement)
+- [P3] settle_market (anyone, >= rule), admin_settle (admin, 1hr delay), admin_override_settlement (1hr correction window), redeem (winners + pair burn, blocked during override window), crank_cancel (permissionless batch cleanup), pause, unpause
+- [P6] close_market (admin, standard close if all redeemed; partial close after 90 days — closes OrderBook + vaults, keeps settlement record, sweeps unclaimed USDC to treasury)
+- [P6] treasury_redeem (permissionless, no time limit — late claim against treasury for partially-closed markets)
+- [P6] cleanup_market (admin, closes remaining StrikeMarket + mints once all token supply is burned)
+
+**Invariants (enforced on-chain):**
+- [P1] Vault balance = $1.00 x total pairs minted (fees to separate account if any)
+- [P3] Yes payout + No payout = $1.00 always
+- [P1] Tokens only created via mint_pair, only destroyed via redeem
+- [P3] Settlement outcome immutable after override window (1hr post-settlement)
+
+**Oracle (Phase 1, 3):**
+- [P1] PriceFeed with price, timestamp, confidence
+- [P3] Two-tier staleness check: 60s for general ops, 120s for settlement (both configurable in GlobalConfig)
+- [P3] Confidence check: 0.5% of price (configurable in GlobalConfig as basis points)
+- [P3] Settlement reads oracle on-chain
+- [P1] Pre-market price read via Tradier API (off-chain)
+- [P3] Failure: retry 30s x 15min, then alert admin for override
+
+**Trade Paths (Phase 2):**
+- [P2] Buy Yes: market or limit buy from asks
+- [P2] Buy No (market): atomic mint + sell Yes at best bid
+- [P2] Buy No (limit): atomic mint + post Yes limit sell, hold both until fill. Warning UX + "Cancel & Recover" button in portfolio.
+- [P2] Sell Yes: sell order on ask side
+- [P2] Sell No: `place_order(side=2)` — No-backed bid. No tokens escrowed; when matched against Yes ask, merge/burn releases $1 from vault. Market and limit variants.
+
+**Strike Selection (Phase 1, enhanced Phase 4):**
+- [P1] Baseline: ±3%, ±6%, ±9% from prev close, round to $10, deduplicate
+- [P1] Optionally include rounded prev close as 7th strike
+- [P3] Admin can add strikes intraday via add_strike
+- [P4] Vol-aware enhancement: HV-based 1/1.5/2 sigma levels
+
+**Frontend Pages (Phase 2-3):**
+- [P5] Landing: product explanation, live prices, connect wallet CTA
+- [P2] Markets: grid of 7 stocks with live prices and active contract counts
+- [P2] Trade: strike list, order book (Yes + No perspectives), Buy/Sell panel
+- [P3] Portfolio: active positions, settled outcomes, P&L, redeem buttons
+- [P3] History: trade execution log
+
+**Frontend UI Elements (Phase 2-3):**
+- [P2] Wallet USDC balance display (always visible)
+- [P2] Contract cards: strike, Yes/No prices, implied probability
+- [P2] Real-time order book from CLOB, both perspectives
+- [P2] Trade panel: Buy Yes / Buy No / Sell Yes / Sell No, with position constraints
+- [P2] Market/Limit order toggle
+- [P3] Settlement countdown timer to 4:00 PM ET
+- [P3] Payoff display: "You pay $X. You win $1.00 if [STOCK] closes above [STRIKE]."
+- [P3] Portfolio: entry price, current price, P&L, redeem button
+- [P3] Real-time oracle price display per stock
+- [P3] Market Maker view: mint pairs, post quotes, see exposure/fills/P&L
+
+**Position Constraints (Phase 2):**
+- [P2] Can't Buy Yes if holding No (prompt to sell No first)
+- [P2] Can't Buy No if holding Yes (prompt to sell Yes first)
+- [P2] Frontend checks token balances before presenting trade options
+- [P2] Yes+No holding is only transient during mint-pair
+
+**Automation Service (Phase 3):**
+- [P3] 8:00 AM ET: read prev close from Tradier, calculate strikes
+- [P3] 8:30 AM ET: create contracts + order books, log results, alert on failure, retry with backoff
+- [P3] 9:00 AM ET: markets visible on frontend
+- [P3] ~4:05 PM ET: settlement job — read close, update oracle, settle all
+- [P3] Retry on wide confidence: every 30s for 15 min, then alert admin
+- [P3] Service in same repo (monorepo)
+
+**Testing (Phase 1-3):**
+- [P1] Unit tests: mint, config, market creation
+- [P2] Unit tests: place_order, cancel_order, matching engine (20+ scenarios)
+- [P3] Settlement: at-strike (>=), above, below
+- [P3] Invariant tests: payout sum, vault balance
+- [P3] Oracle validation: stale, wide confidence, valid
+- [P3] Admin override: time delay enforced
+- [P3] Integration: full lifecycle create -> mint -> trade -> settle -> crank_cancel -> redeem
+- [P2] All 4 trade paths e2e
+- [P3] Multi-user: maker mints/quotes, taker fills, both redeem
+- [P2] Frontend: wallet connection, order placement + tx signing
+- [P2] Frontend: order book rendering (both views)
+- [P2] Frontend: position constraint enforcement
+- [P3] Frontend: real-time price display from oracle (test via mock `onAccountChange` subscription — emit price update, verify component re-renders with new value)
+- [P3] Frontend: portfolio + P&L accuracy
+- [P3] Frontend: settlement display + redeem flow
+
+**Deployment (Phase 5):**
+- [P5] Devnet deployment with reproducible scripts
+- [P5] Full lifecycle demo: create -> mint -> trade -> settle -> crank_cancel -> redeem
+- [P5] Tests run locally, validate all invariants
+- [P5] Clear README with one-command setup
+- [P5] .env.example
+- [P5] Architecture doc with chain rationale + trade-offs
+- [P5] HyperLiquid feasibility note (why not chosen)
+- [P5] Risks/limitations note
+- [P5] Dependency justification
+
+**Mainnet Deployment — Bonus (Phase 6):**
+- [P6] Deploy to Solana mainnet-beta with dedicated mainnet keypair
+- [P6] Real USDC mint (`EPjFWdd5...`) — zero code changes, config only
+- [P6] Pyth oracle integration (replace mock oracle for settlement)
+- [P6] `close_market` + `treasury_redeem` + `cleanup_market` — three-phase market closure lifecycle with indefinite late-claim path
+- [P6] Funded automation wallet (~100 SOL for deployment + rent + daily tx fees)
+- [P6] Helius RPC (free tier, 50 RPS)
+- [P6] Monitoring + Discord alerting (wallet balance, oracle freshness, settlement completion)
+- [P6] Program upgrade authority transfer to multisig (Squads) or revoke with `--final`
+
+**Success Criteria:**
+- Core logic correct (mint, trade, settle, redeem)
+- $1.00 invariant never violated
+- All 4 trade paths functional
+- Settlement + escrow cleanup within 10 minutes of market close
+- Frontend: real-time prices, order books (both views), positions, settlement
+- Position constraints enforced
+- Clear trade-offs documented
+- Unredeemed tokens redeemable for 90 days post-settlement (unclaimed funds swept to treasury after grace period)
+
+---
+
+## Infrastructure & Practical Considerations
+
+### Mock USDC on Devnet
+Real USDC doesn't exist on Solana devnet. We create our own SPL token:
+- `scripts/create-mock-usdc.ts` — creates an SPL mint with 6 decimals, authority = deployer
+- `scripts/airdrop-usdc.ts` — mints mock USDC to test wallets (deployer, test users)
+- GlobalConfig stores the mock USDC mint address; all program instructions reference it
+- Frontend `.env` includes `NEXT_PUBLIC_USDC_MINT` pointing to our devnet mock mint
+- On mainnet, swap to real USDC mint address — zero code changes needed
+
+### Wallet Funding for Demo
+- Devnet SOL: `solana airdrop 5 <wallet>` (built into Solana CLI, free on devnet)
+- Mock USDC: `scripts/airdrop-usdc.ts <wallet> <amount>` — mints tokens to any wallet
+- README documents both steps in "Getting Started"
+- Frontend displays a "Get Devnet USDC" helper link or button for new users
+
+### Transaction Size & Compute Budget
+- Solana tx limit: 1,232 bytes. All transactions use v0 + ALTs, so account key overhead is ~1 byte each instead of 32. Size is never a constraint, even for heaviest instructions (Buy No, Sell No merge/burn via `place_order`).
+- Default compute: 200,000 CUs. Simple operations (mint, cancel) are well under. Matching engine sweeps across multiple price levels could exceed. Add `ComputeBudgetProgram.setComputeUnitLimit()` to matching-heavy transactions (400k CUs). Test and measure in Phase 2.
+
+### Order Book Account Sizing
+- ZeroCopy account with 99 price levels (1-99 cents). Each level has N order slots.
+- Start with `MAX_ORDERS_PER_LEVEL = 16`. That gives 99 * 16 = 1,584 order slots.
+- Each order slot: ~73 bytes (owner Pubkey 32 + order_id u64 8 + quantity u64 8 + original_quantity u64 8 + side u8 1 + timestamp i64 8 + is_active bool 1 + padding 7). Total: ~126 KB per order book account (99 levels × 16 slots × 73 bytes).
+- Solana max account: 10 MB. We're well under. Rent cost: ~1 SOL on devnet (free via airdrop).
+- If 16 slots/level proves too small: split into BidBook/AskBook accounts later.
+
+### Trade History & Event Storage
+- **On-chain**: Anchor `emit!` events for every fill, cancel, settle, redeem. Events are in transaction logs.
+- **Frontend History page**: Query recent transactions using `connection.getSignaturesForAddress(marketPDA)` + parse logs. TanStack Query caches results.
+- **Settlement analytics (Phase 4)**: Store settlement records as JSON in `data/settlements/` (local file per day). The market-initializer/settlement service writes these after each settlement run. Analytics components read them via a Next.js API route. Lightweight — no database needed for a prototype.
+
+### Real-Time Updates
+- **Order book + positions**: Solana `connection.onAccountChange(orderBookPDA)` WebSocket subscription — instant updates when any order is placed/filled/cancelled. Used alongside TanStack Query (polling as fallback).
+- **Oracle prices**: `connection.onAccountChange(priceFeedPDA)` — live price updates from oracle feeder.
+- **Tradier streaming**: `stream.tradier.com/v1/markets/events` for live intraday stock prices in the oracle feeder. REST polling as fallback if streaming has issues. Streaming doesn't count against rate limits.
+
+### Prerequisites (README)
+- Rust 1.75+ (for Anchor 0.30.x)
+- Solana CLI 1.18+
+- Anchor CLI 0.30.x
+- Node.js 18+ (LTS)
+- Yarn (workspace-aware, consistent with Anchor ecosystem)
+- Tradier API key (brokerage account, GET-only access)
+- A Solana wallet (Phantom recommended for browser testing)
+
+---
+
+## Verification
+
+1. `anchor test` — all smart contract tests pass locally
+2. `deploy-devnet.sh` — both programs deploy to devnet
+3. `scripts/create-mock-usdc.ts` — mock USDC mint created on devnet
+4. `scripts/airdrop-usdc.ts` — test wallets funded with mock USDC
+5. `init-config.ts` + `create-test-markets.ts` — markets appear on devnet
+6. Oracle feeder running — Tradier prices flowing to on-chain oracle (WebSocket streaming)
+7. Frontend: connect wallet, see USDC balance, browse markets, see live oracle prices
+8. Place market order + limit order, see fills, see order book update in real-time (both views)
+9. Buy No (market + limit variants), Sell No via `place_order(side=2)` No-backed bid
+10. Position constraints: attempt Buy Yes while holding No → blocked with prompt
+11. Settlement: countdown timer, settle via oracle, override window indicator, winning/losing display, redeem USDC after override window
+12. AMM bot running — order books have liquidity
+13. Analytics page shows Greeks, options comparison, historical overlay
+14. Full lifecycle script: create -> mint -> trade -> settle -> crank_cancel -> redeem (vault empties to zero)
+15. Post-settlement crank: `crank_cancel` clears all resting orders, escrow funds returned to owners
+16. Add strike intraday via admin CLI
+17. Settlement retries: simulate oracle failure, verify 30s retry for 15 min, then admin alert
+18. Trade history: History page shows execution log from parsed tx events

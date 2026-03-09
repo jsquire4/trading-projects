@@ -1,22 +1,21 @@
 # Dependencies
 node_modules/
-venv/
-.venv/
-env/
-__pycache__/
-*.pyc
-*.pyo
+.yarn/cache/
+
+# Rust / Anchor
+target/
+.anchor/
 
 # Build
 dist/
 build/
-*.egg-info/
 .next/
 out/
 
-# IDE
+# IDE / AI tools
 .idea/
 .vscode/
+.claude/
 *.swp
 *.swo
 *~
@@ -25,7 +24,7 @@ out/
 .DS_Store
 Thumbs.db
 
-# Environment
+# Environment (secrets)
 .env
 .env.local
 .env.*.local
@@ -38,7 +37,6 @@ npm-debug.log*
 coverage/
 .coverage
 htmlcov/
-.pytest_cache/
 
-# Project docs (originals kept in docs/)
-docs/
+# Solana
+test-ledger/

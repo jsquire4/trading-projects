@@ -665,14 +665,16 @@ Run `/complexity-sweep` across entire codebase (Phases 1–4). Focus areas:
   - **Frontend job**: Install Node 18, Yarn. Run `yarn install --frozen-lockfile`, `yarn lint` (ESLint), `yarn typecheck` (tsc --noEmit), `yarn test` (Vitest). Working directory: `app/meridian-web/`.
   - **Services job**: Install Node 18, Yarn. Run lint + typecheck + unit tests for `services/oracle-feeder/`, `services/amm-bot/`, `services/market-initializer/`, `services/shared/`.
   - **Triggers**: push to `main`, pull requests to `main`. All three jobs run in parallel.
-- [ ] **Railway deployment config**: Single Railway project with 5 services deployed from monorepo:
+- [ ] **Railway deployment config**: Single Railway project, `devnet` environment (Phase 5). `mainnet` environment added in Phase 6.
+  - 4 services per environment: `meridian-web`, `oracle-feeder`, `market-initializer`, `amm-bot`.
   - `meridian-web` — Next.js frontend + faucet API routes. Root: `app/meridian-web/`. Build: `yarn build`, Start: `yarn start`.
   - `oracle-feeder` — long-running WebSocket process. Root: `services/oracle-feeder/`.
   - `market-initializer` — scheduled morning + afternoon jobs. Root: `services/market-initializer/`.
   - `amm-bot` — long-running liquidity bot. Root: `services/amm-bot/`.
-  - Shared env vars across all services via Railway project variables. `FAUCET_KEYPAIR` (USDC mint authority, base58) set only on `meridian-web` service.
+  - Shared env vars across all services via Railway project variables. `FAUCET_KEYPAIR` (USDC mint authority, base58) set only on `meridian-web` in `devnet` env.
   - `railway.toml` per service with build/start commands + health check paths.
-  - Deploy trigger: push to `main` (auto-deploy via Railway GitHub integration).
+  - `devnet` env deploy trigger: push to `main`. `mainnet` env deploy trigger: push to `release` (Phase 6).
+  - See Infrastructure → Deployment for full environment matrix.
 
 **Stage 5B — Sequential: validation (once 5A is complete)**
 These depend on 5A outputs (README, CI, scripts) and on each other.
@@ -777,6 +779,15 @@ All depend on 6A being tested on devnet, but not on each other.
 - [ ] Rent budget calculator: Script that estimates total rent cost for N stocks × M strikes × D days. Outputs SOL needed. Helps plan wallet funding.
 - [ ] `close_market` automation: Extend settlement service to run a daily sweep — find markets > 90 days post-settlement with unredeemed tokens, call `close_market` (partial), log results. Also run `cleanup_market` for any partially-closed markets where mint supply has reached 0.
 - [ ] Frontend: "Market closing in X days" warning for markets approaching 90-day deadline. Post-close: "Redeem via treasury" flow using `treasury_redeem`.
+- [ ] **Network-aware UI layer**: All UX differences between devnet and mainnet driven by `NEXT_PUBLIC_SOLANA_NETWORK` env var. No code forks — conditional rendering based on a single `useNetwork()` hook.
+  - **Header badge**: "Devnet" (green) or "Mainnet" (orange) — always visible so users know which network they're on.
+  - **Faucet visibility**: SOL/USDC faucet buttons shown on devnet, hidden on mainnet.
+  - **Trade confirmation (mainnet only)**: Modal before every trade: "You are spending **X.XX USDC** (real money). This transaction is irreversible." Explicit "Confirm Trade" button. Not shown on devnet — would slow down testing.
+  - **Wallet funding guide (mainnet only)**: Replaces the faucet prompt for zero-balance users. "How to Fund Your Wallet" page/modal with steps: (1) Buy SOL from Coinbase/Kraken, (2) Transfer to your Phantom wallet, (3) Swap SOL → USDC on Jupiter. Links to each platform. Phantom's built-in on-ramp (MoonPay) as alternative one-step path.
+  - **Onboarding copy divergence**: Devnet 3-step guide: "Get Free SOL → Get Free USDC → Place Your First Trade." Mainnet 3-step guide: "Fund Your Wallet → Browse Markets → Place Your First Trade."
+  - **Explorer links**: Devnet tx links → `explorer.solana.com/?cluster=devnet`. Mainnet tx links → `explorer.solana.com` (default mainnet).
+  - **Risk disclaimer (mainnet only)**: Footer text: "Meridian uses real USDC on Solana mainnet. Trade only what you can afford to lose." Shown on every page.
+- [ ] **Railway mainnet environment**: Set up `mainnet` environment in Railway project with production env vars (Helius RPC, real USDC mint, Pyth program ID, mainnet deployer keypair). Deploy from `release` branch. Separate domain from devnet.
 
 **Stage 6C — Tests (parallel with each other)**
 - [ ] Pyth oracle: valid price read, stale price rejected, wide confidence rejected, wrong feed ID rejected, `Trading` status required
@@ -965,18 +976,19 @@ make test         # anchor test (all test suites)
 make lint         # cargo clippy + eslint (frontend + services)
 make idl          # anchor build + copy IDL JSON to frontend/services
 
-# Devnet Setup (run once)
-make setup        # install deps, airdrop SOL, create mock USDC mint
-
-# Devnet Deploy & Initialize
+# Devnet (default target)
+make setup        # install deps, airdrop SOL, create mock USDC mint (run once)
 make deploy       # deploy both programs to devnet (idempotent)
 make init         # initialize config + oracle feeds + test markets + ALTs
 make airdrop      # fund test wallets with SOL + mock USDC
+make frontend     # start Next.js dev server (devnet)
+make services     # start oracle-feeder + amm-bot + market-initializer (devnet)
+make dev          # copies .env.devnet → .env, build + deploy + init + frontend + services (full stack)
 
-# Run Services
-make frontend     # start Next.js dev server
-make services     # start oracle-feeder + amm-bot + market-initializer
-make dev          # build + deploy + init + frontend + services (full stack, one command)
+# Mainnet (Phase 6)
+make deploy:mainnet   # deploy both programs to mainnet-beta (idempotent, uses mainnet keypair)
+make init:mainnet     # initialize config with real USDC + Pyth oracle
+make dev:mainnet      # copies .env.mainnet → .env, build + frontend + services (full stack, mainnet)
 
 # Cleanup
 make clean        # remove build artifacts + target dirs
@@ -1091,6 +1103,7 @@ settle_market -> crank_cancel -> redeem -> IDL generation -> frontend hooks -> c
 - `app/meridian-web/src/app/api/faucet/sol/route.ts` — Devnet SOL airdrop endpoint (calls `connection.requestAirdrop`)
 - `app/meridian-web/src/app/api/faucet/usdc/route.ts` — Devnet mock USDC mint endpoint (server-side `mintTo` using faucet keypair)
 - `app/meridian-web/src/hooks/useWalletState.ts` — Wallet state machine: no-wallet → zero-sol → zero-usdc → funded → has-positions
+- `app/meridian-web/src/hooks/useNetwork.ts` — Returns `"devnet" | "mainnet-beta"` from `NEXT_PUBLIC_SOLANA_NETWORK`. Drives faucet visibility, trade confirmations, risk disclaimers, explorer link cluster param.
 - `app/meridian-web/next.config.js` — webpack fallback for crypto/buffer/stream polyfills
 
 **Services (TypeScript/Node):**
@@ -1109,7 +1122,9 @@ settle_market -> crank_cancel -> redeem -> IDL generation -> frontend hooks -> c
 - `scripts/create-test-markets.ts` — Create strikes for demo
 - `scripts/deploy-devnet.sh` — Idempotent full deployment (runs in order: deploy → mock USDC → init config → init feeds)
 
-**Deployment:**
+**Deployment & Environment:**
+- `.env.devnet.example` — Devnet env var template (mock USDC, mock oracle, faucet keypair)
+- `.env.mainnet.example` — Mainnet env var template (real USDC, Pyth, Helius RPC, no faucet)
 - `app/meridian-web/railway.toml` — Railway config for Next.js frontend
 - `services/oracle-feeder/railway.toml` — Railway config for oracle feeder
 - `services/market-initializer/railway.toml` — Railway config for market initializer + settlement
@@ -1269,17 +1284,45 @@ Two paths — CLI for developers, in-app for end users:
 - Faucet keypair stored as `FAUCET_KEYPAIR` env var (base58-encoded secret key). Same keypair that created the mock USDC mint — it's the mint authority.
 - On mainnet: faucet routes return 403. Users acquire real USDC from exchanges.
 
-### Deployment (Railway)
-All services deploy to a single Railway project. No Vercel, no split infrastructure.
+### Deployment
 
-- **Railway project**: `meridian` with 4 services, all deployed from the same GitHub repo
-- **Frontend**: `meridian-web` service. Railway auto-detects Next.js, builds and serves. Includes faucet API routes + Tradier proxy routes as serverless-compatible API handlers.
-- **Services**: `oracle-feeder`, `market-initializer`, `amm-bot` — each a separate Railway service with its own `railway.toml`. Long-running processes (not serverless).
-- **Shared env vars**: Railway project-level variables shared across all services (Solana RPC, program IDs, Tradier keys). Service-specific vars (e.g. `FAUCET_KEYPAIR`) set per service.
-- **Deploy trigger**: push to `main` auto-deploys all services via Railway's GitHub integration.
-- **Domain**: `meridian-web` gets a `.up.railway.app` subdomain (free). Custom domain optional.
-- **Cost**: Railway's $5/mo free credit covers devnet prototype usage easily.
-- **Local dev**: `make dev` still works for local development. Railway is the production deployment target.
+**4 environments**, 2 local (development) + 2 deployed (Railway):
+
+| Environment | Runtime | Solana Cluster | USDC | Oracle | Faucet | RPC | Purpose |
+|-------------|---------|----------------|------|--------|--------|-----|---------|
+| `devnet-local` | `make dev` | devnet | Mock mint | Mock | Active | Public devnet | Day-to-day development |
+| `devnet-prod` | Railway (`devnet` env) | devnet | Mock mint | Mock | Active | Public devnet | Live demo, evaluator access, public URL |
+| `mainnet-local` | `make dev:mainnet` | mainnet-beta | Real USDC | Pyth | Disabled | Helius | Test mainnet integration locally |
+| `mainnet-prod` | Railway (`mainnet` env) | mainnet-beta | Real USDC | Pyth | Disabled | Helius | Real money, real users |
+
+**Environment selection**: Driven entirely by env vars — no code branches, no build flags. The same Next.js build serves devnet or mainnet based on `NEXT_PUBLIC_SOLANA_NETWORK` and `NEXT_PUBLIC_SOLANA_RPC_URL`. Faucet routes check `NEXT_PUBLIC_SOLANA_NETWORK !== "mainnet-beta"` before serving.
+
+**Env file convention**:
+- `.env.devnet` — local devnet development (copied to `.env` by `make dev`)
+- `.env.mainnet` — local mainnet development (copied to `.env` by `make dev:mainnet`)
+- `.env.devnet.example` / `.env.mainnet.example` — committed templates with placeholders
+- Railway environments get their own var sets in the dashboard (no `.env` files deployed)
+
+**Railway architecture** — single Railway project, two environments, 4 services each:
+
+```
+Railway project: meridian
+├── Environment: devnet
+│   ├── meridian-web        (Next.js frontend + faucet + Tradier proxy)
+│   ├── oracle-feeder       (Tradier streaming → mock oracle)
+│   ├── market-initializer  (morning strikes + afternoon settlement)
+│   └── amm-bot             (liquidity seeder)
+└── Environment: mainnet
+    ├── meridian-web        (Next.js frontend, faucet disabled)
+    ├── oracle-feeder       (Tradier streaming → Pyth price verification)
+    ├── market-initializer  (morning strikes + afternoon settlement)
+    └── amm-bot             (liquidity seeder)
+```
+
+- **Deploy triggers**: `devnet` env auto-deploys from `main` branch. `mainnet` env deploys from `release` branch (manual merge from `main` → `release` for controlled rollout).
+- **Domain**: `devnet` gets `meridian-devnet.up.railway.app`. `mainnet` gets `meridian.up.railway.app` (or custom domain).
+- **Cost**: Railway $5/mo free credit covers devnet. Mainnet adds ~$5-10/mo for 4 always-on services.
+- **Local dev**: `make dev` and `make dev:mainnet` run the full stack locally. Railway is the deployed target.
 
 ### Transaction Size & Compute Budget
 - Solana tx limit: 1,232 bytes. All transactions use v0 + ALTs, so account key overhead is ~1 byte each instead of 32. Size is never a constraint, even for heaviest instructions (Buy No, Sell No merge/burn via `place_order`).
@@ -1311,11 +1354,17 @@ All services deploy to a single Railway project. No Vercel, no split infrastruct
 - Tradier API key (brokerage account, GET-only access)
 - A Solana wallet (Phantom recommended for browser testing)
 
-### Environment Variables (`.env.example`)
+### Environment Variables
 
+Two env file templates are committed. Copy the one matching your target:
+- `cp .env.devnet.example .env` → local devnet development
+- `cp .env.mainnet.example .env` → local mainnet development
+
+**`.env.devnet.example`:**
 ```bash
-# Solana
-SOLANA_RPC_URL=https://api.devnet.solana.com        # Helius recommended for production
+# Network
+NEXT_PUBLIC_SOLANA_NETWORK=devnet                     # Drives UI: faucet visibility, trade confirmations, explorer links
+SOLANA_RPC_URL=https://api.devnet.solana.com
 ANCHOR_WALLET=~/.config/solana/id.json               # Deployer/admin keypair
 ANCHOR_PROVIDER_URL=https://api.devnet.solana.com
 
@@ -1329,7 +1378,7 @@ USDC_MINT=
 # Tradier API
 TRADIER_API_KEY=                                      # Brokerage API token
 TRADIER_ACCOUNT_ID=                                   # Brokerage account ID
-TRADIER_BASE_URL=https://api.tradier.com              # Production: api.tradier.com, Sandbox: sandbox.tradier.com
+TRADIER_BASE_URL=https://api.tradier.com
 
 # Frontend (prefixed for Next.js client-side access)
 NEXT_PUBLIC_SOLANA_RPC_URL=https://api.devnet.solana.com
@@ -1345,8 +1394,49 @@ ORACLE_UPDATE_INTERVAL_MS=5000                        # Oracle feeder update fre
 AMM_SPREAD_BPS=200                                    # AMM bot spread (basis points)
 AMM_MAX_INVENTORY=100                                 # AMM bot max position per side
 
-# Monitoring (Phase 6 — optional)
+# Monitoring (optional)
 DISCORD_WEBHOOK_URL=                                  # Alert notifications
+```
+
+**`.env.mainnet.example`:**
+```bash
+# Network
+NEXT_PUBLIC_SOLANA_NETWORK=mainnet-beta               # Enables: trade confirmations, risk disclaimers, funding guide. Disables: faucet.
+SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
+ANCHOR_WALLET=~/.config/solana/mainnet-deployer.json  # Dedicated mainnet keypair — never reuse devnet key
+ANCHOR_PROVIDER_URL=https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
+
+# Program IDs (set after mainnet deploy)
+MERIDIAN_PROGRAM_ID=
+# No MOCK_ORACLE_PROGRAM_ID on mainnet — uses Pyth
+
+# Token mints
+USDC_MINT=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v  # Real USDC on mainnet
+
+# Pyth
+PYTH_PROGRAM_ID=FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH
+
+# Tradier API
+TRADIER_API_KEY=                                      # Production brokerage API token
+TRADIER_ACCOUNT_ID=
+TRADIER_BASE_URL=https://api.tradier.com
+
+# Frontend
+NEXT_PUBLIC_SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
+NEXT_PUBLIC_MERIDIAN_PROGRAM_ID=
+NEXT_PUBLIC_USDC_MINT=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+NEXT_PUBLIC_PYTH_PROGRAM_ID=FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH
+
+# No FAUCET_KEYPAIR on mainnet — faucet routes return 403
+
+# Services
+ORACLE_UPDATE_INTERVAL_MS=5000
+AMM_SPREAD_BPS=200
+AMM_MAX_INVENTORY=100
+
+# Monitoring (required on mainnet)
+DISCORD_WEBHOOK_URL=                                  # Alert notifications
+HELIUS_API_KEY=                                       # For RPC + WebSocket
 ```
 
 ---

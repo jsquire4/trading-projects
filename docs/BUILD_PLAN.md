@@ -324,7 +324,7 @@ All smart contract tests use `solana-bankrun` for clock manipulation (settlement
 These define the on-chain data model and project structure. Everything else in Phase 1 depends on them.
 1. Anchor workspace scaffolding (Cargo.toml, Anchor.toml, npm workspaces, directory structure)
 2. PDA seed definitions (Rust side) — all seeds from PDA Registry, exact byte encoding
-3. Meridian state accounts: `GlobalConfig`, `StrikeMarket` (with Yes/No mints + USDC vault as PDAs)
+3. Meridian state accounts: `GlobalConfig`, `StrikeMarket` (with Yes/No mints + USDC vault + escrow vault + Yes escrow + No escrow + OrderBook as PDAs). Treasury PDA (`[b"treasury"]`) created during `initialize_config`.
 4. Mock oracle state: `PriceFeed` account
 5. Error enum (`error.rs`) — all Phase 1 error codes (6000–6016, 6030–6036, 6040–6044, 6060–6066, 6100–6101)
 
@@ -340,7 +340,7 @@ All depend on Stage 1A workspace + state being defined, but not on each other.
 **Stage 1C — Sequential: integration + deploy (once all of 1B is complete)**
 1. `anchor build` — verify both programs compile
 2. Deploy to devnet — verify both programs deploy
-3. Run init scripts — create mock USDC, initialize config, initialize oracle feeds, create test markets
+3. Run init scripts in dependency order: (a) `create-mock-usdc.ts` — USDC mint must exist first, (b) `init-config.ts` — references USDC mint + oracle program, creates Treasury PDA, (c) `init-oracle-feeds.ts` — references GlobalConfig for authority, (d) `create-test-markets.ts` — references GlobalConfig + oracle feeds, creates ALTs per market
 4. Verify: mint a Yes/No pair via CLI script, confirm vault balance = $1 × pairs minted
 
 **Stage 1D — Parallel: tests (bankrun, once 1C passes)**
@@ -348,8 +348,11 @@ All test suites are independent of each other. Run against bankrun (local), not 
 - [ ] Oracle CRUD: initialize feed, update price, authority validation, staleness check
 - [ ] Config init: admin set, tickers stored, thresholds stored
 - [ ] Market creation: PDA derivation correct, mints created, vaults created, duplicate rejected
-- [ ] Mint pair: vault balance invariant (vault = $1 × pairs minted), Yes supply = No supply, ATAs created
+- [ ] Mint pair: vault balance invariant (vault = $1 × pairs minted), Yes supply = No supply, ATAs created via `init_if_needed` (test fresh user with no existing ATA), insufficient USDC balance rejected with `InsufficientBalance`
 - [ ] Mint pair position constraint: rejects with `ConflictingPosition` if user holds Yes tokens for the market
+- [ ] OrderBook initialization: ZeroCopy account created with correct size (~126 KB), `next_order_id` starts at 0, all 99 levels empty
+- [ ] Treasury creation: `initialize_config` creates Treasury PDA (`[b"treasury"]`) as USDC token account owned by GlobalConfig PDA
+- [ ] Escrow setup: `create_strike_market` creates all three escrow accounts (escrow_vault, yes_escrow, no_escrow) with correct mint and market PDA ownership
 
 **Stage 1E — Audit**
 Run `/audit` against all Phase 1 code. Verify:
@@ -607,8 +610,8 @@ Run `/complexity-sweep` across entire codebase (Phases 1–3). Focus areas:
 All depend on Phase 3 being complete (including oracle feeder running for AMM bot price reads), but not on each other.
 - [ ] **Vol-aware strikes** (`services/market-initializer/src/strikeSelector.ts`): HV20 from 60-day Tradier history → 1/1.5/2 sigma strike levels. Enhancement to spec's baseline ±3/6/9%. Both available; vol-aware default, baseline fallback.
 - [ ] **AMM bot** (`services/amm-bot/`): Black-Scholes binary pricer (N(d2) formula), inventory skew, circuit breaker, configurable spread. Seeds liquidity so demo has live tradeable markets. Uses existing `place_order`/`cancel_order`. **Prerequisite: oracle feeder (Phase 3B) must be operational** — bot reads on-chain oracle prices for its pricing model. Bot's pricer logic is pure and testable independently; e2e testing requires oracle prices on-chain.
-- [ ] **Options comparison** (`app/meridian-web/src/components/analytics/OptionsComparison.tsx`): Tradier options chain (greeks=true) delta at each strike vs Meridian Yes price side-by-side ("Options market says 62%, Meridian says 58%"). Data via `/api/tradier/options` route.
-- [ ] **Historical overlay** (`app/meridian-web/src/components/analytics/HistoricalOverlay.tsx`): 252-day daily return distribution from Tradier overlaid on current Yes token probabilities across strikes. Data via `/api/tradier/history` route.
+- [ ] **Options comparison** (`app/meridian-web/src/components/analytics/OptionsComparison.tsx`): Tradier options chain (greeks=true) delta at each strike vs Meridian Yes price side-by-side ("Options market says 62%, Meridian says 58%"). Data via `/api/tradier/options` route. **Fallback UX**: if Tradier API returns empty options chain (no 0DTE expiry for this ticker, or outside market hours), show "Options data unavailable" with explanation — never render stale or missing data as zeros.
+- [ ] **Historical overlay** (`app/meridian-web/src/components/analytics/HistoricalOverlay.tsx`): 252-day daily return distribution from Tradier overlaid on current Yes token probabilities across strikes. Data via `/api/tradier/history` route. **Fallback UX**: if Tradier history returns fewer than 60 trading days (new listing, data gap), show partial distribution with "Limited data — N days available" disclaimer.
 - [ ] **Settlement analytics** (`app/meridian-web/src/components/analytics/SettlementAnalytics.tsx`): calibration chart (implied prob bucket vs realized frequency), accuracy tracking, leaderboard. Data from settlement records (JSON files written by settlement service).
 - [ ] **Binary Greeks** (`app/meridian-web/src/components/analytics/GreeksDisplay.tsx`): binary delta = N'(d2)/(S*sigma*sqrt(T)), binary gamma. Displayed per market, updated from live Tradier price feed. Math in `lib/greeks.ts` (already exists from Phase 1B — this task is the React component only).
 
@@ -618,6 +621,9 @@ All depend on Phase 3 being complete (including oracle feeder running for AMM bo
 - [ ] Strike selector: sigma-based strikes produce reasonable levels for various price/vol combos
 - [ ] AMM bot: inventory limit enforcement, circuit breaker triggers, spread calculation
 - [ ] Greeks: binary delta/gamma values match known formulas at boundary conditions
+- [ ] Options comparison: Tradier options chain data correctly fetched and parsed, delta-to-probability mapping matches expected values, side-by-side rendering with Meridian prices
+- [ ] Historical overlay: 252-day return distribution correctly calculated from Tradier OHLCV data, distribution overlay renders with correct probability buckets aligned to strike prices
+- [ ] Settlement analytics: calibration chart buckets implied probabilities correctly, accuracy percentage calculated from settlement records, leaderboard sorts by P&L
 
 **Stage 4C — Audit**
 Run `/audit` against all Phase 4 code. Verify:
@@ -651,12 +657,16 @@ Run `/complexity-sweep` across entire codebase (Phases 1–4). Focus areas:
 - [ ] HyperLiquid feasibility note (see `docs/DEV_LOG.md` for content — extract to standalone doc)
 - [ ] Risks/limitations note (no regulatory claims)
 - [ ] Dependency justification doc (see `docs/DEV_LOG.md` for table — extract to standalone doc)
-- [ ] CI workflows: Anchor tests, frontend lint/typecheck, services lint/tests
+- [ ] CI workflows (GitHub Actions, `.github/workflows/ci.yml`):
+  - **Anchor tests job**: Install Rust 1.75, Solana CLI 1.18, Anchor CLI 0.30.1. Run `anchor build`, then `anchor test` (bankrun, no validator needed). Cache `~/.cargo` and `target/` across runs.
+  - **Frontend job**: Install Node 18, Yarn. Run `yarn install --frozen-lockfile`, `yarn lint` (ESLint), `yarn typecheck` (tsc --noEmit), `yarn test` (Vitest). Working directory: `app/meridian-web/`.
+  - **Services job**: Install Node 18, Yarn. Run lint + typecheck + unit tests for `services/oracle-feeder/`, `services/amm-bot/`, `services/market-initializer/`, `services/shared/`.
+  - **Triggers**: push to `main`, pull requests to `main`. All three jobs run in parallel.
 
 **Stage 5B — Sequential: validation (once 5A is complete)**
 These depend on 5A outputs (README, CI, scripts) and on each other.
-1. Idempotent `deploy-devnet.sh` — verify reproducible from clean clone
-2. Load test: 100 simulated orders across 5 markets on devnet (needs deploy to succeed first)
+1. Idempotent `deploy-devnet.sh` — verify reproducible from clean clone. **Idempotence rules**: `anchor deploy` uses `--program-keypair` for stable program IDs across redeploys; `create-mock-usdc.ts` checks if mint exists before creating; `init-config.ts` catches `ConfigAlreadyInitialized` and skips; `init-oracle-feeds.ts` catches `OracleFeedAlreadyInitialized` per ticker and skips; `create-test-markets.ts` catches `AccountAlreadyInUse` per market and skips. Script exits 0 on full or partial skip (already-initialized state is success).
+2. Load test: 100 simulated orders across 5 markets on devnet (needs deploy to succeed first). **Success criteria**: all 100 orders land on-chain without CU exhaustion, no vault invariant violations, order book state consistent after all fills, settlement completes for all 5 markets, crank_cancel clears all resting orders, total test completes within 10 minutes.
 
 **Stage 5C — Final Audit**
 Run `/audit` against entire codebase. Verify:
@@ -675,6 +685,8 @@ Run `/audit` against entire codebase. Verify:
 
 ### Phase 6: Mainnet Deployment (Bonus)
 **Goal**: Full system running on Solana mainnet-beta with real infrastructure. Real USDC, production oracle feeds, funded automation wallet, monitoring.
+
+> **Note**: The spec requires 8 smart contract functions. Phases 1–3 deliver 12 instructions covering all spec requirements plus `crank_cancel`, `admin_override_settlement`, `pause`, and `unpause`. Phase 6 adds 3 more instructions (`close_market`, `treasury_redeem`, `cleanup_market`) for mainnet sustainability — these are beyond spec scope and not required for the devnet prototype.
 
 **Prerequisites (manual, before any Stage 6 work):**
 - [ ] Generate dedicated mainnet keypair: `solana-keygen new -o ~/.config/solana/mainnet-deployer.json` — never reuse devnet key

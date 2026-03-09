@@ -40,7 +40,7 @@ Decision log: `/Users/js/dev/peak6/docs/DEV_LOG.md`
 | `add_strike` | Folded into `create_strike_market` (spec enhancement) | No separate instruction needed — `create_strike_market` is admin-only and callable anytime (morning or intraday). PDA seeds (`[b"market", ticker, strike, expiry_day]`) guarantee deduplication — duplicate calls fail with `AccountAlreadyInUse`. See DEV_LOG "Spec Deviations" for rationale. 15 total instructions (12 in Phases 1-3, `close_market` + `treasury_redeem` + `cleanup_market` added in Phase 6). |
 | Package manager | Yarn | Consistent with Anchor ecosystem defaults |
 | Anchor version | `anchor-lang = "0.30.1"` (pinned) | Exact version avoids breaking changes between patch releases |
-| Service runtime | npm scripts, `Makefile` for orchestration | `make services` starts oracle-feeder + amm-bot + market-initializer. No Docker/pm2 for prototype. |
+| Service runtime | npm scripts, `Makefile` for orchestration | `make services` starts oracle-feeder + amm-bot + market-initializer + event-indexer. No Docker/pm2 for prototype. |
 | Admin keypair | `~/.config/solana/id.json` (Solana CLI default) | Same keypair = deployer, admin, oracle authority for devnet. Document in README. |
 | Program upgrade authority | Upgradeable on devnet, deployer holds authority | Solana default — programs are upgradeable via BPF Loader Upgradeable. Allows iteration without redeploying to new program IDs (preserves all existing PDAs/accounts). Mainnet: transfer authority to multisig or revoke with `--final` flag once stable. |
 | Transaction format | v0 versioned transactions + per-market ALTs | Every market gets an ALT at creation time, pre-loaded with all market PDAs + programs. 1-byte index vs 32-byte key per account. No legacy tx path. All major wallets support v0. |
@@ -344,7 +344,7 @@ All depend on Stage 1A workspace + state being defined, but not on each other.
 4. Verify: mint a Yes/No pair via CLI script, confirm vault balance = $1 × pairs minted
 
 **Stage 1D — Parallel: tests (bankrun, once 1C passes)**
-All test suites are independent of each other. Run against bankrun (local), not devnet.
+All test suites are independent of each other. Run against bankrun (local), not devnet. **Each test file must spawn its own isolated bankrun instance** — call `start()` at the top, initialize fresh GlobalConfig/PriceFeed/StrikeMarket state within the test, and never share state across test files. This is what makes true parallelism safe; shared bankrun state would cause race conditions between tests that write to the same accounts.
 - [ ] Oracle CRUD: initialize feed, update price, authority validation, staleness check
 - [ ] Config init: admin set, tickers stored, thresholds stored
 - [ ] Market creation: PDA derivation correct, mints created, vaults created, duplicate rejected
@@ -385,6 +385,8 @@ Steps 1–3 are strictly sequential — each defines data structures or logic th
 ```
 1 (order book state) → 2 (matching engine) → 3 (escrow logic)
                                                   ↓
+                                           3.5 (gate: error codes + mod.rs registration)
+                                                  ↓
                                         ┌─────────┼─────────┐
                                         4         5         6
                                    (place_order) (cancel)  (pause/unpause)
@@ -401,10 +403,16 @@ Steps 1–3 are strictly sequential — each defines data structures or logic th
    **30+ unit test scenarios before integration** (up from 20+ — need to cover all side-type combinations and merge/burn vault math).
 3. Escrow logic: three escrow types — lock USDC (USDC bids → `escrow_vault`), Yes tokens (Yes asks → `yes_escrow`), or No tokens (No-backed bids → `no_escrow`) on order placement. Unlock and return correct asset on cancel. **Tested independently for all three types.**
 
-Once steps 1–3 are complete, the following can proceed in parallel:
-- [ ] `place_order` instruction: wires matching engine + escrow together. Accepts `side: u8` (0/1/2) and `order_type` (Market/Limit). Min size: 1 token. For side=2 (Sell No): user must hold sufficient No tokens; escrowed in no_escrow. **Error codes: add Phase 2 codes (6050–6058) to `error.rs` as part of this task** (they're consumed here).
-- [ ] `cancel_order` instruction: owner-only, refund from escrow (checks order's `side` to return USDC, Yes, or No), cancel by `(price_level, order_id)`. Works post-settlement.
-- [ ] `pause` / `unpause` instructions: admin only. Global (`GlobalConfig.is_paused`) or per-market (`StrikeMarket.is_paused`). Reads/writes `is_paused` flags — no dependency on matching engine or escrow.
+Once steps 1–3 are complete, **gate step 3.5** must run before parallel work begins:
+
+3.5. **Gate: error codes + instruction registration** — Add Phase 2 error codes (6050–6059) to `error.rs`. Register all three new instruction modules in `programs/meridian/src/instructions/mod.rs` (`pub mod place_order; pub mod cancel_order; pub mod pause;`) and add instruction dispatch arms in `programs/meridian/src/lib.rs`. **This prevents merge conflicts** — parallel agents write only their own instruction handler file, never `mod.rs` or `lib.rs`.
+
+Once gate 3.5 is complete, the following can proceed in parallel:
+- [ ] `place_order` instruction (`instructions/place_order.rs` only): wires matching engine + escrow together. Accepts `side: u8` (0/1/2) and `order_type` (Market/Limit). Min size: 1 token. For side=2 (Sell No): user must hold sufficient No tokens; escrowed in no_escrow. Error codes 6050–6059 already in `error.rs` from gate 3.5.
+- [ ] `cancel_order` instruction (`instructions/cancel_order.rs` only): owner-only, refund from escrow (checks order's `side` to return USDC, Yes, or No), cancel by `(price_level, order_id)`. Works post-settlement.
+- [ ] `pause` / `unpause` instructions (`instructions/pause.rs` only): admin only. Global (`GlobalConfig.is_paused`) or per-market (`StrikeMarket.is_paused`). Reads/writes `is_paused` flags — no dependency on matching engine or escrow.
+
+**Parallel safety rule**: Each parallel agent writes ONLY its own `instructions/<name>.rs` file. No agent touches `lib.rs`, `mod.rs`, or `error.rs` — those are locked after gate 3.5.
 
 Once `place_order` is complete:
 - [ ] Buy No atomic path: `mint_pair` + `place_order(side=1)` (Yes ask) composed in one transaction. Market variant (sell at best bid) and limit variant (post at user-chosen price). A Buy No limit (Yes ask) naturally matches against Sell No limit (No-backed bid) through the book. This is a client-side composition test — both instructions already exist.
@@ -414,31 +422,43 @@ Once `place_order` is complete:
 ```
 IDL generation (gate)
   ↓
-lib/orderbook.ts + useTransaction hook + wallet adapter + MarketCard + wallet balance (parallel, no deps on each other)
+wallet adapter + lib/orderbook.ts + faucet API routes (parallel, truly independent)
   ↓
-useMarkets / useMarket / useOrderBook hooks (need lib/orderbook.ts)
+useTransaction hook + wallet state awareness (parallel, both need wallet adapter)
   ↓
-OrderBook component + OrderForm + position constraints (parallel, need hooks)
+MarketCard + wallet balance display (parallel, need wallet state)
+  ↓
+useMarkets / useMarket / useOrderBook hooks (need lib/orderbook.ts + wallet adapter)
+  ↓
+OrderBook component + OrderForm (parallel, need hooks)
+  ↓
+position constraints (needs OrderForm)
 ```
 
-1. IDL generation: `anchor build` → copy IDL to `app/meridian-web/src/idl/` and `services/shared/src/idl/`
+1. IDL generation: `anchor build` → copy IDL to `app/meridian-web/src/idl/` and `services/shared/src/idl/`. **IDL must exist at both paths before any hook implementation begins.**
 
-Once IDL is generated, the following run in parallel (no dependencies on each other):
+Once IDL is generated, the following run in parallel (truly independent — no shared imports):
 - [ ] Frontend wallet adapter + Anchor program client hooks (`useAnchorProgram`)
 - [ ] `lib/orderbook.ts`: `buildNoView(book)` — separates USDC bids, Yes asks, and No-backed bids into Yes/No depth views. Depth aggregation, spread calculation. No-backed bids at price X appear as No asks at price (100-X) in the Yes perspective. **Verification requirement**: unit tests must confirm that the No perspective correctly inverts prices for all three order side types — a USDC bid at price 60 (Buy Yes at $0.60) must appear as a No ask at price 40 ($0.40) in the No view; a Yes ask at price 70 must appear as a No bid at price 30; a No-backed bid at price 55 must appear as real No depth at price 55 (no inversion — it's already a No-native order). Test edge cases: price 1 → 99, price 99 → 1, price 50 → 50.
-- [ ] `useTransaction` hook: sign → send → confirm lifecycle with loading states ("Signing...", "Confirming...", toast)
-- [ ] `MarketCard` component: strike, Yes price, No price ($1 - Yes), implied probability (Yes price as %), active order count
-- [ ] Wallet USDC balance display (always visible in header)
 - [ ] **Devnet faucet**: `/api/faucet/sol` (calls `connection.requestAirdrop`, 2 SOL per click) + `/api/faucet/usdc` (server-side mint-to using faucet keypair, 1000 USDC per click). Rate-limited: 1 request per wallet per 60 seconds (in-memory map, no DB). Faucet keypair = USDC mint authority, stored in `FAUCET_KEYPAIR` env var (base58-encoded secret key).
-- [ ] **Wallet state awareness**: App-wide state machine for connected wallet — (1) no wallet: read-only markets, "Connect Wallet" CTA; (2) wallet connected, zero SOL: SOL faucet prompt; (3) wallet connected, zero USDC: USDC faucet prompt; (4) wallet connected, funded: full trading UI; (5) wallet connected, has positions: portfolio badge in nav. State derived from on-chain balances via `useWalletState` hook.
 
-Once `lib/orderbook.ts` and wallet adapter are complete:
+Once wallet adapter is complete (lib/orderbook.ts and faucet can still be in-flight):
+- [ ] `useTransaction` hook: sign → send → confirm lifecycle with loading states ("Signing...", "Confirming...", toast). Depends on wallet adapter for signing.
+- [ ] **Wallet state awareness**: App-wide state machine for connected wallet — (1) no wallet: read-only markets, "Connect Wallet" CTA; (2) wallet connected, zero SOL: SOL faucet prompt; (3) wallet connected, zero USDC: USDC faucet prompt; (4) wallet connected, funded: full trading UI; (5) wallet connected, has positions: portfolio badge in nav. State derived from on-chain balances via `useWalletState` hook. Depends on wallet adapter for balance queries.
+
+Once wallet state + useTransaction are complete:
+- [ ] `MarketCard` component: strike, Yes price, No price ($1 - Yes), implied probability (Yes price as %), active order count. Uses wallet state for conditional rendering.
+- [ ] Wallet USDC balance display (always visible in header). Uses `useWalletState`.
+
+Once `lib/orderbook.ts`, wallet adapter, and wallet state are all complete:
 - [ ] `useMarkets` / `useMarket` / `useOrderBook` hooks (TanStack Query, polling + WebSocket subscription)
 
 Once hooks are complete:
 - [ ] `OrderBook` component: bid/ask depth with three side types. `perspective: "yes" | "no"` prop. Yes view: USDC bids on left, Yes asks on right. No view: No-backed bids shown as real No depth (not synthetic inversion), Yes asks shown as No asks at inverted price. WebSocket subscriptions.
 - [ ] `OrderForm` component: side selector (Buy Yes / Sell Yes / Buy No / Sell No), market/limit toggle, price input, quantity input, submit. Sell No submits `place_order(side=2)` with No token escrow.
-- [ ] Position constraint enforcement (frontend UX layer): check Yes/No token balances, block conflicting trades in UI before tx submission, prompt user to exit first. On-chain checks (`ConflictingPosition`) are the backstop; frontend prevents users from ever hitting them.
+
+Once OrderForm is complete:
+- [ ] Position constraint enforcement (frontend UX layer): check Yes/No token balances, block conflicting trades in UI before tx submission, prompt user to exit first. On-chain checks (`ConflictingPosition`) are the backstop; frontend prevents users from ever hitting them. Depends on OrderForm existing to add constraint logic on top.
 
 **Stage 2C — Tests (bankrun for on-chain, vitest for frontend)**
 
@@ -460,7 +480,8 @@ On-chain integration tests (need deployed instructions — parallel with each ot
 - [ ] All 4 trade paths e2e (including Buy No limit variant where user holds both tokens)
 
 Frontend tests (vitest + React Testing Library — parallel with on-chain tests):
-- [ ] Order book rendering (both perspectives), order form validation, position constraint enforcement, wallet connection
+- [ ] Order book rendering (both perspectives): verify No perspective correctly inverts prices for all three order side types — USDC bid at price 60 → No ask at price 40; Yes ask at price 70 → No bid at price 30; No-backed bid at price 55 → No depth at price 55 (no inversion). Edge cases: price 1↔99, price 99↔1, price 50↔50.
+- [ ] Order form validation, position constraint enforcement, wallet connection
 
 **Stage 2D — Audit**
 Run `/audit` against all Phase 2 code. Verify:
@@ -500,42 +521,44 @@ admin_settle (2) ∥ admin_override (3)
 redeem (4) ∥ crank_cancel (5)
 ```
 
-0. Error codes: add Phase 3 codes (6020–6024, 6070–6074, 6080–6082, 6090) to `error.rs`. Must be done first — all instructions below reference these codes.
-1. `settle_market` instruction: anyone calls, requires `Clock >= market_close_unix`. Oracle validation (120s settlement staleness, 0.5% confidence bps). Closing price >= strike → Yes wins. Sets `is_settled`, writes `outcome`, `settlement_price`, `settled_at`, `override_deadline = settled_at + 3600`.
+0. **Gate: error codes + instruction registration** — Add Phase 3 codes (6020–6024, 6070–6074, 6080–6082, 6090) to `error.rs`. Register all Phase 3 instruction modules in `instructions/mod.rs` (`pub mod settle_market; pub mod admin_settle; pub mod admin_override_settlement; pub mod redeem; pub mod crank_cancel; pub mod pause; pub mod unpause;`) and add dispatch arms in `lib.rs`. **Same pattern as Phase 2A gate 3.5** — prevents merge conflicts on shared registration files.
+1. `settle_market` instruction (`instructions/settle_market.rs` only): anyone calls, requires `Clock >= market_close_unix`. Oracle validation (120s settlement staleness, 0.5% confidence bps). Closing price >= strike → Yes wins. Sets `is_settled`, writes `outcome`, `settlement_price`, `settled_at`, `override_deadline = settled_at + 3600`.
 
-Once `settle_market` is complete, the following are parallel (independent preconditions, no shared code paths):
-- [ ] `admin_settle` instruction: admin only, requires `Clock >= market_close_unix + 3600`. Accepts manual price. Fails if already settled. (For unsettled markets where oracle failed entirely.)
-- [ ] `admin_override_settlement` instruction: admin only, requires `Clock < override_deadline`. Corrects outcome + settlement_price. Resets `override_deadline = now + 3600`. Must correctly flip winning/losing status. (For already-settled markets where oracle was wrong.)
+Once `settle_market` is complete, the following are parallel (independent preconditions, no shared code paths — each writes only its own instruction file):
+- [ ] `admin_settle` instruction (`instructions/admin_settle.rs` only): admin only, requires `Clock >= market_close_unix + 3600`. Accepts manual price. Fails if already settled. (For unsettled markets where oracle failed entirely.)
+- [ ] `admin_override_settlement` instruction (`instructions/admin_override_settlement.rs` only): admin only, requires `Clock < override_deadline`. Corrects outcome + settlement_price. Resets `override_deadline = now + 3600`. Must correctly flip winning/losing status. (For already-settled markets where oracle was wrong.)
 
-Once both admin settlement paths are complete, the following are parallel (no dependency on each other):
-- [ ] `redeem` instruction: burns winning tokens → $1 USDC. Burns losing tokens → $0. Burns Yes+No pair → $1. **Blocked during override window** (`Clock < override_deadline`). Needs override logic finalized to correctly check the window.
-- [ ] `crank_cancel` instruction: permissionless, market must be settled. Iterates up to 32 order slots per call. Returns escrowed assets based on order's `side`: USDC (side=0 bids), Yes tokens (side=1 asks), No tokens (side=2 No-backed bids) to owners. Skips already-cancelled slots. Returns count. **Not blocked by override window** (escrow refunds are outcome-independent).
+Once both admin settlement paths are complete, the following are parallel (no dependency on each other — each writes only its own instruction file):
+- [ ] `redeem` instruction (`instructions/redeem.rs` only): burns winning tokens → $1 USDC. Burns losing tokens → $0. Burns Yes+No pair → $1. **Blocked during override window** (`Clock < override_deadline`). Needs override logic finalized to correctly check the window.
+- [ ] `crank_cancel` instruction (`instructions/crank_cancel.rs` only): permissionless, market must be settled. Iterates up to 32 order slots per call. Returns escrowed assets based on order's `side`: USDC (side=0 bids), Yes tokens (side=1 asks), No tokens (side=2 No-backed bids) to owners. Skips already-cancelled slots. Returns count. **Not blocked by override window** (escrow refunds are outcome-independent).
 
 **Stage 3B — Gate → parallel: frontend + services (once 3A is complete)**
 
 ```
-IDL regeneration + alerting module (gate — both must complete)
+IDL regeneration + alerting module + navigation scaffold (gate — all must complete)
   ↓
-All frontend items + all services (parallel)
-  Exception: settlement service requires oracle feeder to be operational for e2e testing
+Pages (Portfolio, History, Market Maker) + UI elements + services (parallel)
+  Exceptions:
+    - settlement service e2e tests require oracle feeder operational
+    - History page depends on event indexer API contract (not full implementation)
 ```
 
 Gates (must complete before parallel work begins):
 1. IDL regeneration: `anchor build` → copy updated IDL
-2. Alerting/logging module (`services/shared/src/alerting.ts`) — shared dependency used by all three services below
+2. Alerting/logging module (`services/shared/src/alerting.ts`) — shared dependency used by all services below
+3. **Navigation scaffold**: Wire route structure into `app/layout.tsx` — add nav links for Portfolio (`/portfolio`), History (`/history`), Market Maker (`/market-maker`). Create empty page shells (`page.tsx` with placeholder content) for each. **This prevents merge conflicts** — parallel page agents fill in their page's content without touching layout or navigation files.
 
 Once gates are complete, the following run in parallel:
 
-Frontend items (parallel with each other and with services):
-- [ ] Portfolio page: active positions, settled outcomes, P&L (entry vs current/exit), redeem buttons, "Cancel & Recover" for unfilled Buy No limit orders
-- [ ] History page: trade execution log sourced from the event indexer (`/api/events/*` proxy routes). Filterable by market, side, and date. Paginated. Falls back to on-the-fly `getSignaturesForAddress` parsing if indexer is unavailable.
-- [ ] **Market Maker dashboard** (`/market-maker` page): dedicated view for liquidity providers, separate from the Portfolio page. Components: (1) inventory summary — Yes/No token balances across all active markets in a single table, (2) open orders panel with per-market grouping and bulk-cancel button, (3) quick mint+quote workflow — mint pairs for a market and immediately post bid/ask limit orders in one flow, (4) fill history with per-trade P&L and realized/unrealized breakdown, (5) net exposure heatmap — visual grid showing long/short/neutral per ticker×strike. Data sourced from existing `usePortfolio`, `useOrderBook`, and `useMarkets` hooks + a new `useMarketMaker` aggregation hook. This is the spec's "Market Maker — Mint & Quote" user story given first-class treatment rather than being folded into Portfolio. **Mainnet access control**: On devnet, the page is accessible to all connected wallets. On mainnet, gated by wallet allowlist — `NEXT_PUBLIC_MM_WALLETS` env var contains a comma-separated list of approved wallet addresses. The `useNetwork()` hook + a `useMMAccess()` hook check connected wallet against the list; page returns a "Request Access" message for non-listed wallets. This is a **frontend-only gate** — the underlying instructions (`mint_pair`, `place_order`, `cancel_order`) remain permissionless on-chain. The page is a UX convenience for approved LPs, not a security boundary. Allowlist managed via Railway env vars, updatable without redeploy.
-- [ ] Settlement countdown timer to 4:00 PM ET
-- [ ] Override window indicator: "Settlement under review — redemptions available at [time]". Countdown to override expiry.
+Frontend items (parallel with each other and with services). **Parallel safety rule**: Each task writes only to its own page directory and components. No task modifies `layout.tsx`, navigation, or shared layout components — those are locked after gate 3.
+- [ ] Portfolio page (`app/portfolio/`): active positions, settled outcomes, P&L (entry vs current/exit), redeem buttons, "Cancel & Recover" for unfilled Buy No limit orders
+- [ ] History page (`app/history/`): trade execution log sourced from the event indexer (`/api/events/*` proxy routes). Filterable by market, side, and date. Paginated. Falls back to on-the-fly `getSignaturesForAddress` parsing if indexer is unavailable. **Depends on event indexer API contract** (route shape + response schema) but NOT on the indexer being fully operational — frontend can develop against the contract and fall back to direct parsing.
+- [ ] **Market Maker dashboard** (`app/market-maker/`): dedicated view for liquidity providers, separate from the Portfolio page. Components: (1) inventory summary — Yes/No token balances across all active markets in a single table, (2) open orders panel with per-market grouping and bulk-cancel button, (3) quick mint+quote workflow — mint pairs for a market and immediately post bid/ask limit orders in one flow, (4) fill history with per-trade P&L and realized/unrealized breakdown, (5) net exposure heatmap — visual grid showing long/short/neutral per ticker×strike. Data sourced from existing `usePortfolio`, `useOrderBook`, and `useMarkets` hooks + a new `useMarketMaker` aggregation hook. This is the spec's "Market Maker — Mint & Quote" user story given first-class treatment rather than being folded into Portfolio. **Mainnet access control**: On devnet, the page is accessible to all connected wallets. On mainnet, gated by wallet allowlist — `NEXT_PUBLIC_MM_WALLETS` env var contains a comma-separated list of approved wallet addresses. The `useNetwork()` hook + a `useMMAccess()` hook check connected wallet against the list; page returns a "Request Access" message for non-listed wallets. This is a **frontend-only gate** — the underlying instructions (`mint_pair`, `place_order`, `cancel_order`) remain permissionless on-chain. The page is a UX convenience for approved LPs, not a security boundary. Allowlist managed via Railway env vars, updatable without redeploy.
+- [ ] **Settlement status component** (`components/SettlementStatus.tsx`): single shared component consumed by Trade and Markets pages. Includes both the settlement countdown timer to 4:00 PM ET AND the override window indicator ("Settlement under review — redemptions available at [time]"). Combined into one task to prevent two parallel agents building overlapping UI for the same data.
 - [ ] Payoff display: Yes side: "You pay $X. You win $1.00 if [STOCK] closes above [STRIKE]." No side: "You pay $X. You win $1.00 if [STOCK] closes below [STRIKE]." Adapts based on trade side.
 - [ ] Real-time oracle price display per stock (WebSocket subscription to PriceFeed accounts)
 - [ ] Transaction status toasts with Solana Explorer links
-- [ ] **Onboarding flow**: contextual banner for new users (no positions, first visit). 3-step guide: "Fund Wallet → Pick a Market → Place Your First Trade." Each step highlights the relevant UI element. Dismisses permanently after first trade (tracked in `localStorage`). Not a modal wizard — inline nudges that coexist with the real UI.
+- [ ] **Onboarding flow**: contextual banner for new users (no positions, first visit). 3-step guide: "Fund Wallet → Pick a Market → Place Your First Trade." Each step highlights the relevant UI element. Dismisses permanently after first trade (tracked in `localStorage`). Not a modal wizard — inline nudges that coexist with the real UI. **Renders on the Markets page only** — no other parallel task should modify the Markets page layout.
 
 Services (parallel with each other, except where noted):
 - [ ] Oracle feeder service: Tradier streaming → on-chain `update_price` calls
@@ -576,10 +599,15 @@ Integration tests (sequential — these exercise the full pipeline):
 - [ ] Multi-user: maker mints/quotes, taker fills, both redeem correctly
 - [ ] Settlement executes within 10 minutes of market close (success criterion)
 
+Service tests (vitest — parallel with on-chain and frontend tests):
+- [ ] Event indexer: log parser correctly extracts FillEvent/SettlementEvent from Anchor program logs, backfill recovers missed events on restart, REST API returns correct filtered/paginated results, JSON persistence writes and reads correctly, handles malformed logs gracefully
+
 Frontend tests (vitest — parallel with on-chain tests):
 - [ ] Real-time price display from oracle (mock `onAccountChange`, verify re-render)
 - [ ] Portfolio + P&L accuracy
 - [ ] Settlement display + override window + redeem flow
+- [ ] History page: renders trade log from event indexer API, handles indexer-down fallback (direct tx parsing), pagination
+- [ ] Market Maker dashboard: `useMarketMaker` aggregation hook (inventory across markets, open order grouping), `useMMAccess` access control (allowed wallet passes, blocked wallet sees "Request Access"), quick mint+quote workflow validation, net exposure heatmap calculation
 
 **Stage 3D — Audit**
 Run `/audit` against all Phase 3 code. Verify:
@@ -610,14 +638,21 @@ Run `/complexity-sweep` across entire codebase (Phases 1–3). Focus areas:
 ### Phase 4: Differentiator Features
 **Goal**: All 6 differentiators operational. These go beyond spec requirements.
 
-**Stage 4A — Parallel: all 6 features (independent of each other)**
+**Stage 4A — Gate → parallel: all 6 features**
 All depend on Phase 3 being complete (including oracle feeder running for AMM bot price reads), but not on each other.
+
+Gate (must complete before parallel feature work):
+1. **Shared analytics utilities**: Create `app/meridian-web/src/lib/tradier-proxy.ts` — shared Tradier API proxy wrapper with 60s TTL caching, rate limiting, and error fallback. All `/api/tradier/*` routes consume from it (single pattern for quotes, options, history). Also create `app/meridian-web/src/hooks/useAnalyticsData.ts` — shared hook for fetching/caching Tradier + event indexer data, and `app/meridian-web/src/lib/chartConfig.ts` — shared chart styling/theme constants. **This prevents 4 analytics components from independently inventing their own data-fetching and charting patterns.**
+
+Once gate is complete, the following run in parallel:
 - [ ] **Vol-aware strikes** (`services/market-initializer/src/strikeSelector.ts`): HV20 from 60-day Tradier history → 1/1.5/2 sigma strike levels. Enhancement to spec's baseline ±3/6/9%. Both available; vol-aware default, baseline fallback.
 - [ ] **AMM bot** (`services/amm-bot/`): Black-Scholes binary pricer (N(d2) formula), inventory skew, circuit breaker, configurable spread. Seeds liquidity so demo has live tradeable markets. Uses existing `place_order`/`cancel_order`. **Prerequisite: oracle feeder (Phase 3B) must be operational** — bot reads on-chain oracle prices for its pricing model. Bot's pricer logic is pure and testable independently; e2e testing requires oracle prices on-chain.
-- [ ] **Options comparison** (`app/meridian-web/src/components/analytics/OptionsComparison.tsx`): Tradier options chain (greeks=true) delta at each strike vs Meridian Yes price side-by-side ("Options market says 62%, Meridian says 58%"). Data via `/api/tradier/options` route. **Fallback UX**: if Tradier API returns empty options chain (no 0DTE expiry for this ticker, or outside market hours), show "Options data unavailable" with explanation — never render stale or missing data as zeros.
-- [ ] **Historical overlay** (`app/meridian-web/src/components/analytics/HistoricalOverlay.tsx`): 252-day daily return distribution from Tradier overlaid on current Yes token probabilities across strikes. Data via `/api/tradier/history` route. **Fallback UX**: if Tradier history returns fewer than 60 trading days (new listing, data gap), show partial distribution with "Limited data — N days available" disclaimer.
-- [ ] **Settlement analytics** (`app/meridian-web/src/components/analytics/SettlementAnalytics.tsx`): calibration chart (implied prob bucket vs realized frequency), accuracy tracking, leaderboard. Data from settlement records (JSON files written by settlement service).
+- [ ] **Options comparison** (`app/meridian-web/src/components/analytics/OptionsComparison.tsx`): Tradier options chain (greeks=true) delta at each strike vs Meridian Yes price side-by-side ("Options market says 62%, Meridian says 58%"). Data via `/api/tradier/options` route (uses shared `tradier-proxy.ts`). **Fallback UX**: if Tradier API returns empty options chain (no 0DTE expiry for this ticker, or outside market hours), show "Options data unavailable" with explanation — never render stale or missing data as zeros.
+- [ ] **Historical overlay** (`app/meridian-web/src/components/analytics/HistoricalOverlay.tsx`): 252-day daily return distribution from Tradier overlaid on current Yes token probabilities across strikes. Data via `/api/tradier/history` route (uses shared `tradier-proxy.ts`). **Fallback UX**: if Tradier history returns fewer than 60 trading days (new listing, data gap), show partial distribution with "Limited data — N days available" disclaimer.
+- [ ] **Settlement analytics** (`app/meridian-web/src/components/analytics/SettlementAnalytics.tsx`): calibration chart (implied prob bucket vs realized frequency), accuracy tracking, leaderboard. Data from event indexer API (`/api/events?type=settlement`).
 - [ ] **Binary Greeks** (`app/meridian-web/src/components/analytics/GreeksDisplay.tsx`): binary delta = N'(d2)/(S*sigma*sqrt(T)), binary gamma. Displayed per market, updated from live Tradier price feed. Math in `lib/greeks.ts` (already exists from Phase 1B — this task is the React component only).
+
+**Parallel safety rule**: Each analytics component writes only to its own `.tsx` file in `components/analytics/`. Shared utilities (`tradier-proxy.ts`, `useAnalyticsData.ts`, `chartConfig.ts`) are locked after the gate. Tradier API route files (`/api/tradier/options/route.ts`, `/api/tradier/history/route.ts`) are each owned by exactly one component task (options → OptionsComparison, history → HistoricalOverlay).
 
 **Stage 4B — Tests**
 - [ ] HV calculation: known inputs → known outputs
@@ -664,7 +699,7 @@ Run `/complexity-sweep` across entire codebase (Phases 1–4). Focus areas:
 - [ ] CI workflows (GitHub Actions, `.github/workflows/ci.yml`):
   - **Anchor tests job**: Install Rust 1.75, Solana CLI 1.18, Anchor CLI 0.30.1. Run `anchor build`, then `anchor test` (bankrun, no validator needed). Cache `~/.cargo` and `target/` across runs.
   - **Frontend job**: Install Node 18, Yarn. Run `yarn install --frozen-lockfile`, `yarn lint` (ESLint), `yarn typecheck` (tsc --noEmit), `yarn test` (Vitest). Working directory: `app/meridian-web/`.
-  - **Services job**: Install Node 18, Yarn. Run lint + typecheck + unit tests for `services/oracle-feeder/`, `services/amm-bot/`, `services/market-initializer/`, `services/shared/`.
+  - **Services job**: Install Node 18, Yarn. Run lint + typecheck + unit tests for `services/oracle-feeder/`, `services/amm-bot/`, `services/market-initializer/`, `services/event-indexer/`, `services/shared/`.
   - **Triggers**: push to `main`, pull requests to `main`. All three jobs run in parallel.
 - [ ] **Railway deployment config**: Single Railway project, `devnet` environment (Phase 5). `mainnet` environment added in Phase 6.
   - 5 services per environment: `meridian-web`, `oracle-feeder`, `market-initializer`, `amm-bot`, `event-indexer`.
@@ -681,7 +716,7 @@ Run `/complexity-sweep` across entire codebase (Phases 1–4). Focus areas:
 **Stage 5B — Sequential: validation (once 5A is complete)**
 These depend on 5A outputs (README, CI, scripts) and on each other.
 1. Idempotent `deploy-devnet.sh` — verify reproducible from clean clone. **Idempotence rules**: `anchor deploy` uses `--program-keypair` for stable program IDs across redeploys; `create-mock-usdc.ts` checks if mint exists before creating; `init-config.ts` catches `ConfigAlreadyInitialized` and skips; `init-oracle-feeds.ts` catches `OracleFeedAlreadyInitialized` per ticker and skips; `create-test-markets.ts` catches `AccountAlreadyInUse` per market and skips. Script exits 0 on full or partial skip (already-initialized state is success).
-2. Load test: 100 simulated orders across 5 markets on devnet using **5+ distinct wallets** (not single-wallet — validates multi-user matching, cross-wallet escrow, and concurrent ATA creation). Needs deploy to succeed first. **Success criteria**: all 100 orders land on-chain without CU exhaustion, no vault invariant violations, order book state consistent after all fills, settlement completes for all 5 markets, crank_cancel clears all resting orders, all wallets can redeem correctly, total test completes within 10 minutes.
+2. Load test: 100 simulated orders across 5 markets on devnet using **5+ distinct wallets** (not single-wallet — validates multi-user matching, cross-wallet escrow, and concurrent ATA creation). Needs deploy to succeed first. **Success criteria**: all 100 orders land on-chain without CU exhaustion, no vault invariant violations, order book state consistent after all fills, settlement completes for all 5 markets, crank_cancel clears all resting orders, all wallets can redeem correctly, event indexer captures all fill/settle/redeem events (query API and verify count matches on-chain activity), total test completes within 10 minutes.
 
 **Stage 5C — Final Audit**
 Run `/audit` against entire codebase. Verify:
@@ -740,6 +775,7 @@ Gate (must complete before both tracks):
    - Feature-flagged dual path in `settle_market` — reads mock oracle on devnet, Pyth on mainnet. Selected by `oracle_type` field in GlobalConfig (0=Mock, 1=Pyth).
    - Pyth account validation: check price feed ID matches expected stock, verify status is `Trading`, apply same staleness (120s) and confidence (0.5% bps) thresholds.
    - **Test with Pyth devnet feeds first** before mainnet. Pyth has limited equity coverage — verify all 7 MAG7 tickers are available. If any are missing, keep mock oracle as fallback for those tickers.
+   - **Parallel safety rule**: Track A modifies ONLY `instructions/settle_market.rs` (adding Pyth code path). Track A must NOT touch `StrikeMarket.is_closed`, `instructions/close_market.rs`, `instructions/treasury_redeem.rs`, or `instructions/cleanup_market.rs` — those belong exclusively to Track B. The only shared touchpoint is the gate (error codes + `is_closed` field), which is complete before either track starts.
 
 **Track B** (sequential — each instruction depends on the prior):
 1. **`close_market` instruction (#14)**: Admin-only. Partial close — reclaims ~98% of rent while preserving settlement record for late claims.
@@ -984,7 +1020,7 @@ make deploy       # deploy both programs to devnet (idempotent)
 make init         # initialize config + oracle feeds + test markets + ALTs
 make airdrop      # fund test wallets with SOL + mock USDC
 make frontend     # start Next.js dev server (devnet)
-make services     # start oracle-feeder + amm-bot + market-initializer (devnet)
+make services     # start oracle-feeder + amm-bot + market-initializer + event-indexer (devnet)
 make dev          # copies .env.devnet → .env, build + deploy + init + frontend + services (full stack)
 
 # Mainnet (Phase 6)
@@ -1102,6 +1138,11 @@ settle_market -> crank_cancel -> redeem -> IDL generation -> frontend hooks -> c
 - `app/meridian-web/src/lib/orderbook.ts` — Order book data transforms: `buildNoView(book)` separates orders by side and applies price inversions for No perspective. Depth aggregation, spread calculation.
 - `app/meridian-web/src/app/market-maker/page.tsx` — Market Maker dashboard page
 - `app/meridian-web/src/hooks/useMarketMaker.ts` — Aggregation hook: inventory, open orders, fill history across all markets
+- `app/meridian-web/src/hooks/useMMAccess.ts` — Checks connected wallet against `NEXT_PUBLIC_MM_WALLETS` allowlist (mainnet gate). Returns `{ hasAccess: boolean }`. On devnet, always returns true.
+- `app/meridian-web/src/lib/tradier-proxy.ts` — Shared Tradier API proxy: 60s TTL caching, rate limiting, error fallback (Phase 4A gate)
+- `app/meridian-web/src/hooks/useAnalyticsData.ts` — Shared data-fetching hook for analytics components (Phase 4A gate)
+- `app/meridian-web/src/lib/chartConfig.ts` — Shared chart styling/theme constants (Phase 4A gate)
+- `app/meridian-web/src/components/SettlementStatus.tsx` — Settlement countdown + override window indicator (Phase 3B, single component)
 - `app/meridian-web/src/components/analytics/*.tsx` — All differentiator components
 - `app/meridian-web/src/app/api/tradier/` — Next.js API routes (CORS proxy for Tradier)
 - `app/meridian-web/src/app/api/faucet/sol/route.ts` — Devnet SOL airdrop endpoint (calls `connection.requestAirdrop`)
@@ -1312,7 +1353,7 @@ Two paths — CLI for developers, in-app for end users:
 - `.env.devnet.example` / `.env.mainnet.example` — committed templates with placeholders
 - Railway environments get their own var sets in the dashboard (no `.env` files deployed)
 
-**Railway architecture** — single Railway project, two environments, 4 services each:
+**Railway architecture** — single Railway project, two environments, 5 services each:
 
 ```
 Railway project: meridian
@@ -1440,6 +1481,9 @@ NEXT_PUBLIC_USDC_MINT=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
 NEXT_PUBLIC_PYTH_PROGRAM_ID=FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH
 
 # No FAUCET_KEYPAIR on mainnet — faucet routes return 403
+
+# Market Maker access control (mainnet only — comma-separated wallet addresses)
+NEXT_PUBLIC_MM_WALLETS=
 
 # Services
 ORACLE_UPDATE_INTERVAL_MS=5000

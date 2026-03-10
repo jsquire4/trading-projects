@@ -19,7 +19,7 @@ const WalletMultiButton = dynamic(
  * - Falls back to the standard multi-button when connected (for disconnect UI)
  */
 export function WalletButton({ compact = false }: { compact?: boolean }) {
-  const { connected, publicKey, wallet, disconnect, select } = useWallet();
+  const { connected, publicKey, wallet } = useWallet();
   const { setVisible } = useWalletModal();
   const hasConnectedRef = useRef(false);
 
@@ -64,10 +64,10 @@ export function WalletButton({ compact = false }: { compact?: boolean }) {
   return (
     <button
       onClick={handleClick}
-      className={`bg-white/10 hover:bg-white/15 text-white/70 hover:text-white border border-white/10 hover:border-white/20 rounded-lg font-medium transition-all ${
+      className={`hover:text-white hover:border-white/20 transition-all ${
         compact
-          ? "text-xs px-3 py-1.5"
-          : "text-sm px-4 py-2"
+          ? "bg-white/10 hover:bg-white/15 text-white/70 border border-white/10 rounded-lg font-medium text-xs px-3 py-1.5"
+          : "bg-white/10 hover:bg-white/15 text-white/70 border border-white/10 rounded-lg font-semibold text-sm px-6 py-2.5"
       }`}
     >
       Connect Wallet

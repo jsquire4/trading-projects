@@ -158,7 +158,7 @@ export default function HomePage() {
           >
             View Markets
           </Link>
-          <WalletButton compact />
+          <WalletButton />
         </div>
       </section>
 
@@ -278,7 +278,7 @@ export default function HomePage() {
           >
             Browse Markets
           </Link>
-          <WalletButton compact />
+          <WalletButton />
         </div>
       </section>
 

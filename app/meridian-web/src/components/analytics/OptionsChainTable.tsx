@@ -137,7 +137,7 @@ export function OptionsChainTable({
         </div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-white/10">
-          <table className="w-full text-xs">
+          <table className="w-full text-xs min-w-[720px]">
             <thead>
               <tr className="border-b border-white/10 bg-white/[0.03]">
                 <th className="px-2 py-2 text-left font-medium text-white/40" colSpan={6}>

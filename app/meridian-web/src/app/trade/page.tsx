@@ -74,7 +74,11 @@ function generateSuggestedTrades(
       // Fake social proof — grows throughout the trading day (9:30 AM – 4 PM ET)
       // Base is seeded per-ticker per-day, then ramps with time-of-day
       const now = new Date();
-      const etHour = now.getUTCHours() - 4; // rough EDT offset
+      const jan = new Date(now.getFullYear(), 0, 1).getTimezoneOffset();
+      const jul = new Date(now.getFullYear(), 6, 1).getTimezoneOffset();
+      const isDST = now.getTimezoneOffset() < Math.max(jan, jul);
+      const etOffset = isDST ? 4 : 5;
+      const etHour = now.getUTCHours() - etOffset;
       const etMinute = etHour * 60 + now.getUTCMinutes();
       const marketOpen = 9 * 60 + 30; // 9:30 AM ET
       const marketClose = 16 * 60;    // 4:00 PM ET
@@ -124,8 +128,10 @@ function useCountdown() {
     function calc() {
       const now = new Date();
       // 4 PM ET = 21:00 UTC (EST) or 20:00 UTC (EDT)
-      const isDST = now.getTimezoneOffset() < now.getTimezoneOffset(); // rough
-      const closeHourUTC = 20; // assume EDT for simplicity
+      const jan = new Date(now.getFullYear(), 0, 1).getTimezoneOffset();
+      const jul = new Date(now.getFullYear(), 6, 1).getTimezoneOffset();
+      const isDST = now.getTimezoneOffset() < Math.max(jan, jul);
+      const closeHourUTC = isDST ? 20 : 21;
       const close = new Date(now);
       close.setUTCHours(closeHourUTC, 0, 0, 0);
       if (now >= close) {
@@ -153,12 +159,12 @@ function UrgencyBanner() {
   const timeLeft = useCountdown();
 
   return (
-    <div className="relative overflow-hidden rounded-xl border border-amber-500/30 bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-red-500/10 px-5 py-3">
+    <div className="relative overflow-hidden rounded-xl border border-amber-500/30 bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-red-500/10 px-4 sm:px-5 py-3">
       {/* Animated pulse background */}
       <div className="absolute inset-0 bg-gradient-to-r from-amber-500/5 to-transparent animate-pulse" />
-      <div className="relative flex items-center justify-between">
+      <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-0">
         <div className="flex items-center gap-3">
-          <span className="relative flex h-3 w-3">
+          <span className="relative flex h-3 w-3 shrink-0">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500" />
           </span>
@@ -167,7 +173,7 @@ function UrgencyBanner() {
             <span className="text-amber-400 tabular-nums font-bold">{timeLeft}</span>
           </span>
         </div>
-        <span className="text-xs text-amber-200/50">
+        <span className="text-xs text-amber-200/50 ml-6 sm:ml-0">
           Settles at 4:00 PM ET — final answer, no extensions
         </span>
       </div>
@@ -213,7 +219,7 @@ function HotTradeCard({
       {/* Shimmer on hover */}
       <div className="absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-700 bg-gradient-to-r from-transparent via-white/[0.05] to-transparent" />
 
-      <div className="relative p-5">
+      <div className="relative p-4 sm:p-5">
         {/* Top: Ticker + price */}
         <div className="flex items-start justify-between mb-4">
           <div>
@@ -321,7 +327,7 @@ function ActivityTape({ trades }: { trades: SuggestedTrade[] }) {
   // Human-like amounts — not round multiples of 5. Mix of small casual bets and larger ones
   const amountSeed = seededRandom(`amt-${currentIdx}-${trade.ticker}`);
   const humanAmounts = [3, 7, 8, 12, 15, 18, 22, 27, 33, 42, 50, 63, 75, 88, 100, 125, 150, 200];
-  const amount = humanAmounts[Math.floor(amountSeed * humanAmounts.length)];
+  const amount = humanAmounts[Math.min(Math.floor(amountSeed * humanAmounts.length), humanAmounts.length - 1)];
 
   return (
     <div className="flex items-center gap-2 text-xs text-white/30 overflow-hidden">
@@ -355,10 +361,10 @@ function QuickBetStrip({
   if (hotTrades.length === 0) return null;
 
   return (
-    <div className="rounded-xl bg-gradient-to-r from-purple-500/5 via-blue-500/5 to-green-500/5 border border-white/10 p-4">
-      <div className="flex items-center justify-between mb-3">
+    <div className="rounded-xl bg-gradient-to-r from-purple-500/5 via-blue-500/5 to-green-500/5 border border-white/10 p-3 sm:p-4">
+      <div className="flex items-center justify-between mb-3 gap-2">
         <h3 className="text-sm font-semibold text-white/70">Quick Bets — One Click</h3>
-        <span className="text-[10px] uppercase tracking-wider text-white/30">
+        <span className="text-[10px] uppercase tracking-wider text-white/30 hidden sm:inline">
           Most popular today
         </span>
       </div>
@@ -526,14 +532,16 @@ export default function TradePage() {
   return (
     <div className="flex flex-col gap-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gradient mb-1">Markets</h1>
           <p className="text-white/50 text-sm">
             0DTE binary outcomes on MAG7 stocks. Pick a side, win $1.
           </p>
         </div>
-        <ActivityTape trades={suggestedTrades} />
+        <div className="hidden sm:block">
+          <ActivityTape trades={suggestedTrades} />
+        </div>
       </div>
 
       {isLoading ? (
@@ -584,7 +592,7 @@ export default function TradePage() {
           )}
 
           {/* Bottom CTA — FOMO inducer */}
-          <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/5 px-8 py-10 text-center card-glow">
+          <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/5 px-4 sm:px-8 py-8 sm:py-10 text-center card-glow">
             {/* Animated gradient bg */}
             <div className="absolute inset-0 bg-gradient-to-r from-green-500/5 via-blue-500/5 to-purple-500/5" />
             <div className="absolute inset-0 -translate-x-full animate-[shimmer_3s_ease-in-out_infinite] bg-gradient-to-r from-transparent via-white/[0.03] to-transparent" />
@@ -593,14 +601,14 @@ export default function TradePage() {
               <p className="text-xs uppercase tracking-widest text-white/30 mb-2">
                 Don&apos;t miss out
               </p>
-              <h2 className="text-2xl font-bold text-gradient mb-2">
+              <h2 className="text-xl sm:text-2xl font-bold text-gradient mb-2">
                 Markets Are Open Now
               </h2>
               <p className="text-white/40 text-sm mb-5 max-w-md mx-auto">
                 Every contract settles at 4 PM ET. $1 in, $1 out.
                 The odds are right there — will you take the bet?
               </p>
-              <div className="flex items-center justify-center gap-6 text-sm text-white/30">
+              <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-6 text-sm text-white/30">
                 <span>
                   <span className="text-green-400 font-bold">{suggestedTrades.length}</span>{" "}
                   tickers live

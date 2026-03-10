@@ -26,17 +26,17 @@ export default function RootLayout({
     <html lang="en">
       <body>
         <Providers>
-          <header className="border-b border-white/10 px-6 py-3 flex items-center justify-between backdrop-blur-sm bg-black/30">
-            <div className="flex items-center gap-8">
-              <Link href="/" className="text-xl font-bold tracking-tight text-gradient">
+          <header className="border-b border-white/10 px-3 sm:px-6 py-3 flex items-center justify-between backdrop-blur-sm bg-black/30 gap-2">
+            <div className="flex items-center gap-4 sm:gap-8 min-w-0">
+              <Link href="/" className="text-lg sm:text-xl font-bold tracking-tight text-gradient shrink-0">
                 Meridian
               </Link>
-              <nav className="flex gap-6">
+              <nav className="flex gap-3 sm:gap-6 overflow-x-auto scrollbar-hide">
                 {navLinks.map((link) => (
                   <Link
                     key={link.href}
                     href={link.href}
-                    className="text-sm text-white/60 hover:text-white transition-colors"
+                    className="text-xs sm:text-sm text-white/60 hover:text-white transition-colors whitespace-nowrap shrink-0"
                   >
                     {link.label}
                   </Link>
@@ -45,7 +45,7 @@ export default function RootLayout({
             </div>
             <WalletButton />
           </header>
-          <main className="max-w-7xl mx-auto px-6 py-8">{children}</main>
+          <main className="max-w-7xl mx-auto px-3 sm:px-6 py-6 sm:py-8">{children}</main>
           <Toaster theme="dark" position="bottom-right" />
         </Providers>
       </body>

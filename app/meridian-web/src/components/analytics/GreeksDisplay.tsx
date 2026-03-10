@@ -26,6 +26,8 @@ import {
   TOOLTIP_STYLE,
   formatDollar,
 } from "@/lib/chartConfig";
+import { InsightTooltip } from "@/components/InsightTooltip";
+import { interpretDelta, interpretGamma } from "@/lib/insights";
 
 interface GreeksDisplayProps {
   ticker: string;
@@ -171,10 +173,14 @@ export function GreeksDisplay({ ticker }: GreeksDisplayProps) {
                     {isATM && <span className="ml-1 text-[9px] text-white/40">ATM</span>}
                   </td>
                   <td className="px-3 py-1.5 text-right font-mono text-white/70" style={{ backgroundColor: deltaBg }}>
-                    {row.delta.toFixed(4)}
+                    <InsightTooltip insight={interpretDelta(row.delta, ticker, row.strike)}>
+                      {row.delta.toFixed(4)}
+                    </InsightTooltip>
                   </td>
                   <td className="px-3 py-1.5 text-right font-mono text-white/70" style={{ backgroundColor: gammaBg }}>
-                    {row.gamma.toFixed(4)}
+                    <InsightTooltip insight={interpretGamma(row.gamma, ticker)}>
+                      {row.gamma.toFixed(4)}
+                    </InsightTooltip>
                   </td>
                   <td className="px-3 py-1.5 text-right font-mono text-red-400/70">
                     {row.theta.toFixed(4)}

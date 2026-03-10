@@ -2,6 +2,8 @@
 
 import { useState, useMemo } from "react";
 import { useOrderBook } from "@/hooks/useMarkets";
+import { InsightTooltip } from "@/components/InsightTooltip";
+import { interpretSpread, interpretOrderDepth } from "@/lib/insights";
 
 interface OrderBookLevel {
   price: number;
@@ -21,6 +23,14 @@ interface OrderBookProps {
 export function OrderBook({ perspective: initialPerspective, marketKey }: OrderBookProps) {
   const [perspective, setPerspective] = useState<"yes" | "no">(initialPerspective);
   const { data: book, isLoading } = useOrderBook(marketKey);
+
+  const depthInsight = useMemo(() => {
+    if (!book) return null;
+    const view = perspective === "yes" ? book.yesView : book.noView;
+    const bidLevels = view.bids.map((l) => ({ price: l.price, quantity: Number(l.totalQuantity) }));
+    const askLevels = view.asks.map((l) => ({ price: l.price, quantity: Number(l.totalQuantity) }));
+    return interpretOrderDepth(bidLevels, askLevels);
+  }, [book, perspective]);
 
   const { bids, asks, spread, maxCumulative } = useMemo(() => {
     if (!book) return { bids: [], asks: [], spread: null, maxCumulative: 1 };
@@ -76,7 +86,13 @@ export function OrderBook({ perspective: initialPerspective, marketKey }: OrderB
     <div className="rounded-lg border border-white/10 bg-white/5">
       {/* Header with perspective toggle */}
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-2">
-        <h3 className="text-sm font-semibold text-white/80">Order Book</h3>
+        <h3 className="text-sm font-semibold text-white/80">
+          {depthInsight ? (
+            <InsightTooltip insight={depthInsight}>Order Book</InsightTooltip>
+          ) : (
+            "Order Book"
+          )}
+        </h3>
         <div className="flex rounded-md border border-white/10 text-xs">
           <button
             onClick={() => setPerspective("yes")}
@@ -133,7 +149,9 @@ export function OrderBook({ perspective: initialPerspective, marketKey }: OrderB
       {/* Spread */}
       <div className="border-y border-white/10 px-4 py-1.5 text-center text-xs text-white/50">
         {spread !== null ? (
-          <>Spread: <span className="font-medium text-white/80">{spread}c</span></>
+          <InsightTooltip insight={interpretSpread(spread)}>
+            Spread: <span className="font-medium text-white/80">{spread}c</span>
+          </InsightTooltip>
         ) : (
           "No spread"
         )}

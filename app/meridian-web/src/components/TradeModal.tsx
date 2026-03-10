@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 
@@ -33,6 +34,7 @@ export function TradeModal({
   side: initialSide = "YES",
   price: initialPrice,
 }: TradeModalProps) {
+  const router = useRouter();
   const { connected, publicKey } = useWallet();
   const { setVisible: setWalletVisible } = useWalletModal();
   const [side, setSide] = useState(initialSide);
@@ -54,9 +56,9 @@ export function TradeModal({
       setWalletVisible(true);
       return;
     }
-    // TODO: Execute on-chain trade via program instruction
+    router.push(`/trade/${ticker}?side=${side.toLowerCase()}&price=${unitPrice}&qty=${quantity}`);
     onClose();
-  }, [connected, setWalletVisible, onClose]);
+  }, [connected, setWalletVisible, onClose, router, ticker, side, unitPrice, quantity]);
 
   // Close on Escape
   useEffect(() => {

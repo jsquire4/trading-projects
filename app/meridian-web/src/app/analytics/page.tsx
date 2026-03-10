@@ -68,12 +68,12 @@ function CollapsibleSection({
     <div className="bg-white/5 rounded-xl border border-white/10 card-accent-amber overflow-hidden">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-white/[0.02] transition-colors"
+        className="w-full flex items-center justify-between px-4 sm:px-6 py-4 text-left hover:bg-white/[0.02] transition-colors"
       >
         <h2 className="text-lg font-semibold">{title}</h2>
         <span className={`text-xs transition-transform ${open ? "rotate-180" : ""}`}>&#9660;</span>
       </button>
-      {open && <div className="px-6 pb-6">{children}</div>}
+      {open && <div className="px-4 sm:px-6 pb-6">{children}</div>}
     </div>
   );
 }
@@ -104,9 +104,9 @@ export default function AnalyticsPage() {
   return (
     <div className="space-y-6">
       {/* ── Header + Ticker Selector ──────────────────────────────────── */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <h1 className="text-2xl font-bold text-gradient">Analytics</h1>
-        <div className="flex gap-1.5">
+        <div className="flex gap-1.5 overflow-x-auto pb-1 -mb-1">
           {TICKERS.map((t) => {
             const q = quotes?.find((q) => q.symbol === t);
             const tChange = q?.change ?? 0;
@@ -115,7 +115,7 @@ export default function AnalyticsPage() {
               <button
                 key={t}
                 onClick={() => { setSelectedTicker(t); setSelectedExpiration(null); }}
-                className={`px-3 py-1.5 rounded text-sm font-medium transition-all ${
+                className={`px-2.5 sm:px-3 py-1.5 rounded text-xs sm:text-sm font-medium transition-all shrink-0 ${
                   t === selectedTicker
                     ? "bg-white/10 text-white shadow-[0_2px_0_0_rgba(59,130,246,0.5)]"
                     : "text-white/40 hover:text-white/70"
@@ -140,7 +140,7 @@ export default function AnalyticsPage() {
       {/* ── Top Row: Quote Card + Price Chart ─────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Left: Quote + Stats */}
-        <div className="lg:col-span-2 bg-white/5 rounded-xl p-6 border border-white/10 card-accent-green card-glow flex flex-col">
+        <div className="lg:col-span-2 bg-white/5 rounded-xl p-4 sm:p-6 border border-white/10 card-accent-green card-glow flex flex-col">
           {quotesLoading ? (
             <div className="animate-pulse flex-1">
               <div className="h-12 bg-white/10 rounded w-48" />
@@ -150,19 +150,19 @@ export default function AnalyticsPage() {
               <div className="text-sm text-white/50 font-medium tracking-wider mb-1">
                 {selectedTicker}
               </div>
-              <div className="flex items-baseline gap-3 mb-4">
-                <span className="text-4xl font-bold tabular-nums">
+              <div className="flex flex-wrap items-baseline gap-2 sm:gap-3 mb-4">
+                <span className="text-3xl sm:text-4xl font-bold tabular-nums">
                   ${currentPrice.toFixed(2)}
                 </span>
                 <span
-                  className={`text-xl font-semibold tabular-nums ${
+                  className={`text-lg sm:text-xl font-semibold tabular-nums ${
                     isPositive ? "text-green-400" : "text-red-400"
                   }`}
                 >
                   {isPositive ? "+" : ""}{change.toFixed(2)}
                 </span>
                 <span
-                  className={`text-lg font-medium tabular-nums ${
+                  className={`text-base sm:text-lg font-medium tabular-nums ${
                     isPositive ? "text-green-400" : "text-red-400"
                   }`}
                 >
@@ -269,7 +269,7 @@ export default function AnalyticsPage() {
         </div>
 
         {/* Right: Price History Chart */}
-        <div className="lg:col-span-3 bg-white/5 rounded-xl p-6 border border-white/10 card-accent-green">
+        <div className="lg:col-span-3 bg-white/5 rounded-xl p-4 sm:p-6 border border-white/10 card-accent-green">
           <h2 className="text-lg font-semibold mb-4">Price History</h2>
           <AnalyticsErrorBoundary title="Price History">
             <PriceHistory ticker={selectedTicker} />
@@ -279,7 +279,7 @@ export default function AnalyticsPage() {
 
       {/* ── Options Chain + Greeks ─────────────────────────────────────── */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <div className="xl:col-span-2 bg-white/5 rounded-xl p-6 border border-white/10 card-accent-blue">
+        <div className="xl:col-span-2 bg-white/5 rounded-xl p-4 sm:p-6 border border-white/10 card-accent-blue">
           <h2 className="text-lg font-semibold mb-4">Options Chain</h2>
           <AnalyticsErrorBoundary title="Options Chain">
             <OptionsChainTable
@@ -290,7 +290,7 @@ export default function AnalyticsPage() {
           </AnalyticsErrorBoundary>
         </div>
 
-        <div className="bg-white/5 rounded-xl p-6 border border-white/10 card-accent-purple">
+        <div className="bg-white/5 rounded-xl p-4 sm:p-6 border border-white/10 card-accent-purple">
           <h2 className="text-lg font-semibold mb-4">Greeks</h2>
           <AnalyticsErrorBoundary title="Greeks">
             <GreeksDisplay ticker={selectedTicker} />
@@ -299,7 +299,7 @@ export default function AnalyticsPage() {
       </div>
 
       {/* ── Return Distribution (full width) ──────────────────────────── */}
-      <div className="bg-white/5 rounded-xl p-6 border border-white/10 card-accent-purple">
+      <div className="bg-white/5 rounded-xl p-4 sm:p-6 border border-white/10 card-accent-purple">
         <h2 className="text-lg font-semibold mb-4">Return Distribution</h2>
         <AnalyticsErrorBoundary title="Historical Distribution">
           <HistoricalOverlay

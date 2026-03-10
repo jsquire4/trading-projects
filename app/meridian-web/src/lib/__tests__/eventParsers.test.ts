@@ -56,6 +56,7 @@ describe("parseFillEvent", () => {
     const result = parseFillEvent(makeFillEvent());
     expect(result).not.toBeNull();
     expect(result).toEqual({
+      market: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
       maker: "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
       taker: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
       price: 65,
@@ -102,6 +103,70 @@ describe("parseFillEvent", () => {
     const event = makeFillEvent({ data: "" });
     expect(parseFillEvent(event)).toBeNull();
   });
+
+  it("returns null when maker is not a string", () => {
+    const data = JSON.stringify({
+      market: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+      maker: 12345,
+      taker: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      price: 65,
+      quantity: 1000,
+      makerSide: 0,
+      takerSide: 1,
+      timestamp: 1710100000,
+    });
+    expect(parseFillEvent(makeFillEvent({ data }))).toBeNull();
+  });
+
+  it("returns null when taker is not a string", () => {
+    const data = JSON.stringify({
+      market: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+      maker: "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+      taker: null,
+      price: 65,
+      quantity: 1000,
+      makerSide: 0,
+      takerSide: 1,
+      timestamp: 1710100000,
+    });
+    expect(parseFillEvent(makeFillEvent({ data }))).toBeNull();
+  });
+
+  it("falls back to event.timestamp when d.timestamp is absent", () => {
+    const data = JSON.stringify({
+      market: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+      maker: "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+      taker: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      price: 65,
+      quantity: 1000,
+      makerSide: 0,
+      takerSide: 1,
+      isMerge: false,
+      makerOrderId: "42",
+    });
+    const event = makeFillEvent({ data, timestamp: 9999 });
+    const result = parseFillEvent(event);
+    expect(result).not.toBeNull();
+    expect(result!.timestamp).toBe(9999);
+  });
+
+  it("defaults market to empty string when market field is missing", () => {
+    const data = JSON.stringify({
+      maker: "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+      taker: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      price: 65,
+      quantity: 1000,
+      makerSide: 0,
+      takerSide: 1,
+      isMerge: false,
+      makerOrderId: "42",
+      timestamp: 1710100000,
+    });
+    const event = makeFillEvent({ data });
+    const result = parseFillEvent(event);
+    expect(result).not.toBeNull();
+    expect(result!.market).toBe("");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -141,5 +206,56 @@ describe("parseSettlementEvent", () => {
   it("handles empty string data gracefully (returns null)", () => {
     const event = makeSettlementEvent({ data: "" });
     expect(parseSettlementEvent(event)).toBeNull();
+  });
+
+  it("defaults ticker to UNKNOWN when absent", () => {
+    const data = JSON.stringify({
+      market: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+      strikePrice: 15000,
+      settlementPrice: 15500,
+      outcome: 1,
+      timestamp: 1710200000,
+    });
+    const result = parseSettlementEvent(makeSettlementEvent({ data }));
+    expect(result).not.toBeNull();
+    expect(result!.ticker).toBe("UNKNOWN");
+  });
+
+  it("defaults market to empty string when absent", () => {
+    const data = JSON.stringify({
+      ticker: "AAPL",
+      strikePrice: 15000,
+      settlementPrice: 15500,
+      outcome: 1,
+      timestamp: 1710200000,
+    });
+    const result = parseSettlementEvent(makeSettlementEvent({ data }));
+    expect(result).not.toBeNull();
+    expect(result!.market).toBe("");
+  });
+
+  it("returns null when numeric fields are non-numeric strings", () => {
+    const data = JSON.stringify({
+      market: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+      ticker: "AAPL",
+      strikePrice: "not-a-number",
+      settlementPrice: 15500,
+      outcome: 1,
+      timestamp: 1710200000,
+    });
+    expect(parseSettlementEvent(makeSettlementEvent({ data }))).toBeNull();
+  });
+
+  it("falls back to event.timestamp when d.timestamp is absent", () => {
+    const data = JSON.stringify({
+      market: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+      ticker: "AAPL",
+      strikePrice: 15000,
+      settlementPrice: 15500,
+      outcome: 1,
+    });
+    const result = parseSettlementEvent(makeSettlementEvent({ data, timestamp: 8888 }));
+    expect(result).not.toBeNull();
+    expect(result!.timestamp).toBe(8888);
   });
 });

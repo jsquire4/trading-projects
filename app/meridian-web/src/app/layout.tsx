@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Providers } from "./providers";
 import { WalletButton } from "@/components/WalletButton";
+import { NavPnl } from "@/components/NavPnl";
 import { Toaster } from "sonner";
 import "./globals.css";
 
@@ -43,7 +44,10 @@ export default function RootLayout({
                 ))}
               </nav>
             </div>
-            <WalletButton />
+            <div className="flex items-center gap-2 shrink-0">
+              <NavPnl />
+              <WalletButton />
+            </div>
           </header>
           <main className="max-w-7xl mx-auto px-3 sm:px-6 py-6 sm:py-8">{children}</main>
           <Toaster theme="dark" position="bottom-right" />

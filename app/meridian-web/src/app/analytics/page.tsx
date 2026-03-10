@@ -10,8 +10,7 @@ import { SettlementAnalytics } from "@/components/analytics/SettlementAnalytics"
 import { GreeksDisplay } from "@/components/analytics/GreeksDisplay";
 import { PriceHistory } from "@/components/analytics/PriceHistory";
 import { useTradierQuotes } from "@/hooks/useAnalyticsData";
-
-const TICKERS = ["AAPL", "TSLA", "AMZN", "MSFT", "NVDA", "GOOGL", "META"];
+import { MAG7 } from "@/lib/tickers";
 
 // ---------------------------------------------------------------------------
 // Error boundary
@@ -83,10 +82,10 @@ function CollapsibleSection({
 // ---------------------------------------------------------------------------
 
 export default function AnalyticsPage() {
-  const [selectedTicker, setSelectedTicker] = useState(TICKERS[0]);
+  const [selectedTicker, setSelectedTicker] = useState<string>(MAG7[0]);
   const [selectedExpiration, setSelectedExpiration] = useState<string | null>(null);
   const { data: markets } = useMarkets();
-  const { data: quotes, isLoading: quotesLoading } = useTradierQuotes(TICKERS);
+  const { data: quotes, isLoading: quotesLoading } = useTradierQuotes([...MAG7]);
 
   const tickerMarkets = (markets ?? []).filter(
     (m) => m.ticker.toUpperCase() === selectedTicker.toUpperCase(),
@@ -107,7 +106,7 @@ export default function AnalyticsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <h1 className="text-2xl font-bold text-gradient">Analytics</h1>
         <div className="flex gap-1.5 overflow-x-auto pb-1 -mb-1">
-          {TICKERS.map((t) => {
+          {MAG7.map((t) => {
             const q = quotes?.find((q) => q.symbol === t);
             const tChange = q?.change ?? 0;
             const tIsPos = tChange >= 0;

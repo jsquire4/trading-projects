@@ -5,8 +5,8 @@ import { useMarkets, type ParsedMarket } from "@/hooks/useMarkets";
 import { MarketCard, type MarketData } from "@/components/MarketCard";
 import { useTradierQuotes } from "@/hooks/useAnalyticsData";
 import { TradeModal } from "@/components/TradeModal";
-
-const MAG7 = ["AAPL", "TSLA", "AMZN", "MSFT", "NVDA", "GOOGL", "META"];
+import { WatchlistStrip } from "@/components/WatchlistStrip";
+import { MAG7 } from "@/lib/tickers";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -308,11 +308,12 @@ function ActivityTape({ trades }: { trades: SuggestedTrade[] }) {
   const [currentIdx, setCurrentIdx] = useState(0);
 
   useEffect(() => {
+    if (trades.length === 0) return;
     const interval = setInterval(() => {
       setCurrentIdx((i) => (i + 1) % Math.max(trades.length * 3, 1));
     }, 3000);
     return () => clearInterval(interval);
-  }, [trades.length]);
+  }, [trades]);
 
   if (trades.length === 0) return null;
 
@@ -475,7 +476,7 @@ function LoadingSkeleton() {
 
 export default function TradePage() {
   const { data: markets = [], isLoading: marketsLoading, isError } = useMarkets();
-  const { data: quotes = [], isLoading: quotesLoading } = useTradierQuotes(MAG7);
+  const { data: quotes = [], isLoading: quotesLoading } = useTradierQuotes([...MAG7]);
 
   const isLoading = marketsLoading || quotesLoading;
 
@@ -543,6 +544,9 @@ export default function TradePage() {
           <ActivityTape trades={suggestedTrades} />
         </div>
       </div>
+
+      {/* Live price strip */}
+      <WatchlistStrip />
 
       {isLoading ? (
         <LoadingSkeleton />

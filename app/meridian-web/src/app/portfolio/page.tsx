@@ -7,14 +7,15 @@ import { useWalletState } from "@/hooks/useWalletState";
 import { PositionsTab } from "@/components/portfolio/PositionsTab";
 import { OpenOrdersTab } from "@/components/portfolio/OpenOrdersTab";
 import { TradeHistoryTab } from "@/components/portfolio/TradeHistoryTab";
+import { PnlTab } from "@/components/portfolio/PnlTab";
 
-type Tab = "positions" | "orders" | "history";
+type Tab = "performance" | "positions" | "orders" | "history";
 
 export default function PortfolioPage() {
   const { connected } = useWallet();
   const { setVisible } = useWalletModal();
   const { solBalance, usdcBalance } = useWalletState();
-  const [tab, setTab] = useState<Tab>("positions");
+  const [tab, setTab] = useState<Tab>("performance");
 
   if (!connected) {
     return (
@@ -62,6 +63,7 @@ export default function PortfolioPage() {
       {/* Tabs */}
       <div className="flex gap-1 bg-white/5 rounded-lg p-1 w-full sm:w-fit overflow-x-auto">
         {([
+          { key: "performance" as Tab, label: "Performance" },
           { key: "positions" as Tab, label: "Positions" },
           { key: "orders" as Tab, label: "Open Orders" },
           { key: "history" as Tab, label: "Trade History" },
@@ -81,6 +83,7 @@ export default function PortfolioPage() {
       </div>
 
       {/* Tab content */}
+      {tab === "performance" && <PnlTab />}
       {tab === "positions" && <PositionsTab />}
       {tab === "orders" && <OpenOrdersTab />}
       {tab === "history" && <TradeHistoryTab />}

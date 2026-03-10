@@ -26,6 +26,7 @@ export interface IndexedEvent {
 // ---------------------------------------------------------------------------
 
 export interface ParsedFill {
+  market: string;
   maker: string;
   taker: string;
   price: number;
@@ -82,6 +83,7 @@ export function parseFillEvent(event: IndexedEvent): ParsedFill | null {
     const orderId = String(d.makerOrderId ?? "");
 
     return {
+      market: typeof d.market === "string" ? d.market : "",
       maker,
       taker,
       price,

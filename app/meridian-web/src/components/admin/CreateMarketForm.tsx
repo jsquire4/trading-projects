@@ -22,8 +22,7 @@ import {
 } from "@/lib/pda";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
-
-const MAG7 = ["AAPL", "TSLA", "AMZN", "MSFT", "NVDA", "GOOGL", "META"];
+import { MAG7, OTHER_ASSETS } from "@/lib/tickers";
 
 export function CreateMarketForm() {
   const { program } = useAnchorProgram();
@@ -41,15 +40,17 @@ export function CreateMarketForm() {
   const handleCreate = useCallback(async () => {
     if (!program || !publicKey || !strikePrice || !closeTime || !previousClose) return;
     setError(null);
+
+    const strikeParsed = parseFloat(strikePrice);
+    const prevCloseParsed = parseFloat(previousClose);
+    const closeMs = new Date(closeTime).getTime();
+    if (isNaN(strikeParsed) || strikeParsed <= 0) { setError("Strike price must be a positive number."); return; }
+    if (isNaN(prevCloseParsed) || prevCloseParsed <= 0) { setError("Previous close must be a positive number."); return; }
+    if (isNaN(closeMs) || closeMs <= Date.now()) { setError("Close time must be in the future."); return; }
+
     setSubmitting(true);
 
     try {
-      const strikeParsed = parseFloat(strikePrice);
-      const prevCloseParsed = parseFloat(previousClose);
-      const closeMs = new Date(closeTime).getTime();
-      if (isNaN(strikeParsed) || strikeParsed <= 0) { setError("Strike price must be a positive number."); return; }
-      if (isNaN(prevCloseParsed) || prevCloseParsed <= 0) { setError("Previous close must be a positive number."); return; }
-      if (isNaN(closeMs) || closeMs <= Date.now()) { setError("Close time must be in the future."); return; }
 
       const strikeLamports = BigInt(Math.round(strikeParsed * 1_000_000));
       const closeUnix = Math.floor(closeMs / 1000);
@@ -121,9 +122,16 @@ export function CreateMarketForm() {
             onChange={(e) => setTicker(e.target.value)}
             className="w-full rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-white focus:border-accent focus:outline-none"
           >
-            {MAG7.map((t) => (
-              <option key={t} value={t}>{t}</option>
-            ))}
+            <optgroup label="Magnificent 7">
+              {MAG7.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Other Assets">
+              {OTHER_ASSETS.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </optgroup>
           </select>
         </div>
         <div>

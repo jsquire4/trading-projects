@@ -14,6 +14,7 @@ const navLinks = [
   { href: "/", label: "Markets" },
   { href: "/portfolio", label: "Portfolio" },
   { href: "/history", label: "History" },
+  { href: "/analytics", label: "Analytics" },
   { href: "/market-maker", label: "Market Maker" },
 ];
 

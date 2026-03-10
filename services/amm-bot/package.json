@@ -1,8 +1,11 @@
 {
-  "name": "market-initializer",
+  "name": "meridian-amm-bot",
+  "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "start": "tsx src/index.ts"
+    "start": "npx tsx src/index.ts",
+    "dev": "npx tsx watch src/index.ts"
   },
   "devDependencies": {
     "vitest": "^2.1.9"
@@ -11,7 +14,7 @@
     "@coral-xyz/anchor": "^0.31.1",
     "@solana/spl-token": "^0.4.0",
     "@solana/web3.js": "^1.95.0",
-    "bs58": "^4.0.0",
-    "tsx": "^4.0.0"
+    "bs58": "^6.0.0",
+    "dotenv": "^16.0.0"
   }
 }

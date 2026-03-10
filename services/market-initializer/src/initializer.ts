@@ -20,7 +20,7 @@ import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 import { TradierClient } from "../../shared/src/tradier-client.ts";
 import { createLogger } from "../../shared/src/alerting.ts";
-import { generateStrikes } from "../../shared/src/strikes.ts";
+import { generateVolAwareStrikes } from "./strikeSelector.ts";
 import {
   findGlobalConfig,
   findStrikeMarket,
@@ -144,6 +144,7 @@ export async function initializeMarkets(): Promise<InitResult[]> {
       adminKeypair,
       configPda,
       usdcMint,
+      tradier,
       ticker,
       quote.prevclose,
       marketCloseUnix,
@@ -165,6 +166,7 @@ async function processTickerStrikes(
   admin: Keypair,
   configPda: PublicKey,
   usdcMint: PublicKey,
+  tradier: TradierClient,
   ticker: string,
   previousClose: number,
   marketCloseUnix: number,
@@ -178,12 +180,26 @@ async function processTickerStrikes(
     errors: [],
   };
 
-  const { strikes } = generateStrikes(previousClose);
+  // Fetch 60-day price history for vol-aware strike calculation
+  const now = new Date();
+  const startDate = new Date(now);
+  startDate.setDate(startDate.getDate() - 90); // request 90 calendar days to get ~60 trading days
+  const bars = await tradier.getHistory(
+    ticker,
+    "daily",
+    startDate.toISOString().slice(0, 10),
+    now.toISOString().slice(0, 10),
+  );
+
+  const { strikes, method, hv20 } = generateVolAwareStrikes(previousClose, bars);
 
   log.info(`Processing ${ticker}`, {
     previousClose,
     strikes,
     strikeCount: strikes.length,
+    method,
+    hv20: hv20 !== undefined ? (hv20 * 100).toFixed(1) + "%" : "N/A",
+    barsAvailable: bars.length,
   });
 
   for (const strikeDollars of strikes) {

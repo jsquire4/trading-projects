@@ -427,7 +427,7 @@ Run `/audit` against all Phase 1 code. Verified:
 
 ---
 
-### Phase 2: Trading
+### Phase 2: Trading ✅ COMPLETE (2026-03-09)
 **Goal**: Users can place orders. Matching engine fills. All 4 trade paths working.
 
 **Stage 2A — Sequential then parallel: order book + matching engine + escrow (funds-critical)**
@@ -460,7 +460,7 @@ Once steps 1–3 are complete, **gate step 3.5** must run before parallel work b
 3.5. **Gate: error codes + instruction registration** — Add Phase 2 error codes (6050–6059) to `error.rs`. Register all four new instruction modules in `programs/meridian/src/instructions/mod.rs` (`pub mod place_order; pub mod cancel_order; pub mod pause; pub mod unpause;`) and add instruction dispatch arms in `programs/meridian/src/lib.rs`. **This prevents merge conflicts** — parallel agents write only their own instruction handler file, never `mod.rs` or `lib.rs`.
 
 Once gate 3.5 is complete, the following can proceed in parallel:
-- [ ] `place_order` instruction (`instructions/place_order.rs` only): wires matching engine + escrow together. Accepts `side: u8` (0/1/2) and `order_type` (Market/Limit). Min size: 1 token. For side=2 (Sell No): user must hold sufficient No tokens; escrowed in no_escrow. Error codes 6050–6059 already in `error.rs` from gate 3.5.
+- [x] `place_order` instruction (`instructions/place_order.rs` only): wires matching engine + escrow together. Accepts `side: u8` (0/1/2) and `order_type` (Market/Limit). Min size: 1 token. For side=2 (Sell No): user must hold sufficient No tokens; escrowed in no_escrow. Error codes 6050–6059 already in `error.rs` from gate 3.5.
 
   **`place_order` account list** (heaviest instruction — documented explicitly for tx size validation):
   ```
@@ -504,13 +504,13 @@ Once gate 3.5 is complete, the following can proceed in parallel:
   ```
 
   **Remaining accounts staleness**: The on-chain book may change between client read and tx landing. The matching engine handles cancelled resting orders gracefully (skips to next). To handle missing maker ATAs: (1) client should over-include remaining_accounts for `max_fills + 2` makers (unused accounts cost ~1 byte each with ALT, negligible); (2) on-chain, if the engine encounters a fill where the maker's accounts aren't in remaining_accounts, skip that fill and advance to the next resting order — the unfilled maker's order stays on the book. Add a `skipped_fills` counter to the FillEvent so the client knows fills were missed and can retry.
-- [ ] `cancel_order` instruction (`instructions/cancel_order.rs` only): owner-only, refund from escrow (checks order's `side` to return USDC, Yes, or No), cancel by `(price_level, order_id)`. Works post-settlement.
-- [ ] `pause` / `unpause` instructions (`instructions/pause.rs` and `instructions/unpause.rs`): admin only. Global (`GlobalConfig.is_paused`) or per-market (`StrikeMarket.is_paused`). Reads/writes `is_paused` flags — no dependency on matching engine or escrow.
+- [x] `cancel_order` instruction (`instructions/cancel_order.rs` only): owner-only, refund from escrow (checks order's `side` to return USDC, Yes, or No), cancel by `(price_level, order_id)`. Works post-settlement.
+- [x] `pause` / `unpause` instructions (`instructions/pause.rs` and `instructions/unpause.rs`): admin only. Global (`GlobalConfig.is_paused`) or per-market (`StrikeMarket.is_paused`). Reads/writes `is_paused` flags — no dependency on matching engine or escrow.
 
 **Parallel safety rule**: Each parallel agent writes ONLY its own `instructions/<name>.rs` file. No agent touches `lib.rs`, `mod.rs`, or `error.rs` — those are locked after gate 3.5.
 
 Once `place_order` is complete:
-- [ ] Buy No atomic path: `mint_pair` + `place_order(side=1)` (Yes ask) composed in one transaction. Market variant (sell at best bid) and limit variant (post at user-chosen price). A Buy No limit (Yes ask) naturally matches against Sell No limit (No-backed bid) through the book. This is a client-side composition test — both instructions already exist.
+- [x] Buy No atomic path: `mint_pair` + `place_order(side=1)` (Yes ask) composed in one transaction. Market variant (sell at best bid) and limit variant (post at user-chosen price). A Buy No limit (Yes ask) naturally matches against Sell No limit (No-backed bid) through the book. This is a client-side composition test — both instructions already exist.
 
 **Stage 2B — Gate → parallel: frontend trading UI (once 2A is complete)**
 
@@ -605,10 +605,10 @@ Run `/complexity-sweep` across all Phase 1 + 2 code. This is the first sweep —
 
 ---
 
-### Phase 3: Full Lifecycle
+### Phase 3: Full Lifecycle ⚠️ IN PROGRESS (Stage 3A code complete, not yet verified)
 **Goal**: Complete economic loop. Markets settle, winners get paid. Daily automation running.
 
-**Stage 3A — Sequential then parallel: settlement + redemption (funds-critical)**
+**Stage 3A — Sequential then parallel: settlement + redemption (funds-critical)** ✅ CODE COMPLETE (committed, not pushed — needs test verification after Rust toolchain fix)
 
 ```
 error codes (0 — needed by all instructions below)
@@ -624,12 +624,12 @@ redeem (4) ∥ crank_cancel (5)
 1. `settle_market` instruction (`instructions/settle_market.rs` only): anyone calls, requires `Clock >= market_close_unix`. Oracle validation (120s settlement staleness, 0.5% confidence bps). Closing price >= strike → Yes wins. Sets `is_settled`, writes `outcome`, `settlement_price`, `settled_at`, `override_deadline = settled_at + 3600`.
 
 Once `settle_market` is complete, the following are parallel (independent preconditions, no shared code paths — each writes only its own instruction file):
-- [ ] `admin_settle` instruction (`instructions/admin_settle.rs` only): admin only, requires `Clock >= market_close_unix + 3600`. Accepts manual price. Fails if already settled. (For unsettled markets where oracle failed entirely.)
-- [ ] `admin_override_settlement` instruction (`instructions/admin_override_settlement.rs` only): admin only, requires `is_settled == true` AND `Clock < override_deadline` AND `override_count < 3`. Corrects outcome + settlement_price. Resets `override_deadline = now + 3600`. Increments `override_count`. Must correctly flip winning/losing status. (For already-settled markets where oracle was wrong.)
+- [x] `admin_settle` instruction (`instructions/admin_settle.rs` only): admin only, requires `Clock >= market_close_unix + 3600`. Accepts manual price. Fails if already settled. (For unsettled markets where oracle failed entirely.)
+- [x] `admin_override_settlement` instruction (`instructions/admin_override_settlement.rs` only): admin only, requires `is_settled == true` AND `Clock < override_deadline` AND `override_count < 3`. Corrects outcome + settlement_price. Resets `override_deadline = now + 3600`. Increments `override_count`. Must correctly flip winning/losing status. (For already-settled markets where oracle was wrong.)
 
 Once both admin settlement paths are complete, the following are parallel (no dependency on each other — each writes only its own instruction file):
-- [ ] `redeem` instruction (`instructions/redeem.rs` only): two modes — **(1) Pair burn** (Yes + No → $1 USDC): available anytime, no settlement required, not blocked by override window (outcome-independent, inverse of `mint_pair`). **(2) Winner/loser redemption** (winning → $1, losing → $0): requires `is_settled == true`, **blocked during override window** (`Clock < override_deadline`). Needs override logic finalized to correctly check the window for mode 2.
-- [ ] `crank_cancel` instruction (`instructions/crank_cancel.rs` only): permissionless, market must be settled. Iterates up to 32 order slots per call. Returns escrowed assets based on order's `side`: USDC (side=0 bids), Yes tokens (side=1 asks), No tokens (side=2 No-backed bids) to owners. Skips already-cancelled slots. Returns count. **Not blocked by override window** (escrow refunds are outcome-independent).
+- [x] `redeem` instruction (`instructions/redeem.rs` only): two modes — **(1) Pair burn** (Yes + No → $1 USDC): available anytime, no settlement required, not blocked by override window (outcome-independent, inverse of `mint_pair`). **(2) Winner/loser redemption** (winning → $1, losing → $0): requires `is_settled == true`, **blocked during override window** (`Clock < override_deadline`). Needs override logic finalized to correctly check the window for mode 2.
+- [x] `crank_cancel` instruction (`instructions/crank_cancel.rs` only): permissionless, market must be settled. Iterates up to 32 order slots per call. Returns escrowed assets based on order's `side`: USDC (side=0 bids), Yes tokens (side=1 asks), No tokens (side=2 No-backed bids) to owners. Skips already-cancelled slots. Returns count. **Not blocked by override window** (escrow refunds are outcome-independent).
 
 **Stage 3B — Gate → parallel: frontend + services (once 3A is complete)**
 

@@ -174,6 +174,7 @@ export function signatureExists(signature: string): boolean {
 export function closeDb(): void {
   if (db) {
     db.close();
+    _insertEvent = null;
     log.info("Database closed");
   }
 }

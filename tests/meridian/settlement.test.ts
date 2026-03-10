@@ -39,6 +39,7 @@ import {
   buildCrankCancelIx,
   buildMintPairIx,
   buildPlaceOrderIx,
+  buildCancelOrderIx,
   buildUpdatePriceIx,
   buildPauseIx,
   buildUnpauseIx,
@@ -114,6 +115,19 @@ async function advanceClock(ctx: BankrunContext, unixTimestamp: number) {
       BigInt(unixTimestamp),
     ),
   );
+}
+
+// Order book layout constants for reading order slots
+const OB_DISCRIMINATOR_SIZE = 8;
+const OB_ORDER_SLOT_SIZE = 80;
+const OB_PRICE_LEVEL_SIZE = 1288;
+const OB_LEVELS_OFFSET = OB_DISCRIMINATOR_SIZE + 32 + 8; // 48
+
+function readOrderSlot(data: Buffer, levelIdx: number, slotIdx: number) {
+  const offset = OB_LEVELS_OFFSET + levelIdx * OB_PRICE_LEVEL_SIZE + slotIdx * OB_ORDER_SLOT_SIZE;
+  const orderId = new BN(data.subarray(offset + 32, offset + 40), "le").toNumber();
+  const isActive = data[offset + 72] !== 0;
+  return { orderId, isActive };
 }
 
 // Monotonically increasing CU limit to differentiate transactions and avoid
@@ -2390,6 +2404,529 @@ describe("Settlement Lifecycle", () => {
       expect(vaultBefore - vaultAfter).to.equal(REDEEM_QTY);
       // Vault started with 30 tokens worth of USDC, drained 15 → 15 remaining
       expect(vaultAfter).to.equal(30 * ONE_TOKEN - REDEEM_QTY);
+    });
+
+    // ---------------------------------------------------------------------------
+    // Test 14: Manual cancel_order still works post-settlement
+    // ---------------------------------------------------------------------------
+    it("manual cancel_order works post-settlement (refunds escrow)", async () => {
+      const provider = new BankrunProvider(ctx.context);
+      const clock = await ctx.context.banksClient.getClock();
+      const now = Number(clock.unixTimestamp);
+      const closeUnix = now + 5;
+
+      const ma = await createTestMarket(
+        ctx.context, ctx.admin, config, TICKER,
+        313_000_000, // strike = $313
+        closeUnix,
+        PREVIOUS_CLOSE,
+        oracleFeed,
+        usdcMint,
+      );
+
+      // Create a user with USDC for placing orders
+      const cancelUser = Keypair.generate();
+      ctx.context.setAccount(cancelUser.publicKey, {
+        lamports: 10_000_000_000,
+        data: Buffer.alloc(0),
+        owner: new PublicKey("11111111111111111111111111111111"),
+        executable: false,
+      });
+      const cancelUserUsdcAta = await createAta(ctx.context, cancelUser, usdcMint, cancelUser.publicKey);
+      await mintTestUsdc(ctx.context, usdcMint, ctx.admin, cancelUserUsdcAta, 1_000_000_000);
+      const cancelUserYesAta = await createAta(ctx.context, cancelUser, ma.yesMint, cancelUser.publicKey);
+      const cancelUserNoAta = await createAta(ctx.context, cancelUser, ma.noMint, cancelUser.publicKey);
+
+      // Place a resting limit USDC bid at price 40
+      const placeIx = buildPlaceOrderIx({
+        user: cancelUser.publicKey,
+        config,
+        market: ma.market,
+        orderBook: ma.orderBook,
+        usdcVault: ma.usdcVault,
+        escrowVault: ma.escrowVault,
+        yesEscrow: ma.yesEscrow,
+        noEscrow: ma.noEscrow,
+        yesMint: ma.yesMint,
+        noMint: ma.noMint,
+        userUsdcAta: cancelUserUsdcAta,
+        userYesAta: cancelUserYesAta,
+        userNoAta: cancelUserNoAta,
+        side: 0,     // USDC bid
+        price: 40,
+        quantity: new BN(10 * ONE_TOKEN),
+        orderType: 1, // Limit
+        maxFills: 0,
+      });
+      await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), placeIx), [cancelUser]);
+
+      // Record USDC balance after placing (escrow deducted)
+      const usdcAfterPlace = await getTokenBalance(ctx, cancelUserUsdcAta);
+
+      // Read order book to get the order_id (level index for price 40 is 39, since 1-based prices map to 0-based)
+      const obAcct = await ctx.context.banksClient.getAccount(ma.orderBook);
+      const obData = Buffer.from(obAcct!.data);
+      const slot = readOrderSlot(obData, 39, 0); // price=40 → levelIdx=39
+      expect(slot.isActive).to.be.true;
+      const orderId = slot.orderId;
+
+      // Advance past market close and settle
+      const settleTime = closeUnix + 10;
+      await advanceClock(ctx, settleTime);
+
+      const updateIx = buildUpdatePriceIx({
+        authority: ctx.admin.publicKey,
+        priceFeed: oracleFeed,
+        price: new BN(320_000_000),
+        confidence: new BN(500_000),
+        timestamp: new BN(settleTime),
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), updateIx),
+        [ctx.admin],
+      );
+
+      const settleIx = buildSettleMarketIx({
+        caller: ctx.admin.publicKey,
+        config,
+        market: ma.market,
+        oracleFeed,
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), settleIx),
+        [ctx.admin],
+      );
+
+      const m = await readMarket(ctx, ma.market);
+      expect(m.isSettled).to.be.true;
+
+      // Now manually cancel the resting order post-settlement
+      const cancelIx = buildCancelOrderIx({
+        user: cancelUser.publicKey,
+        config,
+        market: ma.market,
+        orderBook: ma.orderBook,
+        escrowVault: ma.escrowVault,
+        yesEscrow: ma.yesEscrow,
+        noEscrow: ma.noEscrow,
+        userUsdcAta: cancelUserUsdcAta,
+        userYesAta: cancelUserYesAta,
+        userNoAta: cancelUserNoAta,
+        price: 40,
+        orderId: new BN(orderId),
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), cancelIx),
+        [cancelUser],
+      );
+
+      // Verify escrow was refunded: 10 tokens * 40/100 = 4 USDC = 4_000_000
+      const usdcAfterCancel = await getTokenBalance(ctx, cancelUserUsdcAta);
+      expect(usdcAfterCancel - usdcAfterPlace).to.equal(4_000_000);
+    });
+
+    // ---------------------------------------------------------------------------
+    // Test 15: Full lifecycle e2e — two-user happy path
+    // ---------------------------------------------------------------------------
+    it("full lifecycle e2e: create → mint → orders → fill → settle → crank → redeem → vault empty", async () => {
+      const provider = new BankrunProvider(ctx.context);
+      const clock = await ctx.context.banksClient.getClock();
+      const now = Number(clock.unixTimestamp);
+      const closeUnix = now + 5;
+
+      // Step 1: Create market
+      const ma = await createTestMarket(
+        ctx.context, ctx.admin, config, TICKER,
+        314_000_000, // strike = $314
+        closeUnix,
+        PREVIOUS_CLOSE,
+        oracleFeed,
+        usdcMint,
+      );
+
+      // --- Maker (admin) setup ---
+      const makerYesAta = getAssociatedTokenAddressSync(ma.yesMint, ctx.admin.publicKey);
+      const makerNoAta = getAssociatedTokenAddressSync(ma.noMint, ctx.admin.publicKey);
+
+      // Step 2: Mint 50 pairs (maker gets 50 Yes + 50 No, vault gets $50 USDC)
+      const mintIx = buildMintPairIx({
+        user: ctx.admin.publicKey,
+        config,
+        market: ma.market,
+        yesMint: ma.yesMint,
+        noMint: ma.noMint,
+        userUsdcAta,
+        userYesAta: makerYesAta,
+        userNoAta: makerNoAta,
+        usdcVault: ma.usdcVault,
+        quantity: new BN(50 * ONE_TOKEN),
+      });
+      await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), mintIx), [ctx.admin]);
+
+      // --- Taker setup ---
+      const e2eTaker = Keypair.generate();
+      ctx.context.setAccount(e2eTaker.publicKey, {
+        lamports: 10_000_000_000,
+        data: Buffer.alloc(0),
+        owner: new PublicKey("11111111111111111111111111111111"),
+        executable: false,
+      });
+      const takerUsdcAta = await createAta(ctx.context, e2eTaker, usdcMint, e2eTaker.publicKey);
+      await mintTestUsdc(ctx.context, usdcMint, ctx.admin, takerUsdcAta, 5_000_000_000);
+      const takerYesAta = await createAta(ctx.context, e2eTaker, ma.yesMint, e2eTaker.publicKey);
+      const takerNoAta = await createAta(ctx.context, e2eTaker, ma.noMint, e2eTaker.publicKey);
+
+      // Step 3: Maker places a limit Yes ask at price 60 for 20 tokens
+      const askIx = buildPlaceOrderIx({
+        user: ctx.admin.publicKey,
+        config,
+        market: ma.market,
+        orderBook: ma.orderBook,
+        usdcVault: ma.usdcVault,
+        escrowVault: ma.escrowVault,
+        yesEscrow: ma.yesEscrow,
+        noEscrow: ma.noEscrow,
+        yesMint: ma.yesMint,
+        noMint: ma.noMint,
+        userUsdcAta,
+        userYesAta: makerYesAta,
+        userNoAta: makerNoAta,
+        side: 1,     // Yes ask (sell Yes)
+        price: 60,
+        quantity: new BN(20 * ONE_TOKEN),
+        orderType: 1, // Limit
+        maxFills: 0,
+      });
+      await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), askIx), [ctx.admin]);
+
+      // Step 4: Taker places a market USDC bid that fills against the resting ask
+      const takerBidIx = buildPlaceOrderIx({
+        user: e2eTaker.publicKey,
+        config,
+        market: ma.market,
+        orderBook: ma.orderBook,
+        usdcVault: ma.usdcVault,
+        escrowVault: ma.escrowVault,
+        yesEscrow: ma.yesEscrow,
+        noEscrow: ma.noEscrow,
+        yesMint: ma.yesMint,
+        noMint: ma.noMint,
+        userUsdcAta: takerUsdcAta,
+        userYesAta: takerYesAta,
+        userNoAta: takerNoAta,
+        side: 0,     // USDC bid (buy Yes)
+        price: 60,
+        quantity: new BN(10 * ONE_TOKEN),
+        orderType: 0, // Market
+        maxFills: 5,
+        makerAccounts: [userUsdcAta, makerYesAta, makerNoAta],
+      });
+      await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), takerBidIx), [e2eTaker]);
+
+      // Step 5: Taker places a resting limit USDC bid that will need cranking
+      const restingBidIx = buildPlaceOrderIx({
+        user: e2eTaker.publicKey,
+        config,
+        market: ma.market,
+        orderBook: ma.orderBook,
+        usdcVault: ma.usdcVault,
+        escrowVault: ma.escrowVault,
+        yesEscrow: ma.yesEscrow,
+        noEscrow: ma.noEscrow,
+        yesMint: ma.yesMint,
+        noMint: ma.noMint,
+        userUsdcAta: takerUsdcAta,
+        userYesAta: takerYesAta,
+        userNoAta: takerNoAta,
+        side: 0,     // USDC bid
+        price: 30,
+        quantity: new BN(5 * ONE_TOKEN),
+        orderType: 1, // Limit
+        maxFills: 0,
+      });
+      await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), restingBidIx), [e2eTaker]);
+
+      // Step 6: Advance clock past close and settle
+      const settleTime = closeUnix + 10;
+      await advanceClock(ctx, settleTime);
+
+      const updateIx = buildUpdatePriceIx({
+        authority: ctx.admin.publicKey,
+        priceFeed: oracleFeed,
+        price: new BN(320_000_000), // above $314 → Yes wins
+        confidence: new BN(500_000),
+        timestamp: new BN(settleTime),
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), updateIx),
+        [ctx.admin],
+      );
+
+      const settleIx = buildSettleMarketIx({
+        caller: ctx.admin.publicKey,
+        config,
+        market: ma.market,
+        oracleFeed,
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), settleIx),
+        [ctx.admin],
+      );
+
+      const m = await readMarket(ctx, ma.market);
+      expect(m.isSettled).to.be.true;
+      expect(m.outcome).to.equal(1); // Yes wins
+
+      // Step 7: Crank cancel remaining resting orders (taker's resting bid + maker's remaining ask)
+      const crankIx = buildCrankCancelIx({
+        caller: ctx.admin.publicKey,
+        config,
+        market: ma.market,
+        orderBook: ma.orderBook,
+        escrowVault: ma.escrowVault,
+        yesEscrow: ma.yesEscrow,
+        noEscrow: ma.noEscrow,
+        batchSize: 10,
+        makerAccounts: [takerUsdcAta, makerYesAta],
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), crankIx),
+        [ctx.admin],
+      );
+
+      // Step 8: Advance past override deadline
+      await advanceClock(ctx, m.overrideDeadline + 10);
+
+      // Step 9: Maker redeems Yes tokens (winner)
+      const makerYesBal = await getTokenBalance(ctx, makerYesAta);
+      if (makerYesBal > 0) {
+        const makerRedeemIx = buildRedeemIx({
+          user: ctx.admin.publicKey,
+          config,
+          market: ma.market,
+          yesMint: ma.yesMint,
+          noMint: ma.noMint,
+          usdcVault: ma.usdcVault,
+          userUsdcAta,
+          userYesAta: makerYesAta,
+          userNoAta: makerNoAta,
+          mode: 1, // winner redeem
+          quantity: new BN(makerYesBal),
+        });
+        await provider.sendAndConfirm!(
+          new Transaction().add(uniqueCuIx(), makerRedeemIx),
+          [ctx.admin],
+        );
+      }
+
+      // Taker redeems Yes tokens (winner)
+      const takerYesBal = await getTokenBalance(ctx, takerYesAta);
+      if (takerYesBal > 0) {
+        const takerRedeemIx = buildRedeemIx({
+          user: e2eTaker.publicKey,
+          config,
+          market: ma.market,
+          yesMint: ma.yesMint,
+          noMint: ma.noMint,
+          usdcVault: ma.usdcVault,
+          userUsdcAta: takerUsdcAta,
+          userYesAta: takerYesAta,
+          userNoAta: takerNoAta,
+          mode: 1,
+          quantity: new BN(takerYesBal),
+        });
+        await provider.sendAndConfirm!(
+          new Transaction().add(uniqueCuIx(), takerRedeemIx),
+          [e2eTaker],
+        );
+      }
+
+      // Step 10: Verify vault is empty
+      const vaultBalance = await getTokenBalance(ctx, ma.usdcVault);
+      expect(vaultBalance).to.equal(0);
+    });
+
+    // ---------------------------------------------------------------------------
+    // Test 16: Multi-user lifecycle (maker + taker)
+    // ---------------------------------------------------------------------------
+    it("multi-user lifecycle: maker posts quotes, taker fills, both settle and redeem", async () => {
+      const provider = new BankrunProvider(ctx.context);
+      const clock = await ctx.context.banksClient.getClock();
+      const now = Number(clock.unixTimestamp);
+      const closeUnix = now + 5;
+
+      // Create market
+      const ma = await createTestMarket(
+        ctx.context, ctx.admin, config, TICKER,
+        315_000_000, // strike = $315
+        closeUnix,
+        PREVIOUS_CLOSE,
+        oracleFeed,
+        usdcMint,
+      );
+
+      // --- Maker setup (admin) ---
+      const makerYesAta = getAssociatedTokenAddressSync(ma.yesMint, ctx.admin.publicKey);
+      const makerNoAta = getAssociatedTokenAddressSync(ma.noMint, ctx.admin.publicKey);
+
+      // Maker mints 100 pairs
+      const mintIx = buildMintPairIx({
+        user: ctx.admin.publicKey,
+        config,
+        market: ma.market,
+        yesMint: ma.yesMint,
+        noMint: ma.noMint,
+        userUsdcAta,
+        userYesAta: makerYesAta,
+        userNoAta: makerNoAta,
+        usdcVault: ma.usdcVault,
+        quantity: new BN(100 * ONE_TOKEN),
+      });
+      await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), mintIx), [ctx.admin]);
+
+      // --- Taker setup ---
+      const taker = Keypair.generate();
+      ctx.context.setAccount(taker.publicKey, {
+        lamports: 10_000_000_000,
+        data: Buffer.alloc(0),
+        owner: new PublicKey("11111111111111111111111111111111"),
+        executable: false,
+      });
+      const takerUsdcAta = await createAta(ctx.context, taker, usdcMint, taker.publicKey);
+      await mintTestUsdc(ctx.context, usdcMint, ctx.admin, takerUsdcAta, 5_000_000_000);
+      const takerYesAta = await createAta(ctx.context, taker, ma.yesMint, taker.publicKey);
+      const takerNoAta = await createAta(ctx.context, taker, ma.noMint, taker.publicKey);
+
+      // Maker posts Yes ask at price 55 for 30 tokens (selling 30 Yes at 55 cents)
+      const makerAskIx = buildPlaceOrderIx({
+        user: ctx.admin.publicKey,
+        config,
+        market: ma.market,
+        orderBook: ma.orderBook,
+        usdcVault: ma.usdcVault,
+        escrowVault: ma.escrowVault,
+        yesEscrow: ma.yesEscrow,
+        noEscrow: ma.noEscrow,
+        yesMint: ma.yesMint,
+        noMint: ma.noMint,
+        userUsdcAta,
+        userYesAta: makerYesAta,
+        userNoAta: makerNoAta,
+        side: 1,     // Yes ask
+        price: 55,
+        quantity: new BN(30 * ONE_TOKEN),
+        orderType: 1, // Limit
+        maxFills: 0,
+      });
+      await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), makerAskIx), [ctx.admin]);
+
+      // Taker buys 30 Yes at 55 (market order filling the ask)
+      const takerBidIx = buildPlaceOrderIx({
+        user: taker.publicKey,
+        config,
+        market: ma.market,
+        orderBook: ma.orderBook,
+        usdcVault: ma.usdcVault,
+        escrowVault: ma.escrowVault,
+        yesEscrow: ma.yesEscrow,
+        noEscrow: ma.noEscrow,
+        yesMint: ma.yesMint,
+        noMint: ma.noMint,
+        userUsdcAta: takerUsdcAta,
+        userYesAta: takerYesAta,
+        userNoAta: takerNoAta,
+        side: 0,     // USDC bid
+        price: 55,
+        quantity: new BN(30 * ONE_TOKEN),
+        orderType: 0, // Market
+        maxFills: 5,
+        makerAccounts: [userUsdcAta, makerYesAta, makerNoAta],
+      });
+      await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), takerBidIx), [taker]);
+
+      // Verify: taker now has 30 Yes tokens, maker got USDC back
+      const takerYesBalance = await getTokenBalance(ctx, takerYesAta);
+      expect(takerYesBalance).to.equal(30 * ONE_TOKEN);
+
+      // Advance past market close, settle as Yes wins
+      const settleTime = closeUnix + 10;
+      await advanceClock(ctx, settleTime);
+
+      const updateIx = buildUpdatePriceIx({
+        authority: ctx.admin.publicKey,
+        priceFeed: oracleFeed,
+        price: new BN(320_000_000), // above $315 → Yes wins
+        confidence: new BN(500_000),
+        timestamp: new BN(settleTime),
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), updateIx),
+        [ctx.admin],
+      );
+
+      const settleIx = buildSettleMarketIx({
+        caller: ctx.admin.publicKey,
+        config,
+        market: ma.market,
+        oracleFeed,
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), settleIx),
+        [ctx.admin],
+      );
+
+      const m = await readMarket(ctx, ma.market);
+      expect(m.isSettled).to.be.true;
+      expect(m.outcome).to.equal(1); // Yes wins
+
+      // Advance past override deadline
+      await advanceClock(ctx, m.overrideDeadline + 10);
+
+      // Both users redeem their Yes tokens
+      // Maker has remaining Yes from mint (100 - 30 sold = 70 Yes still held)
+      const makerYesBal = await getTokenBalance(ctx, makerYesAta);
+      expect(makerYesBal).to.be.greaterThan(0);
+
+      const makerRedeemIx = buildRedeemIx({
+        user: ctx.admin.publicKey,
+        config,
+        market: ma.market,
+        yesMint: ma.yesMint,
+        noMint: ma.noMint,
+        usdcVault: ma.usdcVault,
+        userUsdcAta,
+        userYesAta: makerYesAta,
+        userNoAta: makerNoAta,
+        mode: 1,
+        quantity: new BN(makerYesBal),
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), makerRedeemIx),
+        [ctx.admin],
+      );
+
+      // Taker redeems 30 Yes tokens
+      const takerRedeemIx = buildRedeemIx({
+        user: taker.publicKey,
+        config,
+        market: ma.market,
+        yesMint: ma.yesMint,
+        noMint: ma.noMint,
+        usdcVault: ma.usdcVault,
+        userUsdcAta: takerUsdcAta,
+        userYesAta: takerYesAta,
+        userNoAta: takerNoAta,
+        mode: 1,
+        quantity: new BN(30 * ONE_TOKEN),
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), takerRedeemIx),
+        [taker],
+      );
+
+      // Vault should be empty: 100 USDC minted, 100 Yes distributed (70 maker + 30 taker), all redeemed
+      const vaultBalance = await getTokenBalance(ctx, ma.usdcVault);
+      expect(vaultBalance).to.equal(0);
     });
   });
 });

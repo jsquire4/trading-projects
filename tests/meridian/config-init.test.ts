@@ -6,8 +6,13 @@ import {
   BankrunContext,
   createMockUsdc,
   initializeConfig,
+  initializeOracleFeed,
+  updateOraclePrice,
+  createTestMarket,
+  MarketAccounts,
   findGlobalConfig,
   findTreasury,
+  findStrikeMarket,
   padTicker,
   MAG7_TICKERS,
   MOCK_ORACLE_PROGRAM_ID,
@@ -141,5 +146,53 @@ describe("Config Initialization", () => {
       const errStr = String(err);
       expect(errStr).to.match(/already in use|0x0|custom program error|failed to send|resulted in an er/i);
     }
+  });
+
+  it("adds a second strike for the same ticker/expiry (intraday strike)", async () => {
+    const TICKER = "AAPL";
+
+    // Initialize oracle feed for AAPL
+    const oracleFeed = await initializeOracleFeed(ctx.context, ctx.admin, TICKER);
+    await updateOraclePrice(ctx.context, ctx.admin, oracleFeed, 205_000_000, 500_000);
+
+    const clock = await ctx.context.banksClient.getClock();
+    const now = Number(clock.unixTimestamp);
+    const marketCloseUnix = now + 3600; // closes in 1 hour
+
+    // Create first market at $200 strike
+    const ma1 = await createTestMarket(
+      ctx.context, ctx.admin, configPda, TICKER,
+      200_000_000, // strike = $200
+      marketCloseUnix,
+      195_000_000, // previous close
+      oracleFeed,
+      usdcMint,
+    );
+
+    // Create second market at $210 strike — same ticker and same expiry day
+    const ma2 = await createTestMarket(
+      ctx.context, ctx.admin, configPda, TICKER,
+      210_000_000, // strike = $210
+      marketCloseUnix,
+      195_000_000, // previous close
+      oracleFeed,
+      usdcMint,
+    );
+
+    // Verify both markets exist and are distinct PDAs
+    expect(ma1.market.toBase58()).to.not.equal(ma2.market.toBase58());
+
+    // Verify both markets are on-chain
+    const acct1 = await ctx.context.banksClient.getAccount(ma1.market);
+    const acct2 = await ctx.context.banksClient.getAccount(ma2.market);
+    expect(acct1).to.not.be.null;
+    expect(acct2).to.not.be.null;
+
+    // Verify the PDAs are derived with different strike prices
+    const BN = (await import("bn.js")).default;
+    const [expectedPda1] = findStrikeMarket(TICKER, new BN(200_000_000), marketCloseUnix);
+    const [expectedPda2] = findStrikeMarket(TICKER, new BN(210_000_000), marketCloseUnix);
+    expect(ma1.market.toBase58()).to.equal(expectedPda1.toBase58());
+    expect(ma2.market.toBase58()).to.equal(expectedPda2.toBase58());
   });
 });

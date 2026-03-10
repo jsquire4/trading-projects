@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::{program::invoke_signed, system_instruction};
+use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::solana_program::system_instruction;
 use crate::error::MeridianError;
 use crate::state::{OrderBook, StrikeMarket};
 
@@ -107,7 +108,7 @@ pub fn handle_allocate_order_book(
             )?;
         }
 
-        ob_info.realloc(new_len, true)?;
+        ob_info.resize(new_len)?;
 
         msg!(
             "OrderBook grown: {}/{} bytes",

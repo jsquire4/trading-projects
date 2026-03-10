@@ -10,6 +10,7 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
+  ReferenceLine,
 } from "recharts";
 import { useTradierOptions, useTradierQuotes } from "@/hooks/useAnalyticsData";
 import type { ParsedMarket } from "@/hooks/useMarkets";
@@ -28,66 +29,17 @@ const DEFAULT_SIGMA = Number.isFinite(_parsedVol) && _parsedVol > 0 ? _parsedVol
 const RISK_FREE_RATE = 0.05;
 const SECONDS_PER_YEAR = 365.25 * 86400;
 
-// ---------------------------------------------------------------------------
-// Props
-// ---------------------------------------------------------------------------
-
 interface OptionsComparisonProps {
   ticker: string;
   markets: ParsedMarket[];
 }
 
-// ---------------------------------------------------------------------------
-// Internal types
-// ---------------------------------------------------------------------------
-
 interface ComparisonRow {
   strike: number;
   strikeLabel: string;
   optionsDelta: number | null;
-  meridianPrice: number | null;
-  marketKey: string | null;
+  bsProb: number | null;
 }
-
-// ---------------------------------------------------------------------------
-// Helper: compute Meridian implied probability from N(d2) (Black-Scholes)
-// ---------------------------------------------------------------------------
-
-function useMeridianImpliedProb(
-  markets: ParsedMarket[],
-  spotPrice: number | null,
-): Map<string, number | null> {
-  return useMemo(() => {
-    const prices = new Map<string, number | null>();
-    if (spotPrice === null || spotPrice <= 0) {
-      for (const m of markets) prices.set(m.publicKey.toBase58(), null);
-      return prices;
-    }
-
-    const now = Date.now() / 1000;
-
-    for (const m of markets) {
-      const key = m.publicKey.toBase58();
-      const strike = Number(m.strikePrice) / 1_000_000;
-      const T = (Number(m.marketCloseUnix) - now) / SECONDS_PER_YEAR;
-
-      if (T <= 0 || strike <= 0) {
-        // Expired or invalid — use intrinsic
-        prices.set(key, spotPrice >= strike ? 1 : 0);
-        continue;
-      }
-
-      const d2Val = d2(spotPrice, strike, DEFAULT_SIGMA, T, RISK_FREE_RATE);
-      prices.set(key, normalCdf(d2Val));
-    }
-
-    return prices;
-  }, [markets, spotPrice]);
-}
-
-// ---------------------------------------------------------------------------
-// Skeleton shimmer
-// ---------------------------------------------------------------------------
 
 function Skeleton() {
   return (
@@ -98,18 +50,16 @@ function Skeleton() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
-
 export function OptionsComparison({
   ticker,
   markets,
 }: OptionsComparisonProps) {
   const {
-    data: optionsChain,
+    data: optionsResult,
     isLoading: optionsLoading,
   } = useTradierOptions(ticker);
+  const optionsChain = optionsResult?.chain ?? null;
+  const optionsExpiration = optionsResult?.expiration ?? null;
 
   const { data: quotes } = useTradierQuotes([ticker]);
   const spotPrice = useMemo(() => {
@@ -118,66 +68,49 @@ export function OptionsComparison({
     return q?.last ?? null;
   }, [quotes, ticker]);
 
-  // Filter markets to this ticker
-  const tickerMarkets = useMemo(
-    () => markets.filter((m) => m.ticker.toUpperCase() === ticker.toUpperCase()),
-    [markets, ticker],
-  );
+  // Compute time-to-expiry in years for Black-Scholes
+  const timeToExpiry = useMemo(() => {
+    if (!optionsExpiration) return 1 / 365.25; // default 1 day
+    const expDate = new Date(optionsExpiration + "T16:00:00-04:00"); // 4 PM ET close
+    const now = new Date();
+    const diffSec = (expDate.getTime() - now.getTime()) / 1000;
+    return Math.max(diffSec / SECONDS_PER_YEAR, 1 / (365.25 * 24 * 60)); // floor at 1 minute
+  }, [optionsExpiration]);
 
-  const meridianPrices = useMeridianImpliedProb(tickerMarkets, spotPrice);
-
-  // Build strike -> market lookup (strike in dollars)
-  const strikeToMarket = useMemo(() => {
-    const map = new Map<number, ParsedMarket>();
-    for (const m of tickerMarkets) {
-      const strikeDollars = Number(m.strikePrice) / 1_000_000;
-      map.set(strikeDollars, m);
-    }
-    return map;
-  }, [tickerMarkets]);
-
-  // Build comparison data
+  // Build comparison data — always compute N(d2) from spot + strike (no on-chain markets needed)
   const chartData = useMemo(() => {
-    if (!optionsChain) return [];
+    if (!optionsChain || !spotPrice || spotPrice <= 0) return [];
 
-    // Only call options (delta ~ probability of finishing ITM)
     const calls = optionsChain.filter(
       (o) => o.option_type === "call" || o.type === "call",
     );
+    if (calls.length === 0) return [];
 
-    // Collect all strikes from both sources
-    const strikeSet = new Set<number>();
-    for (const c of calls) strikeSet.add(c.strike);
-    for (const [s] of strikeToMarket) strikeSet.add(s);
+    // Filter to strikes within ±15% of spot for readability
+    const lo = spotPrice * 0.85;
+    const hi = spotPrice * 1.15;
+    const nearATM = calls
+      .filter((c) => c.strike >= lo && c.strike <= hi)
+      .sort((a, b) => a.strike - b.strike);
 
-    const sorted = Array.from(strikeSet).sort((a, b) => a - b);
+    // Use IV from the option if available, otherwise fall back to DEFAULT_SIGMA
+    return nearATM.map((call) => {
+      const delta = call.greeks?.delta ?? null;
+      const sigma = call.greeks?.mid_iv && call.greeks.mid_iv > 0
+        ? call.greeks.mid_iv
+        : DEFAULT_SIGMA;
 
-    const rows: ComparisonRow[] = sorted.map((strike) => {
-      // Options delta
-      const call = calls.find((c) => c.strike === strike);
-      const delta = call?.greeks?.delta ?? null;
-
-      // Meridian price
-      const market = strikeToMarket.get(strike);
-      const mPrice = market
-        ? meridianPrices.get(market.publicKey.toBase58()) ?? null
-        : null;
+      const d2Val = d2(spotPrice, call.strike, sigma, timeToExpiry, RISK_FREE_RATE);
+      const bsProb = normalCdf(d2Val);
 
       return {
-        strike,
-        strikeLabel: formatDollar(strike),
+        strike: call.strike,
+        strikeLabel: formatDollar(call.strike),
         optionsDelta: delta,
-        meridianPrice: mPrice,
-        marketKey: market?.publicKey.toBase58() ?? null,
+        bsProb: Math.round(bsProb * 1000) / 1000,
       };
     });
-
-    return rows;
-  }, [optionsChain, strikeToMarket, meridianPrices]);
-
-  // ---------------------------------------------------------------------------
-  // Render
-  // ---------------------------------------------------------------------------
+  }, [optionsChain, spotPrice, timeToExpiry]);
 
   if (optionsLoading) {
     return <Skeleton />;
@@ -187,31 +120,59 @@ export function OptionsComparison({
     return (
       <div className="rounded-lg border border-white/10 bg-white/[0.03] p-6 text-center">
         <p className="text-sm text-white/50">
-          Options data unavailable &mdash; no 0DTE expiration found for{" "}
+          No options data available for{" "}
           <span className="font-mono font-semibold text-white/70">{ticker}</span>.
-          Options comparison requires same-day expiring contracts.
         </p>
       </div>
     );
   }
+
+  const isToday = optionsExpiration === new Date().toISOString().split("T")[0];
+  const expirationLabel = optionsExpiration
+    ? new Date(optionsExpiration + "T12:00:00").toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      })
+    : null;
 
   if (chartData.length === 0) {
     return (
       <div className="rounded-lg border border-white/10 bg-white/[0.03] p-6 text-center">
         <p className="text-sm text-white/50">
-          No matching strike prices between options chain and Meridian markets
-          for {ticker}.
+          No strike data near current price for {ticker}.
         </p>
       </div>
     );
   }
 
+  // Find ATM strike (closest to spot)
+  const atmStrike = spotPrice
+    ? chartData.reduce((best, row) =>
+        Math.abs(row.strike - spotPrice) < Math.abs(best.strike - spotPrice)
+          ? row
+          : best,
+      ).strikeLabel
+    : null;
+
   return (
     <div className="space-y-3">
-      <h3 className="text-sm font-medium text-white/70">
-        Options Delta vs Meridian N(d2) Implied Prob &mdash;{" "}
-        <span className="font-mono text-white">{ticker}</span>
-      </h3>
+      <div>
+        <h3 className="text-sm font-medium text-white/70">
+          Market Delta vs Black-Scholes N(d2) &mdash;{" "}
+          <span className="font-mono text-white">{ticker}</span>
+          {expirationLabel && (
+            <span className="ml-2 text-xs text-white/40">
+              ({isToday ? "0DTE" : `exp ${expirationLabel}`})
+            </span>
+          )}
+        </h3>
+        <p className="text-xs text-white/30 mt-1">
+          Compares the real options market&apos;s implied probability (call delta from Tradier)
+          against the theoretical Black-Scholes probability N(d2) that {ticker} finishes above each strike.
+          Divergence reveals where the market prices risk differently than the model.
+        </p>
+      </div>
 
       <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
         <ResponsiveContainer width="100%" height={320}>
@@ -225,6 +186,8 @@ export function OptionsComparison({
               tick={AXIS_STYLE}
               tickLine={false}
               axisLine={{ stroke: COLORS.grid }}
+              interval="preserveStartEnd"
+              minTickGap={30}
             />
             <YAxis
               domain={[0, 1]}
@@ -238,30 +201,46 @@ export function OptionsComparison({
               {...TOOLTIP_STYLE}
               formatter={(value: any, name: any) => [
                 formatPercent(Number(value)),
-                String(name),
+                name === "optionsDelta" ? "Market Delta" : "Black-Scholes N(d2)",
               ]}
               labelFormatter={(label: any) => `Strike: ${label}`}
             />
             <Legend
               wrapperStyle={{ fontSize: 12, color: "rgba(255,255,255,0.6)" }}
+              formatter={(value: string) =>
+                value === "optionsDelta" ? "Market Delta" : "Black-Scholes N(d2)"
+              }
             />
+            {atmStrike && (
+              <ReferenceLine
+                x={atmStrike}
+                stroke={COLORS.neutral}
+                strokeDasharray="4 4"
+                label={{ value: "ATM", fill: COLORS.axisText, fontSize: 10, position: "top" }}
+              />
+            )}
             <Bar
               dataKey="optionsDelta"
-              name="Options Delta"
+              name="optionsDelta"
               fill={COLORS.accent}
               radius={[3, 3, 0, 0]}
-              maxBarSize={40}
+              maxBarSize={28}
             />
             <Bar
-              dataKey="meridianPrice"
-              name="Meridian N(d2)"
+              dataKey="bsProb"
+              name="bsProb"
               fill={COLORS.yes}
               radius={[3, 3, 0, 0]}
-              maxBarSize={40}
+              maxBarSize={28}
             />
           </BarChart>
         </ResponsiveContainer>
       </div>
+
+      <p className="text-[10px] text-zinc-600">
+        Strikes within &plusmn;15% of spot ({spotPrice ? formatDollar(spotPrice) : "—"}).
+        {" "}N(d2) uses {isToday ? "0DTE" : "time-to-expiry"} and per-strike implied vol when available.
+      </p>
     </div>
   );
 }

@@ -17,8 +17,8 @@ interface StepProps {
 
 function Step({ number, title, description }: StepProps) {
   return (
-    <div className="bg-white/5 rounded-xl p-6 border border-white/10 flex flex-col gap-3">
-      <div className="w-9 h-9 rounded-lg bg-accent/20 flex items-center justify-center text-accent font-bold text-sm">
+    <div className="bg-white/5 rounded-xl p-6 border border-white/10 flex flex-col gap-3 hover:border-white/20 transition-colors">
+      <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-green-500/20 via-blue-500/20 to-purple-500/20 border border-white/10 flex items-center justify-center text-white font-bold text-sm">
         {number}
       </div>
       <h3 className="text-white font-bold text-lg">{title}</h3>
@@ -144,7 +144,7 @@ export default function HomePage() {
         <div className="inline-block rounded-full bg-accent/10 border border-accent/20 px-4 py-1 text-xs text-accent font-medium tracking-wider uppercase">
           0DTE — Settles 4 PM ET daily
         </div>
-        <h1 className="text-5xl font-bold text-white leading-tight max-w-2xl">
+        <h1 className="text-5xl font-bold leading-tight max-w-2xl text-gradient">
           Binary Stock Outcomes on Solana
         </h1>
         <p className="text-white/50 text-lg max-w-xl">
@@ -154,11 +154,11 @@ export default function HomePage() {
         <div className="flex items-center gap-4 mt-2">
           <Link
             href="/trade"
-            className="bg-accent hover:bg-accent/80 text-white font-semibold rounded-lg px-6 py-2.5 transition-colors text-sm"
+            className="bg-gradient-to-r from-green-500 via-blue-500 to-purple-500 hover:from-green-400 hover:via-blue-400 hover:to-purple-400 text-white font-semibold rounded-lg px-6 py-2.5 transition-all text-sm shadow-lg shadow-blue-500/20"
           >
             View Markets
           </Link>
-          <WalletButton />
+          <WalletButton compact />
         </div>
       </section>
 
@@ -265,8 +265,8 @@ export default function HomePage() {
       {/* ------------------------------------------------------------------ */}
       {/* CTA                                                                 */}
       {/* ------------------------------------------------------------------ */}
-      <section className="rounded-2xl bg-white/5 border border-white/10 px-8 py-10 flex flex-col items-center text-center gap-5">
-        <h2 className="text-2xl font-bold text-white">Ready to trade?</h2>
+      <section className="rounded-2xl bg-white/5 border border-white/10 px-8 py-10 flex flex-col items-center text-center gap-5 card-glow">
+        <h2 className="text-2xl font-bold text-gradient">Ready to trade?</h2>
         <p className="text-white/50 text-sm max-w-md">
           Connect your Solana wallet to place orders, manage positions, and
           redeem winnings — all on-chain, no counterparty risk.
@@ -278,7 +278,7 @@ export default function HomePage() {
           >
             Browse Markets
           </Link>
-          <WalletButton />
+          <WalletButton compact />
         </div>
       </section>
 

@@ -267,6 +267,28 @@ export async function getOptionsChain(
 }
 
 /**
+ * Get available option expiration dates for a symbol.
+ * Returns sorted array of "YYYY-MM-DD" strings.
+ */
+export async function getExpirations(symbol: string): Promise<string[]> {
+  const key = `expirations:${symbol}`;
+  const cached = getCached<string[]>(key);
+  if (cached) return cached;
+
+  const data = (await tradierFetch("/v1/markets/options/expirations", {
+    symbol,
+  })) as Record<string, unknown>;
+
+  const raw = (data?.expirations as Record<string, unknown>)?.date;
+  if (!raw) return [];
+
+  const dates: string[] = Array.isArray(raw) ? raw : [raw];
+  const sorted = dates.sort();
+  setCache(key, sorted, 5 * 60_000); // cache 5 min
+  return sorted;
+}
+
+/**
  * Get today's expiration string in YYYY-MM-DD format (ET timezone).
  */
 export function getTodayExpiration(): string {

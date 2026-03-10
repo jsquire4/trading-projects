@@ -38,7 +38,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <ConnectionProvider endpoint={RPC_URL}>
-      <WalletProvider wallets={wallets} autoConnect>
+      <WalletProvider wallets={wallets}>
         <WalletModalProvider>
           <QueryClientProvider client={queryClient}>
             {children}

@@ -219,14 +219,24 @@ export function SettlementAnalytics() {
     );
   }
 
-  // Error state
+  // Error state — treat connection failures (event indexer offline) as empty
   if (isError) {
+    const isConnectionError =
+      error instanceof Error &&
+      (error.message.includes("Failed to fetch") || error.message.includes("ECONNREFUSED"));
     return (
       <div className="space-y-6">
         <h2 className="text-lg font-semibold text-white">Settlement Analytics</h2>
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3">
-          <p className="text-sm text-red-400">
-            Failed to load settlement data: {error instanceof Error ? error.message : "Unknown error"}
+        <div className="rounded-lg border border-white/10 bg-white/5 px-6 py-12 text-center">
+          <p className="text-white/50 text-sm">
+            {isConnectionError
+              ? "Event indexer is not running."
+              : "Failed to load settlement data."}
+          </p>
+          <p className="text-white/30 text-xs mt-1">
+            {isConnectionError
+              ? "Start the event-indexer service to see settlement analytics."
+              : error instanceof Error ? error.message : "Unknown error"}
           </p>
         </div>
       </div>

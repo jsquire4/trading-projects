@@ -11,10 +11,8 @@ export const metadata: Metadata = {
 };
 
 const navLinks = [
-  { href: "/", label: "Home" },
   { href: "/trade", label: "Trade" },
   { href: "/portfolio", label: "Portfolio" },
-  { href: "/history", label: "History" },
   { href: "/analytics", label: "Analytics" },
   { href: "/market-maker", label: "Market Maker" },
 ];
@@ -28,9 +26,9 @@ export default function RootLayout({
     <html lang="en">
       <body>
         <Providers>
-          <header className="border-b border-white/10 px-6 py-3 flex items-center justify-between">
+          <header className="border-b border-white/10 px-6 py-3 flex items-center justify-between backdrop-blur-sm bg-black/30">
             <div className="flex items-center gap-8">
-              <Link href="/" className="text-xl font-bold tracking-tight">
+              <Link href="/" className="text-xl font-bold tracking-tight text-gradient">
                 Meridian
               </Link>
               <nav className="flex gap-6">

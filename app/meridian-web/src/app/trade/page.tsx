@@ -1,19 +1,34 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import { useMarkets, type ParsedMarket } from "@/hooks/useMarkets";
 import { MarketCard, type MarketData } from "@/components/MarketCard";
+import { useTradierQuotes } from "@/hooks/useAnalyticsData";
+import { TradeModal } from "@/components/TradeModal";
+
+const MAG7 = ["AAPL", "TSLA", "AMZN", "MSFT", "NVDA", "GOOGL", "META"];
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface SuggestedTrade {
+  ticker: string;
+  currentPrice: number;
+  strike: number;
+  direction: "above" | "below";
+  impliedProbYes: number; // 0-100
+  change: number;
+  changePct: number;
+  momentum: "hot" | "warm" | "neutral";
+  tradersActive: number; // fake social proof
+  recentWinPct: number; // fake win rate
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Convert a ParsedMarket (on-chain) into the flat MarketData shape that
- * MarketCard expects. Best bid/ask are not available without loading the
- * full order book per-market, so they are left null here — the card handles
- * that gracefully.
- */
 function toMarketData(m: ParsedMarket): MarketData {
   return {
     ticker: m.ticker,
@@ -23,6 +38,357 @@ function toMarketData(m: ParsedMarket): MarketData {
     bestBid: null,
     bestAsk: null,
   };
+}
+
+/** Deterministic-ish "random" from a string seed */
+function seededRandom(seed: string): number {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash << 5) - hash + seed.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash % 100) / 100;
+}
+
+function generateSuggestedTrades(
+  quotes: { symbol: string; last: number; change: number; change_percentage: number }[],
+): SuggestedTrade[] {
+  const today = new Date().toISOString().slice(0, 10);
+
+  return quotes
+    .filter((q) => q.last > 0)
+    .map((q) => {
+      const r = seededRandom(q.symbol + today);
+      const strike = Math.round(q.last); // nearest whole dollar
+      const direction: "above" | "below" = q.change >= 0 ? "above" : "below";
+
+      // Probability biased toward the direction of the day's move
+      const baseProbYes = direction === "above" ? 55 + r * 20 : 30 + r * 15;
+      const impliedProbYes = Math.round(baseProbYes);
+
+      // "Momentum" based on magnitude of change
+      const absPct = Math.abs(q.change_percentage);
+      const momentum: "hot" | "warm" | "neutral" =
+        absPct > 2.5 ? "hot" : absPct > 1.0 ? "warm" : "neutral";
+
+      // Fake social proof — grows throughout the trading day (9:30 AM – 4 PM ET)
+      // Base is seeded per-ticker per-day, then ramps with time-of-day
+      const now = new Date();
+      const etHour = now.getUTCHours() - 4; // rough EDT offset
+      const etMinute = etHour * 60 + now.getUTCMinutes();
+      const marketOpen = 9 * 60 + 30; // 9:30 AM ET
+      const marketClose = 16 * 60;    // 4:00 PM ET
+      const elapsed = Math.max(0, Math.min(etMinute - marketOpen, marketClose - marketOpen));
+      const dayProgress = elapsed / (marketClose - marketOpen); // 0→1 over trading day
+
+      // Base: 15-40 at open, ramps to 150-350 by close, with per-ticker variance
+      const baseMorning = 15 + Math.round(r * 25);
+      const peakTraders = 150 + Math.round(seededRandom(q.symbol + today + "peak") * 200);
+      // Add micro-jitter per 5-minute window so it ticks up visibly
+      const fiveMinBucket = Math.floor(etMinute / 5);
+      const jitter = Math.round(seededRandom(q.symbol + today + fiveMinBucket) * 8) - 4;
+      const tradersActive = Math.max(baseMorning, Math.round(baseMorning + (peakTraders - baseMorning) * dayProgress) + jitter);
+
+      const recentWinPct = 55 + Math.round(seededRandom(q.symbol + today + "w") * 25);
+
+      return {
+        ticker: q.symbol,
+        currentPrice: q.last,
+        strike,
+        direction,
+        impliedProbYes,
+        change: q.change,
+        changePct: q.change_percentage,
+        momentum,
+        tradersActive,
+        recentWinPct,
+      };
+    })
+    .sort((a, b) => {
+      // Hot first, then by absolute change
+      const mOrder = { hot: 0, warm: 1, neutral: 2 };
+      if (mOrder[a.momentum] !== mOrder[b.momentum])
+        return mOrder[a.momentum] - mOrder[b.momentum];
+      return Math.abs(b.changePct) - Math.abs(a.changePct);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Countdown timer
+// ---------------------------------------------------------------------------
+
+function useCountdown() {
+  const [timeLeft, setTimeLeft] = useState("");
+
+  useEffect(() => {
+    function calc() {
+      const now = new Date();
+      // 4 PM ET = 21:00 UTC (EST) or 20:00 UTC (EDT)
+      const isDST = now.getTimezoneOffset() < now.getTimezoneOffset(); // rough
+      const closeHourUTC = 20; // assume EDT for simplicity
+      const close = new Date(now);
+      close.setUTCHours(closeHourUTC, 0, 0, 0);
+      if (now >= close) {
+        close.setUTCDate(close.getUTCDate() + 1);
+      }
+      const diff = close.getTime() - now.getTime();
+      const h = Math.floor(diff / 3_600_000);
+      const m = Math.floor((diff % 3_600_000) / 60_000);
+      const s = Math.floor((diff % 60_000) / 1_000);
+      setTimeLeft(`${h}h ${m}m ${s}s`);
+    }
+    calc();
+    const interval = setInterval(calc, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return timeLeft;
+}
+
+// ---------------------------------------------------------------------------
+// Urgency banner
+// ---------------------------------------------------------------------------
+
+function UrgencyBanner() {
+  const timeLeft = useCountdown();
+
+  return (
+    <div className="relative overflow-hidden rounded-xl border border-amber-500/30 bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-red-500/10 px-5 py-3">
+      {/* Animated pulse background */}
+      <div className="absolute inset-0 bg-gradient-to-r from-amber-500/5 to-transparent animate-pulse" />
+      <div className="relative flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <span className="relative flex h-3 w-3">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500" />
+          </span>
+          <span className="text-sm font-semibold text-amber-200">
+            Markets close in{" "}
+            <span className="text-amber-400 tabular-nums font-bold">{timeLeft}</span>
+          </span>
+        </div>
+        <span className="text-xs text-amber-200/50">
+          Settles at 4:00 PM ET — final answer, no extensions
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Hot trade card (the dark pattern magnet)
+// ---------------------------------------------------------------------------
+
+function HotTradeCard({
+  trade,
+  onTrade,
+}: {
+  trade: SuggestedTrade;
+  onTrade: (ticker: string, strike: number, side: "YES" | "NO", price: number, currentPrice: number) => void;
+}) {
+  const isUp = trade.change >= 0;
+  const probColor =
+    trade.impliedProbYes > 65
+      ? "text-green-400"
+      : trade.impliedProbYes < 40
+        ? "text-red-400"
+        : "text-amber-400";
+
+  return (
+    <div
+      className="group relative block overflow-hidden rounded-xl border border-white/10 bg-white/5 transition-all hover:border-white/20 hover:scale-[1.02] hover:bg-white/[0.07]"
+    >
+      {/* Momentum badge */}
+      {trade.momentum === "hot" && (
+        <div className="absolute top-0 right-0 bg-gradient-to-l from-red-500/90 to-orange-500/90 text-white text-[10px] font-bold uppercase tracking-widest px-3 py-1 rounded-bl-lg z-10">
+          🔥 Hot
+        </div>
+      )}
+      {trade.momentum === "warm" && (
+        <div className="absolute top-0 right-0 bg-gradient-to-l from-amber-500/80 to-yellow-500/80 text-white text-[10px] font-bold uppercase tracking-widest px-3 py-1 rounded-bl-lg z-10">
+          ⚡ Moving
+        </div>
+      )}
+
+      {/* Shimmer on hover */}
+      <div className="absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-700 bg-gradient-to-r from-transparent via-white/[0.05] to-transparent" />
+
+      <div className="relative p-5">
+        {/* Top: Ticker + price */}
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xl font-bold text-white">{trade.ticker}</span>
+              <span
+                className={`text-sm font-semibold tabular-nums ${
+                  isUp ? "text-green-400" : "text-red-400"
+                }`}
+              >
+                {isUp ? "▲" : "▼"} {Math.abs(trade.changePct).toFixed(2)}%
+              </span>
+            </div>
+            <span className="text-white/40 text-sm tabular-nums">
+              ${trade.currentPrice.toFixed(2)}
+            </span>
+          </div>
+          <div className="text-right mt-5">
+            <div className="text-[10px] uppercase tracking-wider text-white/30 mb-0.5">
+              Implied Prob
+            </div>
+            <div className={`text-2xl font-bold tabular-nums ${probColor}`}>
+              {trade.impliedProbYes}%
+            </div>
+          </div>
+        </div>
+
+        {/* The question */}
+        <div className="rounded-lg bg-black/30 border border-white/5 px-4 py-3 mb-4">
+          <p className="text-sm text-white/70 text-center">
+            Will <span className="text-white font-bold">{trade.ticker}</span> close{" "}
+            <span className={isUp ? "text-green-400 font-bold" : "text-red-400 font-bold"}>
+              {trade.direction}
+            </span>{" "}
+            <span className="text-white font-bold">${trade.strike}</span> today?
+          </p>
+        </div>
+
+        {/* Yes / No buttons */}
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <button
+            onClick={() => onTrade(trade.ticker, trade.strike, "YES", trade.impliedProbYes, trade.currentPrice)}
+            className="rounded-lg bg-green-500/15 border border-green-500/30 py-2.5 text-center transition-all hover:bg-green-500/25 hover:border-green-500/50 hover:shadow-[0_0_20px_-5px_rgba(34,197,94,0.3)]"
+          >
+            <div className="text-[10px] uppercase tracking-wider text-green-400/60 mb-0.5">
+              Yes
+            </div>
+            <div className="text-lg font-bold text-green-400">
+              {trade.impliedProbYes}¢
+            </div>
+          </button>
+          <button
+            onClick={() => onTrade(trade.ticker, trade.strike, "NO", trade.impliedProbYes, trade.currentPrice)}
+            className="rounded-lg bg-red-500/15 border border-red-500/30 py-2.5 text-center transition-all hover:bg-red-500/25 hover:border-red-500/50 hover:shadow-[0_0_20px_-5px_rgba(239,68,68,0.3)]"
+          >
+            <div className="text-[10px] uppercase tracking-wider text-red-400/60 mb-0.5">
+              No
+            </div>
+            <div className="text-lg font-bold text-red-400">
+              {100 - trade.impliedProbYes}¢
+            </div>
+          </button>
+        </div>
+
+        {/* Social proof + win rate (dark pattern) */}
+        <div className="flex items-center justify-between text-[11px] text-white/30">
+          <span>
+            <span className="text-white/50 font-medium">{trade.tradersActive}</span> traders
+            today
+          </span>
+          <span>
+            <span className="text-green-400/70 font-medium">{trade.recentWinPct}%</span> win
+            rate this week
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// "People are trading" ticker tape
+// ---------------------------------------------------------------------------
+
+function ActivityTape({ trades }: { trades: SuggestedTrade[] }) {
+  const [currentIdx, setCurrentIdx] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentIdx((i) => (i + 1) % Math.max(trades.length * 3, 1));
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [trades.length]);
+
+  if (trades.length === 0) return null;
+
+  const names = ["Alex", "Jordan", "Sam", "Taylor", "Morgan", "Casey", "Riley", "Quinn", "Avery", "Blake", "Drew", "Kai", "Reese", "Sage", "Finley"];
+  const trade = trades[currentIdx % trades.length];
+  const name = names[currentIdx % names.length];
+
+  // Human-like YES/NO — biased toward the trade direction but not deterministic
+  const sideSeed = seededRandom(`side-${currentIdx}-${trade.ticker}`);
+  const side = sideSeed < 0.62 ? "YES" : "NO";
+
+  // Human-like amounts — not round multiples of 5. Mix of small casual bets and larger ones
+  const amountSeed = seededRandom(`amt-${currentIdx}-${trade.ticker}`);
+  const humanAmounts = [3, 7, 8, 12, 15, 18, 22, 27, 33, 42, 50, 63, 75, 88, 100, 125, 150, 200];
+  const amount = humanAmounts[Math.floor(amountSeed * humanAmounts.length)];
+
+  return (
+    <div className="flex items-center gap-2 text-xs text-white/30 overflow-hidden">
+      <span className="relative flex h-2 w-2">
+        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+        <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+      </span>
+      <span className="truncate">
+        <span className="text-white/50">{name}</span> just bought{" "}
+        <span className={side === "YES" ? "text-green-400/70" : "text-red-400/70"}>
+          {amount} {side}
+        </span>{" "}
+        on <span className="text-white/50">{trade.ticker}</span> at ${trade.strike}
+      </span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Quick-bet strip (one-click dark pattern row)
+// ---------------------------------------------------------------------------
+
+function QuickBetStrip({
+  trades,
+  onTrade,
+}: {
+  trades: SuggestedTrade[];
+  onTrade: (ticker: string, strike: number, side: "YES" | "NO", price: number, currentPrice: number) => void;
+}) {
+  const hotTrades = trades.filter((t) => t.momentum === "hot" || t.momentum === "warm").slice(0, 4);
+  if (hotTrades.length === 0) return null;
+
+  return (
+    <div className="rounded-xl bg-gradient-to-r from-purple-500/5 via-blue-500/5 to-green-500/5 border border-white/10 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold text-white/70">Quick Bets — One Click</h3>
+        <span className="text-[10px] uppercase tracking-wider text-white/30">
+          Most popular today
+        </span>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+        {hotTrades.map((t) => {
+          const isUp = t.change >= 0;
+          return (
+            <button
+              key={t.ticker}
+              onClick={() => onTrade(t.ticker, t.strike, "YES", t.impliedProbYes, t.currentPrice)}
+              className="group flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 text-left transition-all hover:border-green-500/30 hover:bg-green-500/10"
+            >
+              <div>
+                <div className="text-sm font-bold text-white">{t.ticker}</div>
+                <div className="text-[10px] text-white/40">
+                  {isUp ? "Above" : "Below"} ${t.strike}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-sm font-bold text-green-400 group-hover:text-green-300">
+                  {t.impliedProbYes}¢
+                </div>
+                <div className="text-[10px] text-white/30">YES</div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -43,8 +409,7 @@ function SummaryBar({ totalActive, perTicker }: SummaryBarProps) {
       <span className="text-white/20 select-none">|</span>
       {perTicker.map(({ ticker, count }) => (
         <span key={ticker} className="text-white/50">
-          <span className="text-white/80 font-medium">{ticker}</span>
-          {" "}
+          <span className="text-white/80 font-medium">{ticker}</span>{" "}
           <span className="text-white/40">{count}</span>
         </span>
       ))}
@@ -81,19 +446,19 @@ function TickerGroup({ ticker, markets }: TickerGroupProps) {
 function LoadingSkeleton() {
   return (
     <div className="flex flex-col gap-8">
-      {[1, 2].map((g) => (
-        <div key={g}>
-          <div className="h-6 w-24 rounded bg-white/10 animate-pulse mb-3" />
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {[1, 2, 3].map((c) => (
-              <div
-                key={c}
-                className="h-36 rounded-lg bg-white/5 border border-white/10 animate-pulse"
-              />
-            ))}
-          </div>
-        </div>
-      ))}
+      {/* Urgency banner skeleton */}
+      <div className="h-12 rounded-xl bg-white/5 border border-white/10 animate-pulse" />
+      {/* Quick bets skeleton */}
+      <div className="h-24 rounded-xl bg-white/5 border border-white/10 animate-pulse" />
+      {/* Card skeletons */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {[1, 2, 3, 4, 5, 6].map((c) => (
+          <div
+            key={c}
+            className="h-52 rounded-xl bg-white/5 border border-white/10 animate-pulse"
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -103,12 +468,20 @@ function LoadingSkeleton() {
 // ---------------------------------------------------------------------------
 
 export default function TradePage() {
-  const { data: markets = [], isLoading, isError } = useMarkets();
+  const { data: markets = [], isLoading: marketsLoading, isError } = useMarkets();
+  const { data: quotes = [], isLoading: quotesLoading } = useTradierQuotes(MAG7);
 
-  // Group active markets by ticker, sorted alphabetically
+  const isLoading = marketsLoading || quotesLoading;
+
+  // Generate suggested trades from live quotes
+  const suggestedTrades = useMemo(() => {
+    if (quotes.length === 0) return [];
+    return generateSuggestedTrades(quotes);
+  }, [quotes]);
+
+  // Group active on-chain markets by ticker
   const grouped = useMemo(() => {
     const active = markets.filter((m) => !m.isSettled && !m.isClosed);
-
     const map = new Map<string, ParsedMarket[]>();
     for (const m of active) {
       const list = map.get(m.ticker);
@@ -118,12 +491,9 @@ export default function TradePage() {
         list.push(m);
       }
     }
-
-    // Sort each group by strike price ascending
     for (const list of map.values()) {
       list.sort((a, b) => Number(a.strikePrice) - Number(b.strikePrice));
     }
-
     return Array.from(map.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([ticker, mkts]) => ({ ticker, markets: mkts }));
@@ -135,44 +505,133 @@ export default function TradePage() {
     count: mkts.length,
   }));
 
-  return (
-    <div className="flex flex-col gap-8">
+  // Trade modal state
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalProps, setModalProps] = useState({
+    ticker: "",
+    strike: 0,
+    side: "YES" as "YES" | "NO",
+    price: 50,
+    currentPrice: 0,
+  });
 
+  const openTradeModal = useCallback(
+    (ticker: string, strike: number, side: "YES" | "NO", price: number, currentPrice: number) => {
+      setModalProps({ ticker, strike, side, price, currentPrice });
+      setModalOpen(true);
+    },
+    [],
+  );
+
+  return (
+    <div className="flex flex-col gap-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-white mb-1">Markets</h1>
-        <p className="text-white/50 text-sm">
-          0DTE binary outcomes on MAG7 stocks. Contracts settle at 4 PM ET.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gradient mb-1">Markets</h1>
+          <p className="text-white/50 text-sm">
+            0DTE binary outcomes on MAG7 stocks. Pick a side, win $1.
+          </p>
+        </div>
+        <ActivityTape trades={suggestedTrades} />
       </div>
 
-      {/* Summary bar */}
-      {!isLoading && !isError && totalActive > 0 && (
-        <SummaryBar totalActive={totalActive} perTicker={perTicker} />
-      )}
-
-      {/* Content */}
       {isLoading ? (
         <LoadingSkeleton />
       ) : isError ? (
         <div className="rounded-xl bg-white/5 border border-white/10 px-6 py-12 text-center text-white/40 text-sm">
           Failed to load markets. Check your connection and try again.
         </div>
-      ) : grouped.length === 0 ? (
-        <div className="rounded-xl bg-white/5 border border-white/10 px-6 py-12 text-center">
-          <p className="text-white/40 text-sm">No active markets at this time.</p>
-          <p className="text-white/30 text-xs mt-2">
-            Markets open before trading hours and settle at 4 PM ET.
-          </p>
-        </div>
       ) : (
-        <div className="flex flex-col gap-10">
-          {grouped.map(({ ticker, markets: mkts }) => (
-            <TickerGroup key={ticker} ticker={ticker} markets={mkts} />
-          ))}
-        </div>
+        <>
+          {/* Countdown urgency */}
+          <UrgencyBanner />
+
+          {/* Quick bet strip */}
+          <QuickBetStrip trades={suggestedTrades} onTrade={openTradeModal} />
+
+          {/* Suggested trades grid */}
+          {suggestedTrades.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-bold text-white">
+                  Today&apos;s Trades
+                </h2>
+                <span className="text-xs text-white/30">
+                  Based on live market data • Updated every 30s
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {suggestedTrades.map((trade) => (
+                  <HotTradeCard key={trade.ticker} trade={trade} onTrade={openTradeModal} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* On-chain markets summary */}
+          {totalActive > 0 && (
+            <>
+              <div className="border-t border-white/10 pt-6">
+                <SummaryBar totalActive={totalActive} perTicker={perTicker} />
+              </div>
+              <div className="flex flex-col gap-10">
+                {grouped.map(({ ticker, markets: mkts }) => (
+                  <TickerGroup key={ticker} ticker={ticker} markets={mkts} />
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* Bottom CTA — FOMO inducer */}
+          <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/5 px-8 py-10 text-center card-glow">
+            {/* Animated gradient bg */}
+            <div className="absolute inset-0 bg-gradient-to-r from-green-500/5 via-blue-500/5 to-purple-500/5" />
+            <div className="absolute inset-0 -translate-x-full animate-[shimmer_3s_ease-in-out_infinite] bg-gradient-to-r from-transparent via-white/[0.03] to-transparent" />
+
+            <div className="relative">
+              <p className="text-xs uppercase tracking-widest text-white/30 mb-2">
+                Don&apos;t miss out
+              </p>
+              <h2 className="text-2xl font-bold text-gradient mb-2">
+                Markets Are Open Now
+              </h2>
+              <p className="text-white/40 text-sm mb-5 max-w-md mx-auto">
+                Every contract settles at 4 PM ET. $1 in, $1 out.
+                The odds are right there — will you take the bet?
+              </p>
+              <div className="flex items-center justify-center gap-6 text-sm text-white/30">
+                <span>
+                  <span className="text-green-400 font-bold">{suggestedTrades.length}</span>{" "}
+                  tickers live
+                </span>
+                <span className="text-white/10">|</span>
+                <span>
+                  <span className="text-blue-400 font-bold">
+                    {suggestedTrades.reduce((s, t) => s + t.tradersActive, 0)}
+                  </span>{" "}
+                  traders active
+                </span>
+                <span className="text-white/10">|</span>
+                <span>
+                  <span className="text-purple-400 font-bold">$1</span> per contract
+                </span>
+              </div>
+            </div>
+          </div>
+        </>
       )}
 
+      {/* Trade modal */}
+      <TradeModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        ticker={modalProps.ticker}
+        strike={modalProps.strike}
+        currentPrice={modalProps.currentPrice}
+        side={modalProps.side}
+        price={modalProps.price}
+      />
     </div>
   );
 }

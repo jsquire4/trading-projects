@@ -74,17 +74,46 @@ export function useTradierHistory(symbol: string | null, days: number = 365) {
 }
 
 /**
- * Fetch options chain for a symbol at today's expiration.
- * Returns empty array if no 0DTE options exist for this ticker.
+ * Options chain result including the expiration date used.
  */
-export function useTradierOptions(symbol: string | null) {
-  return useQuery<OptionsChainItem[]>({
-    queryKey: ["tradier-options", symbol],
+export interface OptionsResult {
+  chain: OptionsChainItem[];
+  expiration: string | null;
+}
+
+/**
+ * Fetch available expiration dates for a symbol.
+ */
+export function useTradierExpirations(symbol: string | null) {
+  return useQuery<string[]>({
+    queryKey: ["tradier-expirations", symbol],
     queryFn: async () => {
       if (!symbol) return [];
-      const res = await fetch(`/api/tradier/options?symbol=${encodeURIComponent(symbol)}`);
-      if (!res.ok) throw new Error(`Options fetch failed: ${res.status}`);
+      const res = await fetch(`/api/tradier/expirations?symbol=${encodeURIComponent(symbol)}`);
+      if (!res.ok) throw new Error(`Expirations fetch failed: ${res.status}`);
       return res.json();
+    },
+    enabled: !!symbol,
+    staleTime: 5 * 60_000,
+  });
+}
+
+/**
+ * Fetch options chain for a symbol.
+ * If no expiration specified, tries today (0DTE) first, then falls back to nearest.
+ */
+export function useTradierOptions(symbol: string | null, expiration?: string | null) {
+  return useQuery<OptionsResult>({
+    queryKey: ["tradier-options", symbol, expiration ?? "auto"],
+    queryFn: async () => {
+      if (!symbol) return { chain: [], expiration: null };
+      let url = `/api/tradier/options?symbol=${encodeURIComponent(symbol)}`;
+      if (expiration) url += `&expiration=${encodeURIComponent(expiration)}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Options fetch failed: ${res.status}`);
+      const exp = res.headers.get("X-Expiration");
+      const chain = await res.json();
+      return { chain: Array.isArray(chain) ? chain : [], expiration: exp };
     },
     enabled: !!symbol,
     staleTime: 60_000,
@@ -119,7 +148,9 @@ export function useIndexedEvents(options?: {
 
       const res = await fetch(`${EVENT_INDEXER_URL}/events?${params}`);
       if (!res.ok) throw new Error(`Event indexer fetch failed: ${res.status}`);
-      return res.json();
+      const json = await res.json();
+      // API returns { events: [...], count, limit, offset } — unwrap
+      return Array.isArray(json) ? json : (json.events ?? []);
     },
     staleTime: 30_000,
     refetchInterval: 30_000,

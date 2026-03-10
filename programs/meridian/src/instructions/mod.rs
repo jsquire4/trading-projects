@@ -3,9 +3,17 @@ pub mod initialize_config;
 pub mod create_strike_market;
 pub mod set_market_alt;
 pub mod mint_pair;
+pub mod place_order;
+pub mod cancel_order;
+pub mod pause;
+pub mod unpause;
 
 pub use allocate_order_book::*;
 pub use initialize_config::*;
 pub use create_strike_market::*;
 pub use set_market_alt::*;
 pub use mint_pair::*;
+pub use place_order::*;
+pub use cancel_order::*;
+pub use pause::*;
+pub use unpause::*;

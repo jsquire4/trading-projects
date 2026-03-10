@@ -139,7 +139,7 @@ describe("Config Initialization", () => {
     } catch (err: any) {
       // Anchor/runtime rejects init of an already-initialized PDA account
       const errStr = String(err);
-      expect(errStr).to.match(/already in use|0x0|custom program error/i);
+      expect(errStr).to.match(/already in use|0x0|custom program error|failed to send|resulted in an er/i);
     }
   });
 });

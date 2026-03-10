@@ -12,7 +12,7 @@ pub struct MintPair<'info> {
     #[account(
         constraint = !config.is_paused @ MeridianError::MarketPaused,
     )]
-    pub config: Account<'info, GlobalConfig>,
+    pub config: Box<Account<'info, GlobalConfig>>,
 
     #[account(
         mut,

@@ -57,6 +57,8 @@ pub enum MeridianError {
     AccountNotInitialized = 35,
     #[msg("CPI target doesn't match expected program")]
     InvalidProgramId = 36,
+    #[msg("Not enough remaining_accounts for fill settlement")]
+    InsufficientAccounts = 37,
 
     // === Oracle (on-chain: 6040-6044) ===
     #[msg("Oracle price is stale — exceeds staleness threshold")]

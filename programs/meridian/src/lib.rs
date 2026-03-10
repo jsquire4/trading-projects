@@ -13,6 +13,10 @@ pub use instructions::initialize_config::*;
 pub use instructions::create_strike_market::*;
 pub use instructions::set_market_alt::*;
 pub use instructions::mint_pair::*;
+pub use instructions::place_order::*;
+pub use instructions::cancel_order::*;
+pub use instructions::pause::*;
+pub use instructions::unpause::*;
 
 declare_id!("7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth");
 
@@ -68,5 +72,32 @@ pub mod meridian {
 
     pub fn allocate_order_book(ctx: Context<AllocateOrderBook>, market_key: Pubkey) -> Result<()> {
         instructions::allocate_order_book::handle_allocate_order_book(ctx, market_key)
+    }
+
+    pub fn place_order<'info>(
+        ctx: Context<'_, '_, '_, 'info, PlaceOrder<'info>>,
+        side: u8,
+        price: u8,
+        quantity: u64,
+        order_type: u8,
+        max_fills: u8,
+    ) -> Result<()> {
+        instructions::place_order::handle_place_order(ctx, side, price, quantity, order_type, max_fills)
+    }
+
+    pub fn cancel_order(
+        ctx: Context<CancelOrder>,
+        price: u8,
+        order_id: u64,
+    ) -> Result<()> {
+        instructions::cancel_order::handle_cancel_order(ctx, price, order_id)
+    }
+
+    pub fn pause(ctx: Context<Pause>, market: Option<Pubkey>) -> Result<()> {
+        instructions::pause::handle_pause(ctx, market)
+    }
+
+    pub fn unpause(ctx: Context<Unpause>, market: Option<Pubkey>) -> Result<()> {
+        instructions::unpause::handle_unpause(ctx, market)
     }
 }

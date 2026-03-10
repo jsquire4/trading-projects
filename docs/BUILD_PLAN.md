@@ -605,10 +605,10 @@ Run `/complexity-sweep` across all Phase 1 + 2 code. This is the first sweep —
 
 ---
 
-### Phase 3: Full Lifecycle ⚠️ IN PROGRESS (Stage 3A code complete, not yet verified)
+### Phase 3: Full Lifecycle ⚠️ IN PROGRESS (Stage 3A complete, Stage 3B next)
 **Goal**: Complete economic loop. Markets settle, winners get paid. Daily automation running.
 
-**Stage 3A — Sequential then parallel: settlement + redemption (funds-critical)** ✅ CODE COMPLETE (committed, not pushed — needs test verification after Rust toolchain fix)
+**Stage 3A — Sequential then parallel: settlement + redemption (funds-critical)** ✅ COMPLETE (87 tests passing, audited, pushed)
 
 ```
 error codes (0 — needed by all instructions below)

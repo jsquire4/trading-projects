@@ -112,8 +112,9 @@ is_closed: bool            // 1  — true after partial close_market (Phase 6). 
 previous_close: u64        // 8  — reference price for display
 settled_at: i64            // 8  — settlement timestamp (0 if unsettled)
 override_deadline: i64     // 8  — settled_at + 3600; admin can override until this time. 0 if unsettled.
+override_count: u8         // 1  — number of overrides used (max 3). Prevents indefinite limbo.
 bump: u8                   // 1
-_padding: [u8; 5]          // 5  — alignment (was 6, is_closed took 1)
+_padding: [u8; 4]          // 4  — alignment (was 6, is_closed took 1, override_count took 1)
 ```
 
 ### OrderBook (ZeroCopy, ~126 KB)
@@ -192,7 +193,7 @@ SettlementEvent {
 | `cancel_order` | Order owner only | Can cancel anytime, including post-settlement. Returns escrowed asset (USDC, Yes, or No) based on order's `side` field. |
 | `settle_market` | Anyone | `Clock::get() >= market_close_unix`. Oracle staleness (120s settlement threshold) + confidence (0.5% bps) validated. Sets outcome + `override_deadline = settled_at + 3600`. |
 | `admin_settle` | Admin only | `Clock::get() >= market_close_unix + 3600` (1hr delay). Accepts manual price. Fails if already settled. This is the "oracle completely failed" fallback — if the oracle recovers within the first hour, anyone can call `settle_market` first, making `admin_settle` unnecessary (intended behavior: oracle settlement is always preferred). |
-| `admin_override_settlement` | Admin only | `Clock::get() < override_deadline` (within 1hr of original settlement). Accepts corrected price. Rewrites outcome + settlement_price. Resets `override_deadline = now + 3600` (one more hour for further correction). After deadline, outcome is truly final. |
+| `admin_override_settlement` | Admin only | `Clock::get() < override_deadline` (within 1hr of original settlement). Requires `is_settled == true`. Accepts corrected price. Rewrites outcome + settlement_price. Resets `override_deadline = now + 3600`. Increments `override_count`; fails with `MaxOverridesExceeded` if `override_count >= 3`. After deadline or max overrides, outcome is truly final. |
 | `redeem` | Any token holder | Two modes with distinct preconditions: **(1) Pair burn** (Yes + No → $1 USDC): available **anytime**, no settlement required, not blocked by override window — economically the inverse of `mint_pair`, outcome-independent. **(2) Winner/loser redemption** (winning → $1, losing → $0): requires `is_settled == true`, **blocked during override window** (first hour after settlement) to prevent payouts based on potentially incorrect outcome. |
 | `crank_cancel` | Anyone (permissionless) | Market must be settled. Iterates up to 32 order slots per call, cancels each and returns escrow (USDC, Yes, or No tokens based on order's `side`) to owner. Returns count of cancelled orders. Settlement service cranks until 0 remain. **Not blocked by override window** — escrow refunds are outcome-independent. No rate limiting needed — callers pay their own tx fees (natural rate limit), calls are idempotent, and external crankers are welcome (they reduce settlement service load and speed up escrow returns). |
 | `pause` / `unpause` | Admin only | Sets `is_paused` on GlobalConfig (global) or StrikeMarket (per-market). |
@@ -222,12 +223,14 @@ SettlementEvent {
 ## Known Limitations (Document in Architecture Doc)
 
 1. **Self-trades are allowed** — a user can fill their own orders. No economic harm, just wasteful.
-2. **Admin trust assumption** — admin can call `admin_settle` with arbitrary price after 1hr delay, or `admin_override_settlement` to correct a bad oracle settlement within 1hr. No on-chain governance. Mitigated: override window is time-limited and resets only once per override call; outcome becomes truly immutable after deadline.
+2. **Admin trust assumption** — admin can call `admin_settle` with arbitrary price after 1hr delay, or `admin_override_settlement` to correct a bad oracle settlement within 1hr. No on-chain governance. Mitigated: override window is time-limited, capped at 3 overrides (3 hours total), and outcome becomes truly immutable after deadline or cap.
 3. **Market account closure is phased** (Phase 6) — on devnet, settled markets remain on-chain forever (free airdrops cover rent). On mainnet, three-phase lifecycle: `close_market` (partial close at 90 days, reclaims ~98% of rent), `treasury_redeem` (indefinite late claims), `cleanup_market` (final close once supply = 0). Orphaned mints from lost wallets (~0.004 SOL/market) remain indefinitely — acceptable cost. See DEV_LOG for future cleanup paths (Token-2022 migration, governance-gated burns, economic incentives).
 4. **Mock oracle is centralized** — single authority keypair. Compromise = bad prices. Swap for Pyth on mainnet (Phase 6).
 5. **Order book depth** — 16 orders per price level. If exceeded, new orders at that level are rejected with `OrderBookFull` (6051). Frontend should display "This price level is full — try a different price." Sufficient for prototype.
 6. **No partial redemption** — `redeem` burns all of a user's tokens for a market in one call. Users who want to redeem only a portion must first transfer the remainder to another wallet. Simpler implementation; the spec does not require partial redemption. If needed later, add a `quantity` parameter to `redeem`.
-7. **Multi-wallet position constraint bypass** — On-chain position checks (`ConflictingPosition`) enforce single-wallet constraints, but SPL tokens are freely transferable. A user could transfer No to wallet B, then Buy Yes from wallet A. This requires deliberate effort and is the user's own capital inefficiency — not a safety risk.
+7. **Override cap** — admin can override settlement up to 3 times (3 hours total window). After that, outcome is truly final regardless of deadline. Prevents indefinite market limbo.
+8. **Order slot spam** — a user could fill all 16 slots at a price level with minimum-size orders (1 token each, $0.01–$0.99 cost), blocking other users at that level. Mitigation: `cancel_order` is permissionless for the owner, and `crank_cancel` clears post-settlement. Mainnet mitigation: increase `MIN_ORDER_SIZE` to 10 tokens ($0.10–$9.90 cost per order), making spam economically costly.
+9. **Multi-wallet position constraint bypass** — On-chain position checks (`ConflictingPosition`) enforce single-wallet constraints, but SPL tokens are freely transferable. A user could transfer No to wallet B, then Buy Yes from wallet A. This requires deliberate effort and is the user's own capital inefficiency — not a safety risk.
 
 ---
 
@@ -381,15 +384,6 @@ Run `/audit` against all Phase 1 code. Verify:
 
 ---
 
-### Phase 1.5: Complexity Sweep
-Run `/complexity-sweep` across all Phase 1 code. Focus areas:
-- Rust: instruction handler length (max ~300 lines/file), state account complexity, error handling consistency
-- TypeScript: PDA helpers, Tradier client, math libs — flag any function > 40 lines or file > 300 lines
-- Identify any premature abstractions or missing extractions before Phase 2 builds on top
-- If issues found, refactor before proceeding. Chain into `/plan-implementation` if refactoring is non-trivial.
-
----
-
 ### Phase 2: Trading
 **Goal**: Users can place orders. Matching engine fills. All 4 trade paths working.
 
@@ -458,6 +452,8 @@ Once gate 3.5 is complete, the following can proceed in parallel:
   Worst case: 19 fixed + 3 × 10 (swap) = 49 accounts, or 19 + 3 × 5 (merge/burn) = 34 accounts.
   With ALTs: 49 accounts × 1 byte = 49 bytes of keys. Well under 1,232-byte tx limit.
   ```
+
+  **Remaining accounts staleness**: The on-chain book may change between client read and tx landing. The matching engine handles cancelled resting orders gracefully (skips to next). To handle missing maker ATAs: (1) client should over-include remaining_accounts for `max_fills + 2` makers (unused accounts cost ~1 byte each with ALT, negligible); (2) on-chain, if the engine encounters a fill where the maker's accounts aren't in remaining_accounts, skip that fill and advance to the next resting order — the unfilled maker's order stays on the book. Add a `skipped_fills` counter to the FillEvent so the client knows fills were missed and can retry.
 - [ ] `cancel_order` instruction (`instructions/cancel_order.rs` only): owner-only, refund from escrow (checks order's `side` to return USDC, Yes, or No), cancel by `(price_level, order_id)`. Works post-settlement.
 - [ ] `pause` / `unpause` instructions (`instructions/pause.rs` and `instructions/unpause.rs`): admin only. Global (`GlobalConfig.is_paused`) or per-market (`StrikeMarket.is_paused`). Reads/writes `is_paused` flags — no dependency on matching engine or escrow.
 
@@ -488,7 +484,7 @@ position constraints (needs OrderForm)
 
 Once IDL is generated, the following run in parallel (truly independent — no shared imports):
 - [ ] Frontend wallet adapter + Anchor program client hooks (`useAnchorProgram`)
-- [ ] `lib/orderbook.ts`: `buildNoView(book)` — separates USDC bids, Yes asks, and No-backed bids into Yes/No depth views. Depth aggregation, spread calculation. No-backed bids at price X appear as No asks at price (100-X) in the Yes perspective. **Verification requirement**: unit tests must confirm that the No perspective correctly inverts prices for all three order side types — a USDC bid at price 60 (Buy Yes at $0.60) must appear as a No ask at price 40 ($0.40) in the No view; a Yes ask at price 70 must appear as a No bid at price 30; a No-backed bid at price 55 must appear as real No depth at price 55 (no inversion — it's already a No-native order). Test edge cases: price 1 → 99, price 99 → 1, price 50 → 50.
+- [ ] `lib/orderbook.ts`: `buildNoView(book)` — separates USDC bids, Yes asks, and No-backed bids into Yes/No depth views. Depth aggregation, spread calculation. No-backed bids at price X appear as No asks at price (100-X) in the Yes perspective. **Custom deserializer**: Do NOT use Anchor's generic `program.account.orderBook.fetch()` for the 126 KB ZeroCopy OrderBook — it allocates thousands of objects. Instead, write a `deserializeOrderBook(buffer: Buffer)` function that reads the raw buffer with `DataView`, skips inactive slots (`is_active == false`), and returns only active orders grouped by price level. This turns a 126 KB parse into a sparse read of only live orders. **Verification requirement**: unit tests must confirm that the No perspective correctly inverts prices for all three order side types — a USDC bid at price 60 (Buy Yes at $0.60) must appear as a No ask at price 40 ($0.40) in the No view; a Yes ask at price 70 must appear as a No bid at price 30; a No-backed bid at price 55 must appear as real No depth at price 55 (no inversion — it's already a No-native order). Test edge cases: price 1 → 99, price 99 → 1, price 50 → 50.
 - [ ] **Devnet faucet**: `/api/faucet/sol` (calls `connection.requestAirdrop`, 2 SOL per click) + `/api/faucet/usdc` (server-side mint-to using faucet keypair, 1000 USDC per click). Rate-limited: 1 request per wallet per 60 seconds (in-memory map, no DB). Faucet keypair = USDC mint authority, stored in `FAUCET_KEYPAIR` env var (base58-encoded secret key).
 
 Once wallet adapter is complete (lib/orderbook.ts and faucet can still be in-flight):
@@ -546,12 +542,15 @@ Run `/audit` against all Phase 2 code. Verify:
 
 ---
 
-### Phase 2.5: Complexity Sweep
-Run `/complexity-sweep` across all Phase 1 + 2 code. Focus areas:
+### Phase 2.5: Complexity Sweep (covers Phase 1 + 2)
+Run `/complexity-sweep` across all Phase 1 + 2 code. This is the first sweep — Phase 1 alone doesn't produce enough code to warrant a standalone pass, but after Phase 2 the matching engine, escrow logic, and 6 instructions are all present. Focus areas:
+- Rust: instruction handler length (max ~300 lines/file), state account complexity, error handling consistency
 - Rust: matching engine complexity (most likely hotspot — partial fills, sweep logic, three escrow types, merge/burn path), `place_order` handler length (handles all three side types)
+- TypeScript: PDA helpers, Tradier client, math libs — flag any function > 40 lines or file > 300 lines
 - TypeScript: frontend hooks and components — flag state duplication, oversized components (>150 lines), hooks doing too much
 - Order book data flow: is the path from on-chain account → hook → component clean, or are there unnecessary transforms?
 - Identify coupling between matching engine and instruction handlers — engine should be pure functions, handlers should be thin glue
+- Identify any premature abstractions or missing extractions
 - If issues found, refactor before proceeding. Phase 3 adds settlement on top of the matching engine — any complexity debt here compounds.
 
 ---
@@ -576,7 +575,7 @@ redeem (4) ∥ crank_cancel (5)
 
 Once `settle_market` is complete, the following are parallel (independent preconditions, no shared code paths — each writes only its own instruction file):
 - [ ] `admin_settle` instruction (`instructions/admin_settle.rs` only): admin only, requires `Clock >= market_close_unix + 3600`. Accepts manual price. Fails if already settled. (For unsettled markets where oracle failed entirely.)
-- [ ] `admin_override_settlement` instruction (`instructions/admin_override_settlement.rs` only): admin only, requires `Clock < override_deadline`. Corrects outcome + settlement_price. Resets `override_deadline = now + 3600`. Must correctly flip winning/losing status. (For already-settled markets where oracle was wrong.)
+- [ ] `admin_override_settlement` instruction (`instructions/admin_override_settlement.rs` only): admin only, requires `is_settled == true` AND `Clock < override_deadline` AND `override_count < 3`. Corrects outcome + settlement_price. Resets `override_deadline = now + 3600`. Increments `override_count`. Must correctly flip winning/losing status. (For already-settled markets where oracle was wrong.)
 
 Once both admin settlement paths are complete, the following are parallel (no dependency on each other — each writes only its own instruction file):
 - [ ] `redeem` instruction (`instructions/redeem.rs` only): two modes — **(1) Pair burn** (Yes + No → $1 USDC): available anytime, no settlement required, not blocked by override window (outcome-independent, inverse of `mint_pair`). **(2) Winner/loser redemption** (winning → $1, losing → $0): requires `is_settled == true`, **blocked during override window** (`Clock < override_deadline`). Needs override logic finalized to correctly check the window for mode 2.
@@ -639,12 +638,15 @@ On-chain tests (parallel with each other):
 - [ ] Settlement: at-strike (Yes wins, >= rule), above-strike (Yes wins), below-strike (No wins)
 - [ ] Oracle validation: stale price rejected (>120s), wide confidence rejected (>0.5%), valid price accepted
 - [ ] `admin_settle`: delay enforced (1hr after market close), succeeds after delay, fails if already settled
-- [ ] `admin_override_settlement`: succeeds within window, fails after deadline, flips outcome correctly, resets deadline
+- [ ] `admin_override_settlement`: requires `is_settled == true`, succeeds within window, fails after deadline, flips outcome correctly, resets deadline, increments `override_count`, fails with `MaxOverridesExceeded` after 3 overrides
 - [ ] `redeem` winner/loser mode blocked during override window (`RedemptionBlockedOverride`), succeeds immediately after deadline passes
 - [ ] `redeem` pair burn mode succeeds during override window (outcome-independent, not blocked)
 - [ ] `crank_cancel` succeeds during override window (escrow refunds are outcome-independent)
 - [ ] Admin overrides outcome during window → post-deadline `redeem` pays based on corrected outcome, not original
+- [ ] Admin override count: first 3 overrides succeed, 4th fails with `MaxOverridesExceeded` even if deadline hasn't passed
 - [ ] `crank_cancel` mid-flight during admin override → crank unaffected (returns same assets regardless of outcome flip)
+- [ ] Pair burn during override, then admin flips outcome: user A pair-burns during override window (gets $1), admin flips outcome, user B redeems after deadline — user B's payout reflects corrected outcome, vault balance is consistent (`total_minted - total_redeemed` accounts for both the pair burn and the redemption)
+- [ ] `admin_override_settlement` fails with `MaxOverridesExceeded` after 3 overrides — outcome is final regardless of deadline
 - [ ] Redeem: winning tokens paid $1, losing tokens zeroed, vault empties after full redemption
 - [ ] Redeem Yes+No pair burn: burns both for $1 USDC, works pre-settlement (no `is_settled` requirement), works during override window
 - [ ] `crank_cancel`: batch processing (32 slots), skip inactive, reject unsettled market, returns 0 when empty
@@ -818,7 +820,8 @@ error codes + is_closed field (gate)
 
 Gate (must complete before both tracks):
 1. Add `is_closed: bool` field to StrikeMarket schema (takes 1 byte from existing padding).
-2. Error codes: add all Phase 6 codes to `error.rs` (these are the same codes documented in the Error Codes reference section below — listed here so the gate step is self-contained):
+2. Add `MarketClosed` (6025) constraint checks to existing instructions: `mint_pair`, `place_order`, `settle_market`, and standard `redeem` must all reject with `MarketClosed` when `is_closed == true`. Users of partially-closed markets must use `treasury_redeem` instead.
+3. Error codes: add all Phase 6 codes to `error.rs` (these are the same codes documented in the Error Codes reference section below — listed here so the gate step is self-contained):
    - `6110 CloseMarketNotSettled` — market not settled
    - `6111 CloseMarketOverrideActive` — override window still open
    - `6112 CloseMarketOrderBookNotEmpty` — resting orders remain
@@ -874,7 +877,7 @@ All depend on 6A being tested on devnet, but not on each other.
   - Output: Discord webhook notifications. Configurable via `DISCORD_WEBHOOK_URL` env var.
 - [ ] Program upgrade authority transfer: Script to transfer upgrade authority from deployer to a Squads multisig. Optional — can also revoke with `solana program set-upgrade-authority --final` once stable. Document both paths in README.
 - [ ] Rent budget calculator: Script that estimates total rent cost for N stocks × M strikes × D days. Outputs SOL needed. Helps plan wallet funding.
-- [ ] `close_market` automation: Extend settlement service to run a daily sweep — find markets > 90 days post-settlement with unredeemed tokens, call `close_market` (partial), log results. Also run `cleanup_market` for any partially-closed markets where mint supply has reached 0.
+- [ ] `close_market` automation: Extend settlement service to run a daily sweep — find markets > 90 days post-settlement with unredeemed tokens, call `close_market` (partial), log results. Also run `cleanup_market` for any partially-closed markets where mint supply has reached 0. **Treasury balance safety**: before sweeping, verify treasury balance can cover all pending `treasury_redeem` claims (sum of `total_minted - total_redeemed` across all partially-closed markets). If the treasury would be underfunded after the sweep, alert admin and skip. Process `treasury_redeem` claims before new `close_market` sweeps when possible.
 - [ ] Frontend: "Market closing in X days" warning for markets approaching 90-day deadline. Post-close: "Redeem via treasury" flow using `treasury_redeem`.
 - [ ] **Network-aware UI layer**: All UX differences between devnet and mainnet driven by `NEXT_PUBLIC_SOLANA_NETWORK` env var. No code forks — conditional rendering based on a single `useNetwork()` hook.
   - **Header badge**: "Devnet" (green) or "Mainnet" (orange) — always visible so users know which network they're on.
@@ -953,6 +956,7 @@ Comprehensive error handling is non-negotiable — when money is involved, trust
 | 6022 | `MarketPaused` | Trade/mint while market or global is paused |
 | 6023 | `AlreadyPaused` | `pause` on already-paused target |
 | 6024 | `NotPaused` | `unpause` on non-paused target |
+| 6025 | `MarketClosed` | Operation attempted on a partially-closed market (`is_closed == true`). Blocks `mint_pair`, `place_order`, `settle_market`, and standard `redeem` — user must use `treasury_redeem` instead. |
 
 ### Account Validation
 | Code | Name | Trigger |
@@ -1007,6 +1011,7 @@ Comprehensive error handling is non-negotiable — when money is involved, trust
 | 6072 | `OverrideWindowExpired` | `admin_override_settlement` after `override_deadline` |
 | 6073 | `AlreadySettled` | `admin_settle` on already-settled market |
 | 6074 | `InvalidOutcome` | Outcome value not 0, 1, or 2 |
+| 6075 | `MaxOverridesExceeded` | `admin_override_settlement` called but `override_count >= 3` — no more overrides allowed |
 
 ### Redemption
 | Code | Name | Trigger |
@@ -1155,7 +1160,7 @@ make clean        # remove build artifacts + target dirs
 | 5 | `cancel_order` | 2 | Owner only. Refund from escrow (USDC, Yes, or No based on order's `side`). Works post-settlement too. Cancel by `(price_level, order_id)`. |
 | 6 | `settle_market` | 3 | Anyone calls. Requires `Clock >= market_close_unix`. Oracle staleness (120s) + confidence (0.5% bps) validated. Sets outcome + `override_deadline = settled_at + 3600`. Phase 6 adds Pyth oracle path via `oracle_type` flag in GlobalConfig. |
 | 7 | `admin_settle` | 3 | Admin only. Requires `Clock >= market_close_unix + 3600`. Accepts manual price. Fails if already settled. |
-| 8 | `admin_override_settlement` | 3 | Admin only. `Clock < override_deadline`. Corrects outcome + settlement_price. Resets `override_deadline = now + 3600`. After deadline, outcome is truly final. |
+| 8 | `admin_override_settlement` | 3 | Admin only. Requires `is_settled == true`, `Clock < override_deadline`, `override_count < 3`. Corrects outcome + settlement_price. Resets `override_deadline = now + 3600`. Increments `override_count`. After deadline or 3 overrides, outcome is truly final. |
 | 9 | `redeem` | 3 | Two modes: **(1) Pair burn** (Yes + No → $1): anytime, no settlement required, not blocked by override window (outcome-independent). **(2) Winner/loser** (winning → $1, losing → $0): requires settlement, **blocked during override window** (1hr post-settlement). |
 | 10 | `crank_cancel` | 3 | Permissionless. Market must be settled. Iterates up to 32 order slots per call, returns escrow (USDC, Yes, or No) to owners. **Not blocked by override window** (escrow refunds are outcome-independent — see Override Window Safety below). |
 | 11 | `pause` | 3 | Admin only. Global (`GlobalConfig.is_paused`) or per-market (`StrikeMarket.is_paused`). |
@@ -1164,7 +1169,7 @@ make clean        # remove build artifacts + target dirs
 | 14 | `treasury_redeem` | 6 | Permissionless, no time limit. Burns tokens from partially-closed markets, pays winners $1 USDC from Treasury PDA. Late-claim path — users always have recourse. |
 | 15 | `cleanup_market` | 6 | Admin only. Closes remaining 3 accounts (StrikeMarket + mints) once Yes and No mint supply both = 0. Final cleanup for zero on-chain footprint. |
 
-Note: `add_strike` folded into `create_strike_market` (same logic, admin access). `auto_redeem` folded into `redeem` (user can burn Yes+No pair for $1 anytime). Sell No is handled via `place_order(side=2)` — No-backed bid paradigm. No tokens are escrowed in `no_escrow`; when matched against a Yes ask, both tokens are merge/burned and $1 released from vault. No separate `sell_no` instruction needed. `crank_cancel` is permissionless post-settlement cleanup — iterates order slots in batches, returns escrow funds (USDC, Yes, or No) to owners. Settlement service calls in a loop; manual `cancel_order` still works alongside for users who act first. `admin_override_settlement` provides a 1hr safety valve — admin can correct a bad oracle settlement within the override window. Redemptions blocked during this window to prevent payouts on a potentially incorrect outcome. Override resets the deadline, giving another hour. After the deadline passes, outcome is truly immutable. `close_market` is the mainnet sustainability instruction — without it, rent accumulates without bound from expired markets. `treasury_redeem` ensures users always have a claim path, even after market accounts are partially closed. `cleanup_market` is the final step — closes the remaining settlement record once all tokens are burned.
+Note: `add_strike` folded into `create_strike_market` (same logic, admin access). `auto_redeem` folded into `redeem` (user can burn Yes+No pair for $1 anytime). Sell No is handled via `place_order(side=2)` — No-backed bid paradigm. No tokens are escrowed in `no_escrow`; when matched against a Yes ask, both tokens are merge/burned and $1 released from vault. No separate `sell_no` instruction needed. `crank_cancel` is permissionless post-settlement cleanup — iterates order slots in batches, returns escrow funds (USDC, Yes, or No) to owners. Settlement service calls in a loop; manual `cancel_order` still works alongside for users who act first. `admin_override_settlement` provides a 1hr safety valve — admin can correct a bad oracle settlement within the override window. Redemptions blocked during this window to prevent payouts on a potentially incorrect outcome. Override resets the deadline, giving another hour, and increments `override_count`. Maximum 3 overrides (3 hours total window) — after that, `MaxOverridesExceeded` prevents further changes. After the deadline passes or max overrides are used, outcome is truly immutable. `close_market` is the mainnet sustainability instruction — without it, rent accumulates without bound from expired markets. `treasury_redeem` ensures users always have a claim path, even after market accounts are partially closed. `cleanup_market` is the final step — closes the remaining settlement record once all tokens are burned.
 
 ---
 
@@ -1440,6 +1445,24 @@ Railway project: meridian
 - **Cost**: Railway $5/mo free credit covers devnet. Mainnet adds ~$5-10/mo for 5 always-on services. Persistent volumes add ~$0.25/mo per environment (1GB each for event-indexer).
 - **Local dev**: `make dev` and `make dev:mainnet` run the full stack locally. Railway is the deployed target.
 
+### Transaction Reliability
+
+Solana transactions can be dropped by validators (never landed), or expire (blockhash too old). Both are common on devnet and occasional on mainnet. Every transaction submitter must handle this.
+
+**Services (settlement, AMM bot, market initializer):**
+- Use `sendAndConfirmTransaction` with `maxRetries: 3`, `skipPreflight: false`
+- On confirmation timeout (30s), check `isBlockhashValid()` — if expired, rebuild the transaction with a fresh `recentBlockhash` and resubmit. Cap at 3 full rebuilds before alerting.
+- Settlement service: if a `settle_market` tx fails 3 times, fall through to the existing 30s retry loop (which already handles oracle staleness). If `crank_cancel` tx fails, retry immediately — cranks are idempotent.
+
+**Priority fees:**
+- Devnet: set `ComputeBudgetProgram.setComputeUnitPrice(1)` on all transactions. Trivial cost, helps with validator scheduling.
+- Mainnet: use dynamic fee strategy — query `getRecentPrioritizationFees()` for the program's accounts, set price to the 50th percentile. Add a `PRIORITY_FEE_LAMPORTS` env var as override for spikes.
+
+**Frontend `useTransaction` hook:**
+- Already has sign → send → confirm flow. Add blockhash expiry detection: if confirmation times out, check `isBlockhashValid()`. If expired, rebuild the transaction, re-sign, and resubmit. Show "Transaction expired, retrying..." toast.
+- Cap at 2 automatic retries, then show "Transaction failed — please try again" with a manual retry button.
+- Never silently retry `place_order` — a retry could double-place if the first tx actually landed but confirmation was slow. Check the order book for the user's order before retrying.
+
 ### Transaction Size & Compute Budget
 - Solana tx limit: 1,232 bytes. All transactions use v0 + ALTs, so account key overhead is ~1 byte each instead of 32. Size is never a constraint, even for heaviest instructions (Buy No, Sell No merge/burn via `place_order`).
 - Default compute: 200,000 CUs. Simple operations (mint, cancel) are well under. Standard swap fills: request 400k CUs (`max_fills=10`). **Merge/burn fills (No-backed bid × Yes ask): request 800k CUs** (`max_fills=5`) — each merge/burn involves 4 CPIs (2 burns + 2 transfers), estimated ~80k–120k CUs per fill. 800k provides headroom at 5 fills. Solana max is 1,400,000 CUs. Exact values locked by CU measurement gate in Phase 2C.
@@ -1543,7 +1566,7 @@ vault_debit = quantity                 // exactly $1.00 per pair in token lampor
 ### Trade History & Event Storage
 - **On-chain**: Anchor `emit!` events for every fill, cancel, settle, redeem. Events are in transaction logs.
 - **Event indexer** (`services/event-indexer/`): Long-running service that watches `connection.onLogs(programId)` for Anchor events, parses them, and persists to a **SQLite database** (`events.db`). On startup, backfills missed events via `getSignaturesForAddress` (starting from last-processed signature checkpoint in the DB — incremental, not full rescan). Exposes a REST API consumed by the frontend History page and Settlement Analytics. Eliminates slow on-the-fly transaction parsing.
-- **Storage**: SQLite via `better-sqlite3`. **Must enable WAL mode** (`PRAGMA journal_mode=WAL`) at startup — `better-sqlite3` is synchronous, so without WAL, long writes (batch backfill) block API reads. WAL allows concurrent readers during writes. Tables: `fills`, `settlements`, `cancels`, `redeems`, plus a `checkpoints` table (last processed tx signature per program). Queries use SQL filtering (market, type, date range, pagination) instead of scanning files. Atomic writes — no partial-file corruption risk.
+- **Storage**: SQLite via `better-sqlite3`. **Must enable WAL mode** (`PRAGMA journal_mode=WAL`) at startup — `better-sqlite3` is synchronous, so without WAL, long writes (batch backfill) block API reads. WAL allows concurrent readers during writes. Tables: `fills`, `settlements`, `cancels`, `redeems`, plus a `checkpoints` table (last processed tx signature per program). Queries use SQL filtering (market, type, date range, pagination) instead of scanning files. Atomic writes — no partial-file corruption risk. **Scaling path**: if API read latency exceeds 100ms under load, split into a writer process (log watcher → SQLite) and a read replica (Litestream or periodic `VACUUM INTO` to a read-only copy served by the API).
 - **Railway deployment**: 1GB persistent volume attached to the `event-indexer` service, mounted at `/data`. SQLite DB at `/data/events.db`. Volume survives redeploys, restarts, and service rebuilds ($0.25/month). Volume is single-attach — only the event-indexer reads/writes the DB; frontend hits the indexer's REST API. Backfill runs once on first deploy; subsequent deploys resume from checkpoint.
 - **Local development**: DB file at `data/events.db` (gitignored). Created automatically on first run.
 - **Frontend History page**: Queries the event indexer via `/api/events/*` Next.js proxy routes. TanStack Query with polling. Falls back to direct `getSignaturesForAddress` parsing if indexer is down.
@@ -1552,7 +1575,7 @@ vault_debit = quantity                 // exactly $1.00 per pair in token lampor
 ### Real-Time Updates
 - **Order book + positions**: Solana `connection.onAccountChange(orderBookPDA)` WebSocket subscription — instant updates when any order is placed/filled/cancelled. Used alongside TanStack Query (polling as fallback).
 - **Oracle prices**: `connection.onAccountChange(priceFeedPDA)` — live price updates from oracle feeder.
-- **Tradier streaming**: `stream.tradier.com/v1/markets/events` for live intraday stock prices in the oracle feeder. Streaming doesn't count against rate limits. **Disconnect handling**: heartbeat timeout (no data for 30s during market hours → assume disconnected), exponential backoff reconnect (1s, 2s, 4s, … capped at 60s), automatic REST polling fallback (`/v1/markets/quotes` every 5s) while reconnecting. Alert via `alerting.ts` if disconnected for >60s during market hours — stale oracle prices risk failed settlements.
+- **Tradier streaming**: `stream.tradier.com/v1/markets/events` for live intraday stock prices in the oracle feeder. Streaming doesn't count against rate limits. **Disconnect handling**: heartbeat timeout (no data for 30s during market hours → assume disconnected), exponential backoff reconnect (1s, 2s, 4s, … capped at 60s), automatic REST polling fallback (`/v1/markets/quotes` every 5s) while reconnecting. **Context-aware alerting**: if disconnect occurs within 30 minutes of market close, alert immediately (after 10s, not 60s) and skip backoff delay — fall back to REST polling at 5s interval without waiting. Outside the close window, alert after 60s as normal. Stale oracle prices near close risk failed settlements — the 30-minute window is the most critical period.
 
 ### Prerequisites (README)
 - Rust 1.94+ (tested with 1.94.0; Anchor 0.30.x requires 1.75+ minimum)

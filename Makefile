@@ -1,11 +1,23 @@
 # Meridian — Development Commands
 #
-# make dev       — Start frontend + all backend services
-# make services  — Start all backend services
-# make web       — Start frontend only
-# make test      — Run all tests (on-chain + frontend + services)
+# make install    — Install all dependencies (root + frontend + services)
+# make dev        — Start frontend + all backend services
+# make services   — Start all backend services
+# make web        — Start frontend only
+# make test       — Run all tests (on-chain + frontend + services)
+# make clean      — Stop all background processes
 
-.PHONY: dev services web test clean
+.PHONY: install dev services web test clean
+
+# Install all dependencies
+install:
+	yarn install
+	cd app/meridian-web && yarn install
+	cd services/oracle-feeder && yarn install
+	cd services/amm-bot && yarn install
+	cd services/event-indexer && yarn install
+	cd services/market-initializer && yarn install
+	cd services/automation && yarn install
 
 # Start everything
 dev: web services
@@ -21,7 +33,7 @@ services:
 	cd services/event-indexer && yarn start &
 	cd services/automation && yarn start &
 	@echo "All services started in background."
-	@echo "  - oracle-feeder (Tradier → on-chain oracle)"
+	@echo "  - oracle-feeder (Tradier -> on-chain oracle)"
 	@echo "  - amm-bot (liquidity seeder)"
 	@echo "  - event-indexer (on-chain event listener + REST API)"
 	@echo "  - automation (scheduler: market-init + settlement)"
@@ -30,6 +42,9 @@ services:
 test:
 	yarn run ts-mocha -p ./tsconfig.json -t 1000000 'tests/**/*.test.ts'
 	cd app/meridian-web && yarn test run
+	cd services/amm-bot && yarn vitest run
+	cd services/market-initializer && yarn vitest run
+	cd services/event-indexer && yarn vitest run
 
 # Kill background services
 clean:

@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  anchor-tests:
+    name: Anchor Program Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.94.0
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.0"
+
+      - name: Cache Cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install Solana CLI 2.1.21
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v2.1.21/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor CLI 0.31.1
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor avm --force
+          avm install 0.31.1
+          avm use 0.31.1
+
+      - name: Install Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Install JS dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build Anchor programs
+        run: anchor build
+
+      - name: Run Anchor tests
+        run: SBF_OUT_DIR=$PWD/target/deploy yarn run ts-mocha -p ./tsconfig.json -t 1000000 'tests/**/*.test.ts'
+
+  frontend-tests:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/meridian-web
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: app/meridian-web/node_modules
+          key: ${{ runner.os }}-frontend-${{ hashFiles('app/meridian-web/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Run tests
+        run: npx vitest run
+
+  service-tests:
+    name: Service Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Install root dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run AMM bot tests
+        run: cd services/amm-bot && yarn install --frozen-lockfile && npx vitest run
+
+      - name: Run market-initializer tests
+        run: cd services/market-initializer && yarn install --frozen-lockfile && npx vitest run
+
+      - name: Run event-indexer tests
+        run: cd services/event-indexer && yarn install --frozen-lockfile && npx vitest run

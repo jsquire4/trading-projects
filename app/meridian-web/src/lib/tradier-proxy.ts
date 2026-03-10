@@ -141,8 +141,11 @@ async function tradierFetch(path: string, params?: Record<string, string>): Prom
   });
 
   if (!res.ok) {
+    // Don't forward raw Tradier error body to callers — it may contain
+    // sensitive details like account info or internal API messages (#18).
     const body = await res.text().catch(() => "");
-    throw new Error(`Tradier API ${res.status}: ${body}`);
+    console.error(`Tradier API error ${res.status}: ${body}`);
+    throw new Error(`Tradier API request failed with status ${res.status}`);
   }
 
   return res.json();

@@ -37,7 +37,7 @@ export function useTradierQuotes(symbols: string[]) {
     queryKey: ["tradier-quotes", symbols.sort().join(",")],
     queryFn: async () => {
       if (symbols.length === 0) return [];
-      const res = await fetch(`/api/tradier/quotes?symbols=${symbols.join(",")}`);
+      const res = await fetch(`/api/tradier/quotes?symbols=${encodeURIComponent(symbols.join(","))}`);
       if (!res.ok) throw new Error(`Quotes fetch failed: ${res.status}`);
       return res.json();
     },
@@ -62,7 +62,7 @@ export function useTradierHistory(symbol: string | null, days: number = 365) {
       const startStr = start.toISOString().split("T")[0];
       const endStr = end.toISOString().split("T")[0];
       const res = await fetch(
-        `/api/tradier/history?symbol=${symbol}&start=${startStr}&end=${endStr}`,
+        `/api/tradier/history?symbol=${encodeURIComponent(symbol)}&start=${encodeURIComponent(startStr)}&end=${encodeURIComponent(endStr)}`,
       );
       if (!res.ok) throw new Error(`History fetch failed: ${res.status}`);
       return res.json();
@@ -82,7 +82,7 @@ export function useTradierOptions(symbol: string | null) {
     queryKey: ["tradier-options", symbol],
     queryFn: async () => {
       if (!symbol) return [];
-      const res = await fetch(`/api/tradier/options?symbol=${symbol}`);
+      const res = await fetch(`/api/tradier/options?symbol=${encodeURIComponent(symbol)}`);
       if (!res.ok) throw new Error(`Options fetch failed: ${res.status}`);
       return res.json();
     },
@@ -106,7 +106,8 @@ export function useIndexedEvents(options?: {
   market?: string;
   limit?: number;
 }) {
-  const { type, market, limit = 100 } = options ?? {};
+  const { type, market, limit: rawLimit = 100 } = options ?? {};
+  const limit = Math.min(rawLimit, 1000); // Cap at 1000 to prevent excessive fetches (#12)
 
   return useQuery<IndexedEvent[]>({
     queryKey: ["indexed-events", type, market, limit],

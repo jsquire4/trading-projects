@@ -63,7 +63,7 @@ function writeEnv(env: Record<string, string>): void {
 
   // ── Idempotency check ─────────────────────────────────────────────────────
   if (env["USDC_MINT"]) {
-    console.log(`USDC_MINT already set: ${env["USDC_MINT"]}`);
+    console.log(`Mock USDC mint already exists: ${env["USDC_MINT"]}`);
     try {
       const { PublicKey } = await import("@solana/web3.js");
       const mintPk = new PublicKey(env["USDC_MINT"]);

@@ -138,6 +138,18 @@ export async function initializeMarkets(): Promise<InitResult[]> {
       continue;
     }
 
+    // Guard: skip tickers with missing or invalid previous close (#7)
+    if (!quote.prevclose || quote.prevclose <= 0) {
+      results.push({
+        ticker,
+        previousClose: quote.prevclose ?? 0,
+        strikesCreated: 0,
+        strikesSkipped: 0,
+        errors: [`Invalid prevclose for ${ticker}: ${quote.prevclose}`],
+      });
+      continue;
+    }
+
     const result = await processTickerStrikes(
       program,
       connection,
@@ -271,6 +283,45 @@ async function createSingleMarket(
   // ---- Idempotency check: does market already exist? -----------------------
   const existing = await connection.getAccountInfo(marketPda);
   if (existing !== null) {
+    // Market exists — check if ALT still needs to be set (#8).
+    // If market was created but ALT creation/set failed (crash recovery),
+    // the altAddress will be the default pubkey (all zeros).
+    try {
+      const marketData = await (program.account as any).strikeMarket.fetch(marketPda);
+      const altAddr = marketData.altAddress as PublicKey;
+      if (altAddr.equals(PublicKey.default)) {
+        log.info(`Market ${ticker} exists but ALT not set — creating ALT now`);
+
+        const altAccounts: MarketAccounts = {
+          market: marketPda,
+          yesMint,
+          noMint,
+          usdcVault,
+          escrowVault,
+          yesEscrow,
+          noEscrow,
+          orderBook,
+          oracleFeed,
+        };
+
+        const altAddress = await createMarketAlt(connection, admin, altAccounts);
+        await program.methods
+          .setMarketAlt(altAddress)
+          .accounts({
+            admin: admin.publicKey,
+            config: configPda,
+            market: marketPda,
+          })
+          .signers([admin])
+          .rpc({ commitment: "confirmed" });
+
+        log.info(`ALT set for existing market ${ticker}: ${altAddress.toBase58()}`);
+      }
+    } catch (err: any) {
+      log.warn(`Failed to check/set ALT for existing market ${ticker}`, {
+        error: err.message ?? String(err),
+      });
+    }
     return false; // already exists
   }
 

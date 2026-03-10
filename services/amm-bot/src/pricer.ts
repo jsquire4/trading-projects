@@ -64,6 +64,7 @@ export function binaryCallPrice(
   r: number = 0.05,
 ): number {
   // Edge cases
+  if (K <= 0) return 0.01;
   if (S <= 0) return 0.01;
   if (T <= 0) return S >= K ? 0.99 : 0.01;
   if (sigma <= 0) return S >= K ? 0.99 : 0.01;

@@ -49,6 +49,11 @@ function roundingIncrement(price: number): number {
  * duplicates are removed, and the result is sorted ascending.
  */
 export function generateBaselineStrikes(previousClose: number): StrikeResult {
+  // Guard: previousClose <= 1 would produce degenerate or zero strikes (#24)
+  if (previousClose <= 1) {
+    return { strikes: [], method: "baseline" };
+  }
+
   const offsets = [-0.09, -0.06, -0.03, 0.03, 0.06, 0.09];
   const increment = roundingIncrement(previousClose);
 
@@ -78,6 +83,11 @@ export function generateVolAwareStrikes(
   previousClose: number,
   bars: OHLCVBar[],
 ): StrikeResult {
+  // Guard: degenerate price → empty strikes (#24)
+  if (previousClose <= 1) {
+    return { strikes: [], method: "baseline" };
+  }
+
   const hv20 = historicalVolatility(bars, HV20_WINDOW);
 
   if (hv20 <= 0) {

@@ -45,6 +45,10 @@ interface HistoricalOverlayProps {
   /**
    * Yes token mid-price for each strike (dollars → cents 0-100).
    * If not supplied the line series is omitted.
+   *
+   * Note: Map keys are floating-point dollar amounts. Lookup relies on exact
+   * float equality which can miss matches for fractional strikes. This is
+   * acceptable for now since all strikes are whole-dollar integers (#22).
    */
   yesPrices?: Map<number, number>;
 }
@@ -72,9 +76,10 @@ function computeLogReturns(closes: number[]): number[] {
 /**
  * For a given strike and current price, compute what daily log return would
  * bring the current price to that strike level.
+ * Guards against strike <= 0 which would produce NaN from Math.log (#11).
  */
 function requiredReturn(currentPrice: number, strike: number): number {
-  if (currentPrice <= 0) return 0;
+  if (currentPrice <= 0 || strike <= 0) return 0;
   return Math.log(strike / currentPrice);
 }
 
@@ -124,7 +129,8 @@ export function HistoricalOverlay({
 
     return strikes.map((strike) => {
       // Bin edges in return space: the log return needed to reach (strike +/- halfBin)
-      const loReturn = requiredReturn(currentPrice, strike - halfBin);
+      // Clamp lower edge to avoid Math.log of zero or negative (#11)
+      const loReturn = requiredReturn(currentPrice, Math.max(0.01, strike - halfBin));
       const hiReturn = requiredReturn(currentPrice, strike + halfBin);
       const binLo = Math.min(loReturn, hiReturn);
       const binHi = Math.max(loReturn, hiReturn);

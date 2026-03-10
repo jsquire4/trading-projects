@@ -20,7 +20,7 @@ import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 import { TradierClient } from "../../shared/src/tradier-client.ts";
 import { createLogger } from "../../shared/src/alerting.ts";
-import { generateStrikes } from "../../../app/meridian-web/src/lib/strikes.ts";
+import { generateStrikes } from "../../shared/src/strikes.ts";
 import {
   findGlobalConfig,
   findStrikeMarket,
@@ -33,12 +33,11 @@ import {
   findOrderBook,
   findPriceFeed,
   padTicker,
-} from "../../../app/meridian-web/src/lib/pda.ts";
+} from "../../shared/src/pda.ts";
 
 import type { Meridian } from "../../shared/src/idl/meridian.ts";
 import MeridianIDL from "../../shared/src/idl/meridian.json";
 import { createMarketAlt, type MarketAccounts } from "./alt.ts";
-import { getETOffsetMinutes as getETOffset } from "../../automation/src/timezone.ts";
 
 const log = createLogger("market-initializer");
 
@@ -367,7 +366,10 @@ export function computeMarketCloseUnix(date?: Date): number {
   const month = parseInt(parts.find((p) => p.type === "month")!.value);
   const day = parseInt(parts.find((p) => p.type === "day")!.value);
 
-  const etOffsetMinutes = getETOffset(now);
+  // Compute ET-to-UTC offset (DST-aware)
+  const etStr = now.toLocaleString("en-US", { timeZone: "America/New_York" });
+  const utcStr = now.toLocaleString("en-US", { timeZone: "UTC" });
+  const etOffsetMinutes = Math.round((new Date(etStr).getTime() - new Date(utcStr).getTime()) / 60_000);
 
   // Start of day in UTC
   const startOfDayUTC = Date.UTC(year, month - 1, day, 0, 0, 0);

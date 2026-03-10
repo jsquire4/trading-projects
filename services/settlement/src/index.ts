@@ -22,7 +22,7 @@ import {
   padTicker,
   MERIDIAN_PROGRAM_ID,
   MOCK_ORACLE_PROGRAM_ID,
-} from "../../../app/meridian-web/src/lib/pda.js";
+} from "../../shared/src/pda.js";
 
 import { settleMarkets, MarketInfo, tickerFromBytes } from "./settler.js";
 import { crankCancelAll } from "./cranker.js";

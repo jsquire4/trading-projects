@@ -156,6 +156,11 @@ export function startLiveListener(
   const coder = new BorshCoder(idl);
   const programIdStr = programId.toBase58();
 
+  if (subscriptionId !== null) {
+    log.warn("Live listener already running, ignoring duplicate start");
+    return;
+  }
+
   log.info("Starting live event listener", { programId: programIdStr });
 
   subscriptionId = connection.onLogs(

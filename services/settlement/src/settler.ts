@@ -5,7 +5,7 @@
 import { Program, BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import { createLogger } from "../../shared/src/alerting.js";
-import { findGlobalConfig, findPriceFeed, padTicker } from "../../../app/meridian-web/src/lib/pda.js";
+import { findGlobalConfig, findPriceFeed, padTicker } from "../../shared/src/pda.js";
 
 const log = createLogger("settlement:settler");
 
@@ -13,8 +13,8 @@ const log = createLogger("settlement:settler");
 const ORACLE_STALE_CODE = 6040;
 const ORACLE_CONFIDENCE_TOO_WIDE_CODE = 6041;
 
-const SETTLE_SETTLE_RETRY_INTERVAL_MS = 30_000;
-const SETTLE_SETTLE_MAX_RETRY_DURATION_MS = 15 * 60 * 1000;
+const SETTLE_RETRY_INTERVAL_MS = 30_000;
+const SETTLE_MAX_RETRY_DURATION_MS = 15 * 60 * 1000;
 
 export interface MarketInfo {
   /** On-chain StrikeMarket public key */

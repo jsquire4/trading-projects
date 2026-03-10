@@ -6,7 +6,7 @@ import { Program, BN } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { createLogger } from "../../shared/src/alerting.js";
-import { findGlobalConfig } from "../../../app/meridian-web/src/lib/pda.js";
+import { findGlobalConfig } from "../../shared/src/pda.js";
 import { MarketInfo, tickerFromBytes } from "./settler.js";
 
 const log = createLogger("settlement:cranker");

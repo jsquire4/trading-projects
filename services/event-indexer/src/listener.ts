@@ -103,21 +103,20 @@ export function parseEventsFromLogs(
   const events: ParsedEvent[] = [];
   const PROGRAM_DATA_PREFIX = "Program data: ";
 
-  // Track whether we're inside the target program's execution context.
-  // Anchor events are only emitted under the correct program invoke.
-  let insideProgram = false;
+  // Track depth of target program's execution context to handle nested CPI.
+  let programDepth = 0;
 
   for (const line of logs) {
     if (line.includes(`Program ${programId} invoke`)) {
-      insideProgram = true;
+      programDepth++;
       continue;
     }
     if (line.includes(`Program ${programId} success`) || line.includes(`Program ${programId} failed`)) {
-      insideProgram = false;
+      programDepth = Math.max(0, programDepth - 1);
       continue;
     }
 
-    if (!insideProgram) continue;
+    if (programDepth === 0) continue;
     if (!line.includes(PROGRAM_DATA_PREFIX)) continue;
 
     const dataStr = line.split(PROGRAM_DATA_PREFIX)[1];
@@ -161,37 +160,42 @@ export function startLiveListener(
 
   subscriptionId = connection.onLogs(
     programId,
-    async (logResult: Logs, ctx: Context) => {
-      if (logResult.err) return;
+    (logResult: Logs, ctx: Context) => {
+      try {
+        if (logResult.err) return;
 
-      const { signature, logs: logMessages } = logResult;
-      const slot = ctx.slot;
+        const { signature, logs: logMessages } = logResult;
+        const slot = ctx.slot;
 
-      // Skip if we already persisted events for this signature
-      if (signatureExists(signature)) return;
+        if (signatureExists(signature)) return;
 
-      const events = parseEventsFromLogs(coder, logMessages, programIdStr);
+        const events = parseEventsFromLogs(coder, logMessages, programIdStr);
 
-      if (events.length === 0) return;
+        if (events.length === 0) return;
 
-      for (const event of events) {
-        insertEvent({
-          type: event.type,
-          market: event.market,
-          data: JSON.stringify(event.data),
-          signature,
+        for (const event of events) {
+          insertEvent({
+            type: event.type,
+            market: event.market,
+            data: JSON.stringify(event.data),
+            signature,
+            slot,
+            timestamp: event.timestamp,
+          });
+        }
+
+        upsertCheckpoint(signature, slot);
+
+        log.info(`Indexed ${events.length} event(s) from live tx`, {
+          signature: signature.slice(0, 16) + "...",
           slot,
-          timestamp: event.timestamp,
+          types: events.map((e) => e.type),
+        });
+      } catch (err) {
+        log.error("Error processing live log event", {
+          error: err instanceof Error ? err.message : String(err),
         });
       }
-
-      upsertCheckpoint(signature, slot);
-
-      log.info(`Indexed ${events.length} event(s) from live tx`, {
-        signature: signature.slice(0, 16) + "...",
-        slot,
-        types: events.map((e) => e.type),
-      });
     },
     "confirmed",
   );

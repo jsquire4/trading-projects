@@ -57,6 +57,7 @@ export function initDb(dbPath?: string): Database.Database {
       timestamp INTEGER NOT NULL,
       created_at TEXT DEFAULT (datetime('now'))
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_events_sig_type ON events(signature, type, market);
     CREATE INDEX IF NOT EXISTS idx_events_market ON events(market);
     CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
     CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
@@ -75,27 +76,30 @@ export function initDb(dbPath?: string): Database.Database {
 
 // --------------- Event operations ---------------
 
-const insertEventStmt = () =>
-  getDb().prepare(`
-    INSERT INTO events (type, market, data, signature, slot, timestamp)
-    VALUES (@type, @market, @data, @signature, @slot, @timestamp)
-  `);
-
 let _insertEvent: Database.Statement | null = null;
 
+function getInsertStmt(): Database.Statement {
+  if (!_insertEvent) {
+    _insertEvent = getDb().prepare(`
+      INSERT OR IGNORE INTO events (type, market, data, signature, slot, timestamp)
+      VALUES (@type, @market, @data, @signature, @slot, @timestamp)
+    `);
+  }
+  return _insertEvent;
+}
+
 export function insertEvent(row: Omit<EventRow, "id" | "created_at">): void {
-  if (!_insertEvent) _insertEvent = insertEventStmt();
-  _insertEvent.run(row);
+  getInsertStmt().run(row);
 }
 
 export function insertEventsBatch(
   rows: Omit<EventRow, "id" | "created_at">[],
 ): void {
   if (rows.length === 0) return;
-  if (!_insertEvent) _insertEvent = insertEventStmt();
+  const stmt = getInsertStmt();
   const tx = getDb().transaction((items: typeof rows) => {
     for (const row of items) {
-      _insertEvent!.run(row);
+      stmt.run(row);
     }
   });
   tx(rows);

@@ -7,6 +7,7 @@ import { BN } from "@coral-xyz/anchor";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useAnchorProgram } from "@/hooks/useAnchorProgram";
 import { useTransaction } from "@/hooks/useTransaction";
+import { USDC_MINT } from "@/hooks/useWalletState";
 import {
   findGlobalConfig,
   findOrderBook,
@@ -76,7 +77,10 @@ export function OrderForm({ marketKey, ticker, strikePrice }: OrderFormProps) {
     if (!quantityLamports || (!effectivePrice && orderType === "limit")) return null;
     const p = effectivePrice ?? 50; // placeholder for market orders
     const isBuying = side === "buy-yes" || side === "buy-no";
-    const costCents = isBuying ? p : 100 - p;
+    // For buys, cost = effective price. For sells, proceeds = user's stated price.
+    // sell-yes: effectivePrice = user price, so proceeds = p.
+    // sell-no: effectivePrice = 100 - user price, but user proceeds = user price = 100 - p.
+    const costCents = isBuying ? p : (side === "sell-no" ? 100 - p : p);
     return (costCents / 100) * (quantityLamports / LAMPORTS_PER_TOKEN);
   }, [quantityLamports, effectivePrice, side, orderType]);
 
@@ -103,7 +107,7 @@ export function OrderForm({ marketKey, ticker, strikePrice }: OrderFormProps) {
       const [noMint] = findNoMint(marketPubkey);
 
       // Derive user ATAs
-      const userUsdcAta = await getAssociatedTokenAddress(usdcVault, user);
+      const userUsdcAta = await getAssociatedTokenAddress(USDC_MINT, user);
       const userYesAta = await getAssociatedTokenAddress(yesMint, user);
       const userNoAta = await getAssociatedTokenAddress(noMint, user);
 

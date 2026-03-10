@@ -12,6 +12,7 @@ import { MarketInfo, tickerFromBytes } from "./settler.js";
 const log = createLogger("settlement:cranker");
 
 const MAX_BATCH_SIZE = 32;
+const MAX_CRANK_ITERATIONS = 100;
 
 /** Order side constants matching the on-chain enum */
 const SIDE_USDC_BID = 0;  // Buy Yes with USDC
@@ -112,7 +113,7 @@ async function crankMarket(
   const [configPda] = findGlobalConfig();
   let totalCancelled = 0;
 
-  while (true) {
+  for (let iteration = 0; iteration < MAX_CRANK_ITERATIONS; iteration++) {
     // Fetch fresh order book state each iteration
     const orderBookAccount = await program.account.orderBook.fetch(
       market.account.orderBook,
@@ -135,7 +136,7 @@ async function crankMarket(
       market.account.noMint,
     );
 
-    log.info(`Cranking ${batchSize} orders for ${ticker} (${activeOrders.length} remaining)`, {
+    log.info(`Cranking ${batchSize} orders for ${ticker} (${activeOrders.length} remaining, iteration ${iteration + 1})`, {
       market: market.publicKey.toBase58(),
     });
 
@@ -164,6 +165,13 @@ async function crankMarket(
         totalCancelledSoFar: totalCancelled,
       });
       throw err;
+    }
+
+    if (iteration === MAX_CRANK_ITERATIONS - 1) {
+      log.error(`Crank cancel hit max iterations (${MAX_CRANK_ITERATIONS}) for ${ticker}`, {
+        market: market.publicKey.toBase58(),
+        totalCancelled,
+      });
     }
   }
 

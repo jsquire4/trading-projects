@@ -51,8 +51,18 @@ export async function createMarketAlt(
   await sendIxs(connection, payer, [createIx]);
 
   // Step 2: Extend with all market addresses
-  // ALT needs at least 1 slot to become active — wait a bit
-  await sleep(500);
+  // ALT needs at least 1 slot to become active — wait for a new slot
+  const creationSlot = await connection.getSlot("confirmed");
+  let currentSlot = creationSlot;
+  const maxWaitMs = 30_000;
+  const waitStart = Date.now();
+  while (currentSlot <= creationSlot) {
+    if (Date.now() - waitStart > maxWaitMs) {
+      throw new Error(`ALT activation timeout: slot did not advance after ${maxWaitMs}ms`);
+    }
+    await sleep(400);
+    currentSlot = await connection.getSlot("confirmed");
+  }
 
   const addresses = [
     accounts.market,

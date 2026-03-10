@@ -101,7 +101,7 @@ function getETComponents(date: Date = new Date()): {
  * Get the UTC offset (in minutes) for ET at a specific date.
  * Returns e.g. -300 for EST (UTC-5) or -240 for EDT (UTC-4).
  */
-function getETOffsetMinutes(date: Date = new Date()): number {
+export function getETOffsetMinutes(date: Date = new Date()): number {
   // Format the date in ET and in UTC, then compute the difference
   const etStr = date.toLocaleString("en-US", { timeZone: ET_TIMEZONE });
   const utcStr = date.toLocaleString("en-US", { timeZone: "UTC" });
@@ -146,6 +146,16 @@ export function getNextETTime(hour: number, minute: number): Date {
   // Get ET offset at the candidate time (handles DST correctly)
   const offsetMin = getETOffsetMinutes(asUtc);
   const utcTime = new Date(asUtc.getTime() - offsetMin * 60_000);
+
+  // Handle DST fall-back ambiguity (1:00-1:59 AM ET occurs twice).
+  // The offset computed above may correspond to EST (post-fallback).
+  // Re-check: if the offset at utcTime differs, prefer EDT (first occurrence).
+  const verifyOffset = getETOffsetMinutes(utcTime);
+  if (verifyOffset !== offsetMin) {
+    // Use the earlier (EDT) offset to pick the first occurrence
+    const edtOffset = Math.max(offsetMin, verifyOffset);
+    return new Date(asUtc.getTime() - edtOffset * 60_000);
+  }
 
   return utcTime;
 }

@@ -112,6 +112,7 @@ export async function runBackfill(
   let totalSignatures = 0;
   let before: string | undefined;
   let done = false;
+  let newestSignature: ConfirmedSignatureInfo | null = null;
 
   while (!done) {
     const opts: { limit: number; before?: string; until?: string } = {
@@ -144,10 +145,10 @@ export async function runBackfill(
     );
     totalEvents += batchEvents;
 
-    // Update checkpoint to the newest signature we've processed in this run
-    // (first element is the most recent)
-    const newest = signatures[0];
-    upsertCheckpoint(newest.signature, newest.slot);
+    // Track the newest signature across the entire run (first element is the most recent)
+    if (!newestSignature) {
+      newestSignature = signatures[0];
+    }
 
     // Move cursor backward
     const oldest = signatures[signatures.length - 1];
@@ -162,6 +163,11 @@ export async function runBackfill(
       totalSignatures,
       totalEvents,
     });
+  }
+
+  // Write checkpoint only after all batches complete successfully
+  if (newestSignature) {
+    upsertCheckpoint(newestSignature.signature, newestSignature.slot);
   }
 
   log.info("Backfill complete", { totalSignatures, totalEvents });

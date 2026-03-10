@@ -13,8 +13,8 @@ const log = createLogger("settlement:settler");
 const ORACLE_STALE_CODE = 6040;
 const ORACLE_CONFIDENCE_TOO_WIDE_CODE = 6041;
 
-const RETRY_INTERVAL_MS = 30_000; // 30 seconds
-const MAX_RETRY_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+const SETTLE_SETTLE_RETRY_INTERVAL_MS = 30_000;
+const SETTLE_SETTLE_MAX_RETRY_DURATION_MS = 15 * 60 * 1000;
 
 export interface MarketInfo {
   /** On-chain StrikeMarket public key */
@@ -116,7 +116,7 @@ async function settleOneMarket(
     } catch (err) {
       if (isRetryableOracleError(err)) {
         const elapsed = Date.now() - startTime;
-        if (elapsed + RETRY_INTERVAL_MS > MAX_RETRY_DURATION_MS) {
+        if (elapsed + SETTLE_RETRY_INTERVAL_MS > SETTLE_MAX_RETRY_DURATION_MS) {
           throw new Error(
             `Oracle validation failed for ${ticker} after ${attempt} attempts over ${Math.round(elapsed / 1000)}s: ${err}`,
           );
@@ -125,7 +125,7 @@ async function settleOneMarket(
           `Oracle validation failed for ${ticker}, retrying in 30s (attempt ${attempt}, ${Math.round(elapsed / 1000)}s elapsed)`,
           { market: market.publicKey.toBase58() },
         );
-        await sleep(RETRY_INTERVAL_MS);
+        await sleep(SETTLE_RETRY_INTERVAL_MS);
         continue;
       }
       // Non-retryable error — bail immediately

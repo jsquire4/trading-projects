@@ -45,10 +45,10 @@ export function OrderBook({ perspective: initialPerspective, marketKey }: OrderB
     });
 
     let cumAsks = 0;
-    const asksWithCum = displayAsks.map((l) => {
+    const asksWithCum = [...displayAsks].reverse().map((l) => {
       cumAsks += l.quantity;
       return { ...l, cumulative: cumAsks };
-    });
+    }).reverse();
 
     const maxCum = Math.max(cumBids, cumAsks, 1);
 

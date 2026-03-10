@@ -119,7 +119,6 @@ export async function startFeeder(
     const now = Date.now();
     const last = lastUpdate.get(ticker) ?? 0;
     if (now - last < RATE_LIMIT_MS) return;
-    lastUpdate.set(ticker, now);
 
     const priceLamports = priceToLamports(price);
     const confidence = computeConfidence(price);
@@ -136,6 +135,7 @@ export async function startFeeder(
           .signers([authority])
           .rpc();
 
+        lastUpdate.set(ticker, Date.now());
         log.info(`Updated ${ticker}: $${price.toFixed(2)}`, {
           lamports: priceLamports.toString(),
           confidence: confidence.toString(),
@@ -203,7 +203,11 @@ export async function startFeeder(
 
           // Trade events have type "trade"
           if (msg.type === "trade" && msg.symbol && typeof msg.price === "number") {
-            updateOnChain(msg.symbol, msg.price);
+            updateOnChain(msg.symbol, msg.price).catch((err) => {
+              log.error(`Unhandled updateOnChain error for ${msg.symbol}`, {
+                error: err instanceof Error ? err.message : String(err),
+              });
+            });
           }
         }
       } catch {

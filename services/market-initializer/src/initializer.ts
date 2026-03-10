@@ -38,6 +38,7 @@ import {
 import type { Meridian } from "../../shared/src/idl/meridian.ts";
 import MeridianIDL from "../../shared/src/idl/meridian.json";
 import { createMarketAlt, type MarketAccounts } from "./alt.ts";
+import { getETOffsetMinutes as getETOffset } from "../../automation/src/timezone.ts";
 
 const log = createLogger("market-initializer");
 
@@ -190,7 +191,7 @@ async function processTickerStrikes(
     // Convert dollar strike to USDC lamports: $680 → 680_000_000
     const strikeLamports = BigInt(strikeDollars) * BigInt(10 ** USDC_DECIMALS);
     const previousCloseLamports =
-      BigInt(Math.round(previousClose * 100)) * BigInt(10 ** (USDC_DECIMALS - 2));
+      BigInt(Math.round(previousClose * 10 ** USDC_DECIMALS));
 
     try {
       const created = await createSingleMarket(
@@ -259,18 +260,27 @@ async function createSingleMarket(
   }
 
   // ---- Step 1: Allocate OrderBook (incremental, ~10KB per call) ------------
-  log.info(`Allocating order book for ${ticker} (${ORDER_BOOK_ALLOC_CALLS} calls)...`);
+  // Check existing order book size for crash recovery (partial prior allocation)
+  const existingOb = await connection.getAccountInfo(orderBook);
+  const existingAllocCalls = existingOb ? Math.floor(existingOb.data.length / 10240) : 0;
+  const remainingCalls = Math.max(0, ORDER_BOOK_ALLOC_CALLS - existingAllocCalls);
 
-  for (let i = 0; i < ORDER_BOOK_ALLOC_CALLS; i++) {
-    await program.methods
-      .allocateOrderBook(marketPda)
-      .accounts({
-        payer: admin.publicKey,
-        orderBook: orderBook,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([admin])
-      .rpc({ commitment: "confirmed" });
+  if (remainingCalls > 0) {
+    log.info(`Allocating order book for ${ticker} (${remainingCalls} calls, ${existingAllocCalls} already done)...`);
+
+    for (let i = 0; i < remainingCalls; i++) {
+      await program.methods
+        .allocateOrderBook(marketPda)
+        .accounts({
+          payer: admin.publicKey,
+          orderBook: orderBook,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([admin])
+        .rpc({ commitment: "confirmed" });
+    }
+  } else {
+    log.info(`Order book for ${ticker} already fully allocated`);
   }
 
   // ---- Step 2: Create strike market ----------------------------------------
@@ -357,11 +367,7 @@ export function computeMarketCloseUnix(date?: Date): number {
   const month = parseInt(parts.find((p) => p.type === "month")!.value);
   const day = parseInt(parts.find((p) => p.type === "day")!.value);
 
-  // Compute the ET-to-UTC offset for this specific date (handles DST)
-  const etOffsetMinutes = getETOffsetMinutes(now);
-  // 4:00 PM ET = 16:00 ET = (16:00 + offset) UTC
-  // If ET is UTC-5 (EST), offset is -300, so 16:00 ET = 21:00 UTC
-  // If ET is UTC-4 (EDT), offset is -240, so 16:00 ET = 20:00 UTC
+  const etOffsetMinutes = getETOffset(now);
 
   // Start of day in UTC
   const startOfDayUTC = Date.UTC(year, month - 1, day, 0, 0, 0);
@@ -372,20 +378,3 @@ export function computeMarketCloseUnix(date?: Date): number {
   return Math.floor(marketCloseUTC / 1000);
 }
 
-/**
- * Get the current ET offset from UTC in minutes.
- * Returns negative for behind UTC (e.g. -300 for EST, -240 for EDT).
- */
-function getETOffsetMinutes(now: Date): number {
-  // Create a date string in ET and parse back to figure out the offset
-  const etString = now.toLocaleString("en-US", { timeZone: "America/New_York" });
-  const etDate = new Date(etString);
-  // etDate is in local TZ but represents ET time — compare with `now`
-  // This gives us the offset between ET and local, then we need local-to-UTC
-  // Simpler: use the difference between UTC time formatted as ET
-  const utcString = now.toLocaleString("en-US", { timeZone: "UTC" });
-  const utcDate = new Date(utcString);
-
-  // Difference in minutes: ET - UTC (negative when ET is behind)
-  return Math.round((etDate.getTime() - utcDate.getTime()) / 60000);
-}

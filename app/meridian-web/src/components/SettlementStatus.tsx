@@ -55,7 +55,7 @@ export function SettlementStatus({
   }, [isSettled, now, marketCloseUnix, overrideDeadline]);
 
   const settlePriceDollars = (settlementPrice / 1_000_000).toFixed(2);
-  const outcomeLabel = outcome === 1 ? "Yes" : "No";
+  const outcomeLabel = outcome === 1 ? "Yes" : outcome === 2 ? "No" : "Pending";
 
   if (state.phase === "countdown") {
     return (

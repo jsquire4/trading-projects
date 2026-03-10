@@ -110,7 +110,10 @@ export function deserializeOrderBook(buffer: Buffer): DeserializedOrderBook {
     // Skip empty levels entirely
     if (count === 0) continue;
 
-    for (let slot = 0; slot < count; slot++) {
+    // Scan ALL slots, not just 0..count — the on-chain layout is holey.
+    // Cancellations and fills deactivate slots in-place without compacting,
+    // so active orders can reside in any of the 16 slots.
+    for (let slot = 0; slot < ORDERS_PER_LEVEL; slot++) {
       const slotBase = levelBase + slot * ORDER_SLOT_SIZE;
 
       // is_active: offset 72 within OrderSlot

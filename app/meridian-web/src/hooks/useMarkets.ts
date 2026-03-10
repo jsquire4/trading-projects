@@ -63,7 +63,7 @@ export interface OrderBookData {
  */
 function parseMarketAccount(
   publicKey: PublicKey,
-  account: Record<string, unknown>,
+  account: unknown,
 ): ParsedMarket {
   const a = account as Record<string, unknown>;
 
@@ -130,10 +130,7 @@ export function useMarkets() {
 
       const accounts = await program.account.strikeMarket.all();
       return accounts.map((a) =>
-        parseMarketAccount(
-          a.publicKey,
-          a.account as unknown as Record<string, unknown>,
-        ),
+        parseMarketAccount(a.publicKey, a.account),
       );
     },
     enabled: !!program,
@@ -163,10 +160,7 @@ export function useMarket(marketKey: PublicKey | string | null) {
       if (!program || !key) return null;
 
       const account = await program.account.strikeMarket.fetch(key);
-      return parseMarketAccount(
-        key,
-        account as unknown as Record<string, unknown>,
-      );
+      return parseMarketAccount(key, account);
     },
     enabled: !!program && !!key,
     refetchInterval: 10_000,

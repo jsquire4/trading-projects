@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import type { Transaction, VersionedTransaction } from "@solana/web3.js";
 import { toast } from "sonner";
@@ -65,10 +65,11 @@ export function useTransaction(): UseTransactionReturn {
   const [status, setStatus] = useState<TransactionStatus>("idle");
   const [error, setError] = useState<string | null>(null);
 
-  // Guard against state updates after unmount
   const mountedRef = useRef(true);
-  // Track mount state — useEffect cleanup not needed here because the ref
-  // is only read inside the async callback which captures it.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const sendTransaction = useCallback(
     async (
@@ -94,15 +95,17 @@ export function useTransaction(): UseTransactionReturn {
         // --- Sign ---
         toastId = toast.loading(`${label}: Awaiting signature...`);
 
-        let signed: Transaction | VersionedTransaction;
-        if ("version" in tx) {
-          // VersionedTransaction
-          signed = await provider.wallet.signTransaction(tx);
-        } else {
-          signed = await provider.wallet.signTransaction(tx);
+        if (!("version" in tx)) {
+          const { blockhash, lastValidBlockHeight } =
+            await connection.getLatestBlockhash("confirmed");
+          tx.recentBlockhash = blockhash;
+          tx.lastValidBlockHeight = lastValidBlockHeight;
         }
 
+        const signed = await provider.wallet.signTransaction(tx);
+
         // --- Send ---
+        if (!mountedRef.current) return null;
         setStatus("confirming");
         toast.loading(`${label}: Confirming...`, { id: toastId });
 

@@ -80,11 +80,9 @@ async function fetchClosingPrices(
     log.info(`${q.symbol}: $${q.last}`);
   }
 
-  // Verify we got prices for all tickers
-  for (const t of tickers) {
-    if (!prices.has(t)) {
-      log.error(`No closing price returned for ${t}`);
-    }
+  const missing = tickers.filter((t) => !prices.has(t));
+  if (missing.length > 0) {
+    log.error(`No closing price returned for: ${missing.join(", ")}. These tickers will be skipped.`);
   }
 
   return prices;
@@ -100,36 +98,56 @@ async function updateOracleFeeds(
   log.info("Updating oracle price feeds");
   const now = Math.floor(Date.now() / 1000);
 
+  const ORACLE_MAX_RETRIES = 3;
+  const ORACLE_RETRY_DELAY_MS = 2_000;
+
   for (const [ticker, price] of prices) {
     const [priceFeedPda] = findPriceFeed(ticker);
 
     // Price in USDC lamports: $200.50 -> 200_500_000 (6 decimals)
     const priceLamports = new BN(Math.round(price * 1_000_000));
-    // Tight confidence band: 0.01% of price
-    const confidence = new BN(Math.max(1, Math.round(price * 100))); // 0.01% in lamports
+    // Confidence band: 0.1% of price in lamports
+    const confidence = new BN(Math.max(1, Math.round(price * 1_000)));
     const timestamp = new BN(now);
 
-    try {
-      await oracleProgram.methods
-        .updatePrice(priceLamports, confidence, timestamp)
-        .accounts({
-          authority: adminKeypair.publicKey,
-          priceFeed: priceFeedPda,
-        })
-        .rpc();
+    let succeeded = false;
+    for (let attempt = 1; attempt <= ORACLE_MAX_RETRIES; attempt++) {
+      try {
+        await oracleProgram.methods
+          .updatePrice(priceLamports, confidence, timestamp)
+          .accounts({
+            authority: adminKeypair.publicKey,
+            priceFeed: priceFeedPda,
+          })
+          .rpc();
 
-      log.info(`Updated oracle for ${ticker}: ${priceLamports.toString()} lamports`, {
-        ticker,
-        price,
-        priceLamports: priceLamports.toString(),
-        confidence: confidence.toString(),
-      });
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      log.error(`Failed to update oracle for ${ticker}: ${errMsg}`, {
-        ticker,
-        priceFeed: priceFeedPda.toBase58(),
-      });
+        log.info(`Updated oracle for ${ticker}: ${priceLamports.toString()} lamports`, {
+          ticker,
+          price,
+          priceLamports: priceLamports.toString(),
+          confidence: confidence.toString(),
+        });
+        succeeded = true;
+        break;
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (attempt < ORACLE_MAX_RETRIES) {
+          log.warn(`Oracle update for ${ticker} failed (attempt ${attempt}/${ORACLE_MAX_RETRIES}), retrying`, {
+            error: errMsg,
+          });
+          await new Promise((r) => setTimeout(r, ORACLE_RETRY_DELAY_MS * attempt));
+        } else {
+          log.error(`Failed to update oracle for ${ticker} after ${ORACLE_MAX_RETRIES} attempts`, {
+            ticker,
+            priceFeed: priceFeedPda.toBase58(),
+            error: errMsg,
+          });
+        }
+      }
+    }
+
+    if (!succeeded) {
+      prices.delete(ticker);
     }
   }
 }
@@ -206,9 +224,16 @@ async function main(): Promise<void> {
     // ---- Step 3: Settle markets ----
     const allMarkets = await loadUnsettledMarkets();
     const now = Math.floor(Date.now() / 1000);
-    const expiredUnsettled = allMarkets.filter(
-      (m) => !m.account.isSettled && m.account.marketCloseUnix.toNumber() <= now,
-    );
+    const expiredUnsettled = allMarkets.filter((m) => {
+      if (m.account.isSettled) return false;
+      if (m.account.marketCloseUnix.toNumber() > now) return false;
+      const ticker = tickerFromBytes(m.account.ticker);
+      if (!closingPrices.has(ticker)) {
+        log.warn(`Skipping settlement for ${ticker} — no closing price available`);
+        return false;
+      }
+      return true;
+    });
 
     log.info(`${expiredUnsettled.length} markets eligible for settlement`);
 

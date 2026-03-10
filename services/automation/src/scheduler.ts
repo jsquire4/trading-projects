@@ -35,6 +35,7 @@ export class Scheduler {
   private jobs: ScheduledJob[] = [];
   private running = false;
   private midnightTimer: ReturnType<typeof setTimeout> | null = null;
+  private activeChildren: Set<ChildProcess> = new Set();
   /** Tracks which jobs have already run today (by ET date string) */
   private lastRunDate: Map<string, string> = new Map();
 
@@ -102,6 +103,13 @@ export class Scheduler {
       clearTimeout(this.midnightTimer);
       this.midnightTimer = null;
     }
+    for (const child of this.activeChildren) {
+      child.removeAllListeners();
+      child.stdout?.removeAllListeners();
+      child.stderr?.removeAllListeners();
+      child.kill("SIGTERM");
+    }
+    this.activeChildren.clear();
     log.info("Scheduler stopped");
   }
 
@@ -289,10 +297,11 @@ export class Scheduler {
       const child: ChildProcess = spawn("npx", ["tsx", scriptPath], {
         env: {
           ...process.env,
-          // Ensure child inherits relevant env vars
         },
         stdio: ["ignore", "pipe", "pipe"],
       });
+
+      this.activeChildren.add(child);
 
       const timeoutHandle = setTimeout(() => {
         if (!settled) {
@@ -335,6 +344,9 @@ export class Scheduler {
       });
 
       child.on("close", (code) => {
+        this.activeChildren.delete(child);
+        child.stdout?.removeAllListeners();
+        child.stderr?.removeAllListeners();
         if (!settled) {
           settled = true;
           clearTimeout(timeoutHandle);

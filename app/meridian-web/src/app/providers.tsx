@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import {
   ConnectionProvider,
   WalletProvider,
@@ -11,18 +11,26 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import "@solana/wallet-adapter-react-ui/styles.css";
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 5_000,
-      refetchInterval: 10_000,
+function makeQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        staleTime: 5_000,
+        refetchInterval: 10_000,
+      },
     },
-  },
-});
+  });
+}
 
 const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com";
 
 export function Providers({ children }: { children: React.ReactNode }) {
+  const queryClientRef = useRef<QueryClient | null>(null);
+  if (!queryClientRef.current) {
+    queryClientRef.current = makeQueryClient();
+  }
+  const queryClient = queryClientRef.current;
+
   const wallets = useMemo(
     () => [new PhantomWalletAdapter(), new SolflareWalletAdapter()],
     [],

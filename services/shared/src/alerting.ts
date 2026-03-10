@@ -63,12 +63,16 @@ export function createLogger(service: string) {
     error(message: string, context?: Record<string, unknown>) {
       const p = createPayload("error", service, message, context);
       console.error(formatLog(p));
-      sendWebhook(p);
+      sendWebhook(p).catch((err) => {
+        console.error(`[ALERT] Webhook send error: ${err}`);
+      });
     },
     critical(message: string, context?: Record<string, unknown>) {
       const p = createPayload("critical", service, message, context);
       console.error(formatLog(p));
-      sendWebhook(p);
+      sendWebhook(p).catch((err) => {
+        console.error(`[ALERT] Webhook send error: ${err}`);
+      });
     },
   };
 }

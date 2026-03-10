@@ -63,9 +63,11 @@ export function OraclePrice({ ticker }: OraclePriceProps) {
   useEffect(() => {
     const [feedAddress] = findPriceFeed(ticker);
     let subId: number | undefined;
+    let cancelled = false;
 
     // Fetch initial value
     connection.getAccountInfo(feedAddress).then((info) => {
+      if (cancelled) return;
       if (info) {
         const parsed = parsePriceFeed(info.data as Buffer);
         if (parsed) {
@@ -79,6 +81,7 @@ export function OraclePrice({ ticker }: OraclePriceProps) {
     subId = connection.onAccountChange(feedAddress, handleAccountChange, "confirmed");
 
     return () => {
+      cancelled = true;
       if (subId !== undefined) {
         connection.removeAccountChangeListener(subId);
       }
@@ -88,6 +91,7 @@ export function OraclePrice({ ticker }: OraclePriceProps) {
 
   const priceDollars = feed ? (feed.price / 1_000_000).toFixed(2) : "--";
   const confidenceDollars = feed ? (feed.confidence / 1_000_000).toFixed(4) : null;
+  const isStale = feed ? (Date.now() / 1000 - feed.timestamp) > 60 : false;
 
   const flashClass =
     direction === "up"
@@ -107,8 +111,13 @@ export function OraclePrice({ ticker }: OraclePriceProps) {
           +/-${confidenceDollars}
         </span>
       )}
+      {isStale && (
+        <span className="text-[10px] font-medium text-yellow-400" title="Oracle price is stale (>60s old)">
+          STALE
+        </span>
+      )}
       {feed && (
-        <span className="text-[10px] text-white/30">
+        <span className={`text-[10px] ${isStale ? "text-yellow-400/50" : "text-white/30"}`}>
           {new Date(feed.timestamp * 1000).toLocaleTimeString()}
         </span>
       )}

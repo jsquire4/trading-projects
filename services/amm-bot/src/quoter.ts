@@ -59,9 +59,15 @@ export function generateQuotes(
   // Half-spread in probability units
   const halfSpread = (fairPrice * config.spreadBps) / 10_000;
 
-  // Inventory skew: shifts both bid and ask in the same direction
+  // Inventory skew: shifts both bid and ask in the same direction.
   //   Positive inventory (long) → negative skew → lower bid, lower ask (try to sell)
   //   Negative inventory (short) → positive skew → raise bid, raise ask (try to buy)
+  //
+  // Trade-off: This mid-shift approach moves both sides equally, which preserves
+  // spread width but may be suboptimal for aggressive inventory reduction. An
+  // alternative would be to widen the skew-direction side and narrow the other,
+  // but that risks getting filled on the wrong side. The current approach is
+  // conservative and appropriate for a prototype AMM.
   const skew =
     (inventory / config.maxInventory) * config.skewFactor * halfSpread;
 
@@ -79,9 +85,12 @@ export function generateQuotes(
     const mid = Math.round((bidPrice + askPrice) / 2);
     bidPrice = Math.max(1, mid - config.minEdge);
     askPrice = Math.min(99, mid + config.minEdge);
-    // If still crossed (extreme edge), force apart
+    // If still crossed (extreme edge at floor/ceiling), force apart
     if (bidPrice >= askPrice) {
-      bidPrice = Math.max(1, askPrice - config.minEdge);
+      askPrice = Math.min(99, bidPrice + config.minEdge + 1);
+      if (bidPrice >= askPrice) {
+        bidPrice = Math.max(1, askPrice - config.minEdge - 1);
+      }
     }
   }
 

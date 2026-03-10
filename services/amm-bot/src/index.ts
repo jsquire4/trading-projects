@@ -99,7 +99,7 @@ async function main(): Promise<void> {
   log.info(`Admin: ${admin.publicKey.toBase58()}`);
 
   // BOT_QUANTITY is in raw USDC lamports (6 decimals). E.g. 1_000_000 = $1.00.
-  const quantity = parseInt(process.env.BOT_QUANTITY ?? "100", 10);
+  const quantity = parseInt(process.env.BOT_QUANTITY ?? "1000000", 10);
   const spreadBps = parseInt(process.env.BOT_SPREAD_BPS ?? "500", 10);
   const vol = parseFloat(process.env.BOT_VOL ?? "0.30");
   const riskFreeRate = parseFloat(process.env.BOT_RISK_FREE_RATE ?? "0.05");

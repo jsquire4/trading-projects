@@ -23,7 +23,8 @@ import {
   formatDollar,
 } from "@/lib/chartConfig";
 
-const DEFAULT_SIGMA = parseFloat(process.env.NEXT_PUBLIC_DEFAULT_VOL ?? "") || 0.3;
+const _parsedVol = parseFloat(process.env.NEXT_PUBLIC_DEFAULT_VOL ?? "");
+const DEFAULT_SIGMA = Number.isFinite(_parsedVol) && _parsedVol > 0 ? _parsedVol : 0.3;
 const RISK_FREE_RATE = 0.05;
 const SECONDS_PER_YEAR = 365.25 * 86400;
 

@@ -282,7 +282,7 @@ describe("tradier-proxy caching", () => {
 
       const { getQuotes } = await import("../tradier-proxy");
 
-      await expect(getQuotes(["AAPL"])).rejects.toThrow("Tradier API 401");
+      await expect(getQuotes(["AAPL"])).rejects.toThrow("status 401");
     });
   });
 });

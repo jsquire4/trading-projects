@@ -37,13 +37,23 @@ interface SettlementData {
 function parseSettlement(event: IndexedEvent): SettlementData | null {
   try {
     const d = JSON.parse(event.data);
+    const strikePrice = Number(d.strikePrice);
+    const settlementPrice = Number(d.settlementPrice);
+    const outcome = Number(d.outcome);
+    const timestamp = Number(d.timestamp ?? event.timestamp);
+
+    // NaN guard (#21)
+    if (isNaN(strikePrice) || isNaN(settlementPrice) || isNaN(outcome) || isNaN(timestamp)) {
+      return null;
+    }
+
     return {
       market: d.market ?? event.market,
       ticker: d.ticker ?? "UNKNOWN",
-      strikePrice: Number(d.strikePrice),
-      settlementPrice: Number(d.settlementPrice),
-      outcome: Number(d.outcome),
-      timestamp: Number(d.timestamp ?? event.timestamp),
+      strikePrice,
+      settlementPrice,
+      outcome,
+      timestamp,
     };
   } catch {
     return null;
@@ -89,9 +99,17 @@ function buildCalibration(settlements: SettlementData[]): CalibrationBucket[] {
 
   for (const s of settlements) {
     if (s.strikePrice <= 0) continue;
-    // Implied probability proxy: how close settlement price is to the strike.
-    // ratio = settlementPrice / strikePrice, clamped to [0, 1].
-    const ratio = Math.max(0, Math.min(1, s.settlementPrice / s.strikePrice));
+    // Binary option: Yes wins when settlementPrice >= strikePrice.
+    // Implied probability = how likely Yes was to win, approximated by
+    // how far above/below strike the settlement price landed.
+    // ratio > 1 means settlement was above strike (Yes territory),
+    // ratio < 1 means below strike (No territory). Clamp to [0, 1].
+    const aboveStrike = s.settlementPrice >= s.strikePrice;
+    // Use distance from strike as a probability-like metric:
+    // If above strike: ratio = 0.5 + 0.5 * min(1, (settlementPrice - strikePrice) / strikePrice)
+    // If below strike: ratio = 0.5 - 0.5 * min(1, (strikePrice - settlementPrice) / strikePrice)
+    const distFrac = Math.min(1, Math.abs(s.settlementPrice - s.strikePrice) / s.strikePrice);
+    const ratio = aboveStrike ? 0.5 + 0.5 * distFrac : 0.5 - 0.5 * distFrac;
     const idx = toBucket(ratio);
     buckets[idx].total += 1;
     if (s.outcome === 1) buckets[idx].yesWins += 1;
@@ -120,8 +138,8 @@ function computeAccuracy(settlements: SettlementData[]): AccuracyStats {
   let correct = 0;
   for (const s of settlements) {
     if (s.strikePrice <= 0) continue;
-    const ratio = s.settlementPrice / s.strikePrice;
-    const impliedYesFavorite = ratio >= 0.5;
+    // Yes wins when settlementPrice >= strikePrice
+    const impliedYesFavorite = s.settlementPrice >= s.strikePrice;
     const yesWon = s.outcome === 1;
     if (impliedYesFavorite === yesWon) correct += 1;
   }
@@ -241,6 +259,9 @@ export function SettlementAnalytics() {
         <h3 className="text-sm font-medium text-white/70 mb-3">Calibration Chart</h3>
         <p className="text-xs text-white/40 mb-4">
           Buckets by implied probability (settlement/strike ratio). Diagonal line = perfect calibration.
+          <br />
+          <em>Note: Uses settlement outcome data as a proxy for implied probability. True calibration
+          requires pre-settlement Yes token prices, which are not yet collected.</em>
         </p>
         <div className="rounded-lg border border-white/10 bg-white/5 p-4">
           <ResponsiveContainer width="100%" height={300}>

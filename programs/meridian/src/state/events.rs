@@ -27,3 +27,9 @@ pub struct SettlementEvent {
     pub outcome: u8,
     pub timestamp: i64,
 }
+
+#[event]
+pub struct CrankCancelEvent {
+    pub market: Pubkey,
+    pub cancelled_count: u32,
+}

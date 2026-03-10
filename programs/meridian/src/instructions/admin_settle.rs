@@ -23,6 +23,8 @@ pub struct AdminSettle<'info> {
 
 pub fn handle_admin_settle(ctx: Context<AdminSettle>, settlement_price: u64) -> Result<()> {
     require!(settlement_price > 0, MeridianError::OraclePriceInvalid);
+    // Sanity cap: settlement price must be realistic (max $1M per share = 1_000_000_000_000 lamports)
+    require!(settlement_price <= 1_000_000_000_000, MeridianError::OraclePriceInvalid);
 
     let clock = Clock::get()?;
     let market = &mut ctx.accounts.market;

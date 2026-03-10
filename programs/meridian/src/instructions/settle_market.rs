@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 use crate::error::MeridianError;
+use crate::state::events::SettlementEvent;
 use crate::state::{GlobalConfig, StrikeMarket};
 
 #[derive(Accounts)]
@@ -7,6 +8,9 @@ pub struct SettleMarket<'info> {
     #[account(mut)]
     pub caller: Signer<'info>, // anyone can call
 
+    #[account(
+        constraint = !config.is_paused @ MeridianError::MarketPaused,
+    )]
     pub config: Box<Account<'info, GlobalConfig>>,
 
     #[account(
@@ -14,6 +18,7 @@ pub struct SettleMarket<'info> {
         has_one = config @ MeridianError::InvalidMarket,
         has_one = oracle_feed @ MeridianError::OracleProgramMismatch,
         constraint = !market.is_settled @ MeridianError::MarketAlreadySettled,
+        constraint = !market.is_paused @ MeridianError::MarketPaused,
     )]
     pub market: Box<Account<'info, StrikeMarket>>,
 
@@ -134,6 +139,15 @@ pub fn handle_settle_market(ctx: Context<SettleMarket>) -> Result<()> {
         .unix_timestamp
         .checked_add(3600)
         .ok_or(MeridianError::ArithmeticOverflow)?;
+
+    emit!(SettlementEvent {
+        market: market.key(),
+        ticker: market.ticker,
+        strike_price: market.strike_price,
+        settlement_price: feed.price,
+        outcome,
+        timestamp: clock.unix_timestamp,
+    });
 
     msg!(
         "Market settled: market={}, price={}, strike={}, outcome={}, settled_at={}",

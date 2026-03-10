@@ -3,6 +3,7 @@ use anchor_spl::token::{self, Token, TokenAccount, Transfer, spl_token};
 
 use crate::error::MeridianError;
 use crate::matching::engine::crank_cancel_batch;
+use crate::state::events::CrankCancelEvent;
 use crate::state::order_book::*;
 use crate::state::{GlobalConfig, StrikeMarket};
 
@@ -128,8 +129,7 @@ pub fn handle_crank_cancel<'info>(
                     .quantity
                     .checked_mul(order.price as u64)
                     .ok_or(MeridianError::ArithmeticOverflow)?
-                    .checked_div(100)
-                    .ok_or(MeridianError::DivisionByZero)?;
+                    / 100; // Safe: literal divisor, never zero
 
                 token::transfer(
                     CpiContext::new_with_signer(
@@ -177,6 +177,11 @@ pub fn handle_crank_cancel<'info>(
             _ => return Err(MeridianError::InvalidSide.into()),
         }
     }
+
+    emit!(CrankCancelEvent {
+        market: ctx.accounts.market.key(),
+        cancelled_count: cancelled.len() as u32,
+    });
 
     msg!(
         "Crank cancel: market={}, cancelled={} orders",

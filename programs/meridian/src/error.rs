@@ -117,8 +117,6 @@ pub enum MeridianError {
     AdminSettleTooEarly = 71,
     #[msg("Override window has expired — outcome is final")]
     OverrideWindowExpired = 72,
-    #[msg("Market has already been settled")]
-    AlreadySettled = 73,
     #[msg("Invalid outcome value")]
     InvalidOutcome = 74,
     #[msg("Maximum override count (3) exceeded — outcome is final")]

@@ -1,0 +1,221 @@
+/**
+ * ET Timezone Helpers
+ *
+ * DST-aware conversion between America/New_York and UTC.
+ * Uses Intl.DateTimeFormat for correct offset detection — no third-party tz libs.
+ */
+
+import { createLogger } from "../../shared/src/alerting.js";
+
+const log = createLogger("automation-scheduler:timezone");
+
+const ET_TIMEZONE = "America/New_York";
+
+// NYSE holidays for 2026 (and 2025 for completeness). Update annually.
+// Source: https://www.nyse.com/markets/hours-calendars
+const NYSE_HOLIDAYS: Set<string> = new Set([
+  // 2025
+  "2025-01-01", // New Year's Day
+  "2025-01-20", // MLK Jr. Day
+  "2025-02-17", // Presidents' Day
+  "2025-04-18", // Good Friday
+  "2025-05-26", // Memorial Day
+  "2025-06-19", // Juneteenth
+  "2025-07-04", // Independence Day
+  "2025-09-01", // Labor Day
+  "2025-11-27", // Thanksgiving
+  "2025-12-25", // Christmas Day
+  // 2026
+  "2026-01-01", // New Year's Day
+  "2026-01-19", // MLK Jr. Day
+  "2026-02-16", // Presidents' Day
+  "2026-04-03", // Good Friday
+  "2026-05-25", // Memorial Day
+  "2026-06-19", // Juneteenth
+  "2026-07-03", // Independence Day (observed)
+  "2026-09-07", // Labor Day
+  "2026-11-26", // Thanksgiving
+  "2026-12-25", // Christmas Day
+  // 2027
+  "2027-01-01", // New Year's Day
+  "2027-01-18", // MLK Jr. Day
+  "2027-02-15", // Presidents' Day
+  "2027-03-26", // Good Friday
+  "2027-05-31", // Memorial Day
+  "2027-06-18", // Juneteenth (observed)
+  "2027-07-05", // Independence Day (observed)
+  "2027-09-06", // Labor Day
+  "2027-11-25", // Thanksgiving
+  "2027-12-24", // Christmas Day (observed)
+]);
+
+/**
+ * Parse the current ET date/time components from Intl formatters.
+ * This correctly handles DST transitions without manual offset tables.
+ */
+function getETComponents(date: Date = new Date()): {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  weekday: number; // 0=Sun, 6=Sat
+} {
+  // Use en-US with specific parts to extract numeric components
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: ET_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    weekday: "short",
+  }).formatToParts(date);
+
+  const get = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((p) => p.type === type)?.value ?? "0";
+
+  const weekdayStr = get("weekday");
+  const weekdayMap: Record<string, number> = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+  };
+
+  return {
+    year: parseInt(get("year"), 10),
+    month: parseInt(get("month"), 10),
+    day: parseInt(get("day"), 10),
+    hour: parseInt(get("hour"), 10),
+    minute: parseInt(get("minute"), 10),
+    weekday: weekdayMap[weekdayStr] ?? 0,
+  };
+}
+
+/**
+ * Get the UTC offset (in minutes) for ET at a specific date.
+ * Returns e.g. -300 for EST (UTC-5) or -240 for EDT (UTC-4).
+ */
+function getETOffsetMinutes(date: Date = new Date()): number {
+  // Format the date in ET and in UTC, then compute the difference
+  const etStr = date.toLocaleString("en-US", { timeZone: ET_TIMEZONE });
+  const utcStr = date.toLocaleString("en-US", { timeZone: "UTC" });
+  const etDate = new Date(etStr);
+  const utcDate = new Date(utcStr);
+  return Math.round((etDate.getTime() - utcDate.getTime()) / 60_000);
+}
+
+/**
+ * Returns the next occurrence of the given ET time as a UTC Date.
+ * If the time has already passed today (in ET), returns tomorrow's occurrence.
+ */
+export function getNextETTime(hour: number, minute: number): Date {
+  const now = new Date();
+  const et = getETComponents(now);
+
+  // Build a candidate date: today at the requested ET time
+  // Start by constructing the date string in ET
+  let candidateYear = et.year;
+  let candidateMonth = et.month;
+  let candidateDay = et.day;
+
+  const etNowMinutes = et.hour * 60 + et.minute;
+  const targetMinutes = hour * 60 + minute;
+
+  if (etNowMinutes >= targetMinutes) {
+    // Time already passed today in ET — advance to tomorrow
+    const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    const tmrw = getETComponents(tomorrow);
+    candidateYear = tmrw.year;
+    candidateMonth = tmrw.month;
+    candidateDay = tmrw.day;
+  }
+
+  // Build a date string that we can parse, then adjust for ET offset
+  // Create a UTC date and subtract the ET offset to get the correct UTC time
+  const dateStr = `${candidateYear}-${String(candidateMonth).padStart(2, "0")}-${String(candidateDay).padStart(2, "0")}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00`;
+
+  // Parse as if UTC, then adjust by ET offset
+  const asUtc = new Date(dateStr + "Z");
+
+  // Get ET offset at the candidate time (handles DST correctly)
+  const offsetMin = getETOffsetMinutes(asUtc);
+  const utcTime = new Date(asUtc.getTime() - offsetMin * 60_000);
+
+  return utcTime;
+}
+
+/**
+ * Returns the current hour in ET (0-23).
+ */
+export function getCurrentETHour(): number {
+  return getETComponents().hour;
+}
+
+/**
+ * Returns today's date in ET as "YYYY-MM-DD".
+ */
+export function getTodayET(): string {
+  const et = getETComponents();
+  return `${et.year}-${String(et.month).padStart(2, "0")}-${String(et.day).padStart(2, "0")}`;
+}
+
+/**
+ * Checks if today is a US equity trading day (Mon-Fri, not an NYSE holiday).
+ *
+ * First tries the Tradier market calendar API. If that fails (no key, network
+ * error), falls back to the hardcoded NYSE holiday list.
+ */
+export async function isMarketDay(date: Date = new Date()): Promise<boolean> {
+  const et = getETComponents(date);
+
+  // Weekend check
+  if (et.weekday === 0 || et.weekday === 6) {
+    return false;
+  }
+
+  const dateStr = `${et.year}-${String(et.month).padStart(2, "0")}-${String(et.day).padStart(2, "0")}`;
+
+  // Try Tradier calendar API
+  const apiKey = process.env.TRADIER_API_KEY;
+  if (apiKey) {
+    try {
+      const monthStr = `${et.year}-${String(et.month).padStart(2, "0")}`;
+      const resp = await fetch(
+        `https://api.tradier.com/v1/markets/calendar?month=${monthStr}`,
+        {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            Accept: "application/json",
+          },
+        },
+      );
+      if (resp.ok) {
+        const data = (await resp.json()) as {
+          calendar?: {
+            days?: { day?: Array<{ date: string; status: string }> };
+          };
+        };
+        const days = data?.calendar?.days?.day;
+        if (Array.isArray(days)) {
+          const today = days.find((d) => d.date === dateStr);
+          if (today) {
+            return today.status === "open";
+          }
+        }
+      }
+    } catch (err) {
+      log.warn("Tradier calendar API failed, falling back to hardcoded holidays", {
+        error: String(err),
+      });
+    }
+  }
+
+  // Fallback: hardcoded holiday list
+  return !NYSE_HOLIDAYS.has(dateStr);
+}

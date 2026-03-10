@@ -1,0 +1,226 @@
+{
+  "address": "HJpHCfz1mqFFNa4ANfU8mMAZ5WoNRfo7EV1sZfEV2vZ",
+  "metadata": {
+    "name": "mock_oracle",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Mock oracle program for Meridian devnet"
+  },
+  "instructions": [
+    {
+      "name": "initialize_feed",
+      "discriminator": [
+        167,
+        251,
+        140,
+        58,
+        66,
+        138,
+        187,
+        95
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "price_feed",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  99,
+                  101,
+                  95,
+                  102,
+                  101,
+                  101,
+                  100
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "ticker"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "ticker",
+          "type": {
+            "array": [
+              "u8",
+              8
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "update_price",
+      "discriminator": [
+        61,
+        34,
+        117,
+        155,
+        75,
+        34,
+        123,
+        208
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "price_feed"
+          ]
+        },
+        {
+          "name": "price_feed",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "price",
+          "type": "u64"
+        },
+        {
+          "name": "confidence",
+          "type": "u64"
+        },
+        {
+          "name": "timestamp",
+          "type": "i64"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "PriceFeed",
+      "discriminator": [
+        189,
+        103,
+        252,
+        23,
+        152,
+        35,
+        243,
+        156
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "InvalidAuthority",
+      "msg": "Invalid authority for this price feed"
+    },
+    {
+      "code": 6001,
+      "name": "FeedNotInitialized",
+      "msg": "Price feed has not been initialized"
+    },
+    {
+      "code": 6002,
+      "name": "InvalidPrice",
+      "msg": "Price must be greater than zero"
+    },
+    {
+      "code": 6003,
+      "name": "InvalidTimestamp",
+      "msg": "Timestamp must be greater than zero"
+    }
+  ],
+  "types": [
+    {
+      "name": "PriceFeed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "ticker",
+            "docs": [
+              "Stock ticker (UTF-8, zero-padded to 8 bytes)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                8
+              ]
+            }
+          },
+          {
+            "name": "price",
+            "docs": [
+              "Current price in USDC lamports (e.g., 200_000_000 = $200.00)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "confidence",
+            "docs": [
+              "Confidence band width in USDC lamports"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "docs": [
+              "Last update time (unix timestamp)"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "authority",
+            "docs": [
+              "Who can update this feed"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "is_initialized",
+            "docs": [
+              "Whether this feed has been initialized"
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "_padding",
+            "docs": [
+              "Alignment padding"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                6
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

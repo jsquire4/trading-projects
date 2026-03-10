@@ -17,6 +17,11 @@ pub use instructions::place_order::*;
 pub use instructions::cancel_order::*;
 pub use instructions::pause::*;
 pub use instructions::unpause::*;
+pub use instructions::settle_market::*;
+pub use instructions::admin_settle::*;
+pub use instructions::admin_override_settlement::*;
+pub use instructions::redeem::*;
+pub use instructions::crank_cancel::*;
 
 declare_id!("7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth");
 
@@ -99,5 +104,34 @@ pub mod meridian {
 
     pub fn unpause(ctx: Context<Unpause>, market: Option<Pubkey>) -> Result<()> {
         instructions::unpause::handle_unpause(ctx, market)
+    }
+
+    pub fn settle_market(ctx: Context<SettleMarket>) -> Result<()> {
+        instructions::settle_market::handle_settle_market(ctx)
+    }
+
+    pub fn admin_settle(ctx: Context<AdminSettle>, settlement_price: u64) -> Result<()> {
+        instructions::admin_settle::handle_admin_settle(ctx, settlement_price)
+    }
+
+    pub fn admin_override_settlement(
+        ctx: Context<AdminOverrideSettlement>,
+        new_settlement_price: u64,
+    ) -> Result<()> {
+        instructions::admin_override_settlement::handle_admin_override_settlement(
+            ctx,
+            new_settlement_price,
+        )
+    }
+
+    pub fn redeem(ctx: Context<Redeem>, mode: u8, quantity: u64) -> Result<()> {
+        instructions::redeem::handle_redeem(ctx, mode, quantity)
+    }
+
+    pub fn crank_cancel<'info>(
+        ctx: Context<'_, '_, '_, 'info, CrankCancel<'info>>,
+        batch_size: u8,
+    ) -> Result<()> {
+        instructions::crank_cancel::handle_crank_cancel(ctx, batch_size)
     }
 }

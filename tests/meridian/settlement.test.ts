@@ -1,0 +1,1302 @@
+/**
+ * settlement.test.ts — Comprehensive bankrun test suite for the Phase 3
+ * settlement lifecycle: settle_market, admin_settle, admin_override,
+ * redeem (pair burn + winner), and crank_cancel.
+ */
+
+import { expect } from "chai";
+import {
+  PublicKey,
+  Keypair,
+  Transaction,
+  ComputeBudgetProgram,
+} from "@solana/web3.js";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { BankrunProvider } from "anchor-bankrun";
+import { Clock } from "solana-bankrun";
+import BN from "bn.js";
+
+import {
+  setupBankrun,
+  BankrunContext,
+  createMockUsdc,
+  initializeConfig,
+  initializeOracleFeed,
+  updateOraclePrice,
+  createTestMarket,
+  MarketAccounts,
+  findGlobalConfig,
+  MOCK_ORACLE_PROGRAM_ID,
+  mintTestUsdc,
+  createAta,
+} from "../helpers";
+
+import {
+  buildSettleMarketIx,
+  buildAdminSettleIx,
+  buildAdminOverrideIx,
+  buildRedeemIx,
+  buildCrankCancelIx,
+  buildMintPairIx,
+  buildPlaceOrderIx,
+  buildUpdatePriceIx,
+} from "../helpers/instructions";
+
+
+// ---------------------------------------------------------------------------
+// Layout helpers for reading on-chain StrikeMarket data
+// ---------------------------------------------------------------------------
+
+// StrikeMarket byte offsets (after 8-byte Anchor discriminator):
+// 9 pubkeys = 288 bytes → u64/i64 block starts at offset 296
+const MARKET_DISC = 8;
+const MARKET_PUBKEYS = 9 * 32; // 288
+const OFF_STRIKE_PRICE     = MARKET_DISC + MARKET_PUBKEYS;         // 296
+const OFF_MARKET_CLOSE     = OFF_STRIKE_PRICE + 8;                 // 304
+const OFF_TOTAL_MINTED     = OFF_MARKET_CLOSE + 8;                 // 312
+const OFF_TOTAL_REDEEMED   = OFF_TOTAL_MINTED + 8;                 // 320
+const OFF_SETTLEMENT_PRICE = OFF_TOTAL_REDEEMED + 8;               // 328
+const OFF_PREVIOUS_CLOSE   = OFF_SETTLEMENT_PRICE + 8;             // 336
+const OFF_SETTLED_AT       = OFF_PREVIOUS_CLOSE + 8;               // 344
+const OFF_OVERRIDE_DEADLINE = OFF_SETTLED_AT + 8;                  // 352
+// alt_address(32) at 360, ticker(8) at 392
+const OFF_IS_SETTLED       = 400;
+const OFF_OUTCOME          = 401;
+const OFF_IS_PAUSED        = 402;
+const OFF_IS_CLOSED        = 403;
+const OFF_OVERRIDE_COUNT   = 404;
+
+function readMarketFields(data: Buffer) {
+  return {
+    strikePrice:     new BN(data.subarray(OFF_STRIKE_PRICE, OFF_STRIKE_PRICE + 8), "le").toNumber(),
+    marketCloseUnix: new BN(data.subarray(OFF_MARKET_CLOSE, OFF_MARKET_CLOSE + 8), "le").toNumber(),
+    totalMinted:     new BN(data.subarray(OFF_TOTAL_MINTED, OFF_TOTAL_MINTED + 8), "le").toNumber(),
+    totalRedeemed:   new BN(data.subarray(OFF_TOTAL_REDEEMED, OFF_TOTAL_REDEEMED + 8), "le").toNumber(),
+    settlementPrice: new BN(data.subarray(OFF_SETTLEMENT_PRICE, OFF_SETTLEMENT_PRICE + 8), "le").toNumber(),
+    previousClose:   new BN(data.subarray(OFF_PREVIOUS_CLOSE, OFF_PREVIOUS_CLOSE + 8), "le").toNumber(),
+    settledAt:       new BN(data.subarray(OFF_SETTLED_AT, OFF_SETTLED_AT + 8), "le").toNumber(),
+    overrideDeadline:new BN(data.subarray(OFF_OVERRIDE_DEADLINE, OFF_OVERRIDE_DEADLINE + 8), "le").toNumber(),
+    isSettled:       data[OFF_IS_SETTLED] !== 0,
+    outcome:         data[OFF_OUTCOME],
+    isPaused:        data[OFF_IS_PAUSED] !== 0,
+    isClosed:        data[OFF_IS_CLOSED] !== 0,
+    overrideCount:   data[OFF_OVERRIDE_COUNT],
+  };
+}
+
+async function getTokenBalance(ctx: BankrunContext, ata: PublicKey): Promise<number> {
+  const acct = await ctx.context.banksClient.getAccount(ata);
+  if (!acct) return 0;
+  const data = Buffer.from(acct.data);
+  return new BN(data.subarray(64, 72), "le").toNumber();
+}
+
+async function readMarket(ctx: BankrunContext, market: PublicKey) {
+  const acct = await ctx.context.banksClient.getAccount(market);
+  return readMarketFields(Buffer.from(acct!.data));
+}
+
+/**
+ * Advance the bankrun clock's unix_timestamp while preserving other fields.
+ * The Clock object from getClock() uses non-enumerable getters, so spread
+ * doesn't work — we must copy each field explicitly.
+ */
+async function advanceClock(ctx: BankrunContext, unixTimestamp: number) {
+  const clock = await ctx.context.banksClient.getClock();
+  ctx.context.setClock(
+    new Clock(
+      clock.slot,
+      clock.epochStartTimestamp,
+      clock.epoch,
+      clock.leaderScheduleEpoch,
+      BigInt(unixTimestamp),
+    ),
+  );
+}
+
+// Monotonically increasing CU limit to differentiate transactions and avoid
+// bankrun's "already processed" deduplication.
+let cuNonce = 200_000;
+function uniqueCuIx() {
+  cuNonce += 1;
+  return ComputeBudgetProgram.setComputeUnitLimit({ units: cuNonce });
+}
+
+// ---------------------------------------------------------------------------
+// Test Suite
+// ---------------------------------------------------------------------------
+
+describe("Settlement Lifecycle", () => {
+  let ctx: BankrunContext;
+  let usdcMint: PublicKey;
+  let config: PublicKey;
+  let oracleFeed: PublicKey;
+
+  // Market 1: oracle-settled market (for settle_market + admin_override tests)
+  let ma1: MarketAccounts;
+  let m1CloseUnix: number;
+  const TICKER = "AAPL";
+  const STRIKE_PRICE = 200_000_000; // $200
+  const PREVIOUS_CLOSE = 195_000_000;
+  const ONE_TOKEN = 1_000_000;
+
+  // User token accounts (admin is the user)
+  let userUsdcAta: PublicKey;
+  let userYesAta1: PublicKey;
+  let userNoAta1: PublicKey;
+
+  before(async () => {
+    ctx = await setupBankrun();
+
+    const clock = await ctx.context.banksClient.getClock();
+    const now = Number(clock.unixTimestamp);
+
+    // Market closes in 5 seconds — easy to advance past
+    m1CloseUnix = now + 5;
+
+    // Create USDC mint, config, oracle feed
+    usdcMint = await createMockUsdc(ctx.context, ctx.admin);
+    await initializeConfig(ctx.context, ctx.admin, usdcMint, MOCK_ORACLE_PROGRAM_ID);
+    [config] = findGlobalConfig();
+    oracleFeed = await initializeOracleFeed(ctx.context, ctx.admin, TICKER);
+
+    // Set oracle price at $205 (above strike) with current timestamp
+    await updateOraclePrice(ctx.context, ctx.admin, oracleFeed, 205_000_000, 500_000);
+
+    // Create market 1
+    ma1 = await createTestMarket(
+      ctx.context, ctx.admin, config, TICKER,
+      STRIKE_PRICE, m1CloseUnix, PREVIOUS_CLOSE,
+      oracleFeed, usdcMint,
+    );
+
+    // Create user USDC ATA and fund with $10,000
+    userUsdcAta = await createAta(ctx.context, ctx.admin, usdcMint, ctx.admin.publicKey);
+    await mintTestUsdc(ctx.context, usdcMint, ctx.admin, userUsdcAta, 10_000_000_000);
+
+    // Derive Yes/No ATAs for market 1
+    userYesAta1 = getAssociatedTokenAddressSync(ma1.yesMint, ctx.admin.publicKey);
+    userNoAta1 = getAssociatedTokenAddressSync(ma1.noMint, ctx.admin.publicKey);
+
+    // Mint 100 pairs on market 1 — user gets 100 Yes + 100 No tokens
+    const provider = new BankrunProvider(ctx.context);
+    const mintIx = buildMintPairIx({
+      user: ctx.admin.publicKey,
+      config,
+      market: ma1.market,
+      yesMint: ma1.yesMint,
+      noMint: ma1.noMint,
+      userUsdcAta,
+      userYesAta: userYesAta1,
+      userNoAta: userNoAta1,
+      usdcVault: ma1.usdcVault,
+      quantity: new BN(100 * ONE_TOKEN),
+    });
+    await provider.sendAndConfirm!(new Transaction().add(mintIx), [ctx.admin]);
+  });
+
+  // =========================================================================
+  // settle_market
+  // =========================================================================
+  describe("settle_market", () => {
+    it("rejects settlement before market close", async () => {
+      const provider = new BankrunProvider(ctx.context);
+      const ix = buildSettleMarketIx({
+        caller: ctx.admin.publicKey,
+        config,
+        market: ma1.market,
+        oracleFeed,
+      });
+
+      try {
+        await provider.sendAndConfirm!(
+          new Transaction().add(uniqueCuIx(), ix),
+          [ctx.admin],
+        );
+        expect.fail("Expected SettlementTooEarly error");
+      } catch (err: any) {
+        // 6070 = 6000 + 70
+        expect(String(err)).to.match(/0x17b6|SettlementTooEarly|6070/i);
+      }
+    });
+
+    it("settles Yes wins when oracle price >= strike", async () => {
+      const provider = new BankrunProvider(ctx.context);
+
+      // Advance clock past market close
+      const settleTime = m1CloseUnix + 10;
+      await advanceClock(ctx, settleTime);
+
+      // Update oracle price to $205 with fresh timestamp near settle time
+      const updateIx = buildUpdatePriceIx({
+        authority: ctx.admin.publicKey,
+        priceFeed: oracleFeed,
+        price: new BN(205_000_000),
+        confidence: new BN(500_000),
+        timestamp: new BN(settleTime),
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), updateIx),
+        [ctx.admin],
+      );
+
+      // Settle
+      const settleIx = buildSettleMarketIx({
+        caller: ctx.admin.publicKey,
+        config,
+        market: ma1.market,
+        oracleFeed,
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), settleIx),
+        [ctx.admin],
+      );
+
+      // Verify on-chain settlement state
+      const m = await readMarket(ctx, ma1.market);
+      expect(m.isSettled).to.be.true;
+      expect(m.outcome).to.equal(1); // Yes wins
+      expect(m.settlementPrice).to.equal(205_000_000);
+      expect(m.settledAt).to.be.greaterThanOrEqual(settleTime);
+      expect(m.overrideDeadline).to.equal(m.settledAt + 3600);
+    });
+
+    it("rejects double settlement", async () => {
+      const provider = new BankrunProvider(ctx.context);
+      const ix = buildSettleMarketIx({
+        caller: ctx.admin.publicKey,
+        config,
+        market: ma1.market,
+        oracleFeed,
+      });
+
+      try {
+        await provider.sendAndConfirm!(
+          new Transaction().add(uniqueCuIx(), ix),
+          [ctx.admin],
+        );
+        expect.fail("Expected MarketAlreadySettled error");
+      } catch (err: any) {
+        // 6020 = 6000 + 20
+        expect(String(err)).to.match(/0x17a4|MarketAlreadySettled|6020/i);
+      }
+    });
+  });
+
+  // =========================================================================
+  // admin_settle
+  // =========================================================================
+  describe("admin_settle", () => {
+    // Market 2: a separate unsettled market for admin_settle tests
+    let ma2: MarketAccounts;
+    let m2CloseUnix: number;
+
+    before(async () => {
+      const clock = await ctx.context.banksClient.getClock();
+      const now = Number(clock.unixTimestamp);
+
+      // Use a different strike price to get a distinct PDA
+      m2CloseUnix = now + 5;
+      ma2 = await createTestMarket(
+        ctx.context, ctx.admin, config, TICKER,
+        210_000_000, // different strike ($210)
+        m2CloseUnix,
+        PREVIOUS_CLOSE,
+        oracleFeed,
+        usdcMint,
+      );
+    });
+
+    it("rejects admin settle before 1hr delay", async () => {
+      const provider = new BankrunProvider(ctx.context);
+
+      // Advance past market close but less than 1hr after close
+      await advanceClock(ctx, m2CloseUnix + 60);
+
+      const ix = buildAdminSettleIx({
+        admin: ctx.admin.publicKey,
+        config,
+        market: ma2.market,
+        settlementPrice: new BN(205_000_000),
+      });
+
+      try {
+        await provider.sendAndConfirm!(
+          new Transaction().add(uniqueCuIx(), ix),
+          [ctx.admin],
+        );
+        expect.fail("Expected AdminSettleTooEarly error");
+      } catch (err: any) {
+        // 6071 = 6000 + 71
+        expect(String(err)).to.match(/0x17b7|AdminSettleTooEarly|6071/i);
+      }
+    });
+
+    it("admin settles after 1hr delay", async () => {
+      const provider = new BankrunProvider(ctx.context);
+
+      // Advance past close + 3600
+      const adminSettleTime = m2CloseUnix + 3601;
+      await advanceClock(ctx, adminSettleTime);
+
+      const ix = buildAdminSettleIx({
+        admin: ctx.admin.publicKey,
+        config,
+        market: ma2.market,
+        settlementPrice: new BN(205_000_000),
+      });
+
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), ix),
+        [ctx.admin],
+      );
+
+      const m = await readMarket(ctx, ma2.market);
+      expect(m.isSettled).to.be.true;
+      // Strike is 210_000_000, settlement price is 205_000_000 → No wins
+      expect(m.outcome).to.equal(2);
+      expect(m.settlementPrice).to.equal(205_000_000);
+      expect(m.overrideDeadline).to.be.greaterThan(adminSettleTime);
+    });
+  });
+
+  // =========================================================================
+  // admin_override
+  // =========================================================================
+  describe("admin_override", () => {
+    // Uses market 1 which was oracle-settled above with outcome=1 (Yes wins)
+
+    it("overrides outcome within window", async () => {
+      const provider = new BankrunProvider(ctx.context);
+
+      // Ensure we're within override window of market 1
+      const m = await readMarket(ctx, ma1.market);
+      const overrideTime = m.settledAt + 100; // well within 1hr window
+      await advanceClock(ctx, overrideTime);
+
+      // Override to a price below strike → flip to No wins
+      const ix = buildAdminOverrideIx({
+        admin: ctx.admin.publicKey,
+        config,
+        market: ma1.market,
+        newSettlementPrice: new BN(190_000_000), // below $200 strike
+      });
+
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), ix),
+        [ctx.admin],
+      );
+
+      const mAfter = await readMarket(ctx, ma1.market);
+      expect(mAfter.outcome).to.equal(2); // No wins
+      expect(mAfter.settlementPrice).to.equal(190_000_000);
+      expect(mAfter.overrideCount).to.equal(1);
+      // Override deadline should reset to current time + 3600
+      expect(mAfter.overrideDeadline).to.be.greaterThanOrEqual(overrideTime + 3600);
+    });
+
+    it("increments override_count", async () => {
+      const provider = new BankrunProvider(ctx.context);
+
+      // Second override: flip back to Yes wins
+      const ix = buildAdminOverrideIx({
+        admin: ctx.admin.publicKey,
+        config,
+        market: ma1.market,
+        newSettlementPrice: new BN(210_000_000), // above strike
+      });
+
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), ix),
+        [ctx.admin],
+      );
+
+      const m = await readMarket(ctx, ma1.market);
+      expect(m.overrideCount).to.equal(2);
+      expect(m.outcome).to.equal(1); // Yes wins again
+    });
+
+    it("rejects after 3 overrides", async () => {
+      const provider = new BankrunProvider(ctx.context);
+
+      // Third override (count goes to 3)
+      const ix3 = buildAdminOverrideIx({
+        admin: ctx.admin.publicKey,
+        config,
+        market: ma1.market,
+        newSettlementPrice: new BN(190_000_000),
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), ix3),
+        [ctx.admin],
+      );
+
+      const m = await readMarket(ctx, ma1.market);
+      expect(m.overrideCount).to.equal(3);
+
+      // Fourth override should fail (count == 3 already)
+      const ix4 = buildAdminOverrideIx({
+        admin: ctx.admin.publicKey,
+        config,
+        market: ma1.market,
+        newSettlementPrice: new BN(210_000_000),
+      });
+
+      try {
+        await provider.sendAndConfirm!(
+          new Transaction().add(uniqueCuIx(), ix4),
+          [ctx.admin],
+        );
+        expect.fail("Expected MaxOverridesExceeded error");
+      } catch (err: any) {
+        // 6075 = 6000 + 75
+        expect(String(err)).to.match(/0x17bb|MaxOverridesExceeded|6075/i);
+      }
+    });
+
+    it("rejects after override window expires", async () => {
+      // Use the admin-settled market (from describe("admin_settle")) which has
+      // override_count=0 but we can advance past its override_deadline.
+      // We need to find market 2's key. Since it was created in a nested before(),
+      // we re-derive it here with the same params.
+      const provider = new BankrunProvider(ctx.context);
+
+      // Market 1 has count=3, so we get MaxOverridesExceeded. To isolate the
+      // window-expired error, create a one-off market, settle it, then expire.
+      const clock0 = await ctx.context.banksClient.getClock();
+      const now0 = Number(clock0.unixTimestamp);
+
+      const maExpiry = await createTestMarket(
+        ctx.context, ctx.admin, config, TICKER,
+        250_000_000, // unique strike for PDA
+        now0 + 5,
+        PREVIOUS_CLOSE,
+        oracleFeed,
+        usdcMint,
+      );
+
+      // Advance past close + 1hr for admin settle
+      const adminTime = now0 + 5 + 3601;
+      await advanceClock(ctx, adminTime);
+
+      const settleIx = buildAdminSettleIx({
+        admin: ctx.admin.publicKey,
+        config,
+        market: maExpiry.market,
+        settlementPrice: new BN(260_000_000), // Yes wins
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), settleIx),
+        [ctx.admin],
+      );
+
+      // Advance past override deadline
+      const mSettled = await readMarket(ctx, maExpiry.market);
+      expect(mSettled.overrideCount).to.equal(0);
+      await advanceClock(ctx, mSettled.overrideDeadline + 10);
+
+      // Override should now fail with OverrideWindowExpired
+      const overrideIx = buildAdminOverrideIx({
+        admin: ctx.admin.publicKey,
+        config,
+        market: maExpiry.market,
+        newSettlementPrice: new BN(190_000_000),
+      });
+
+      try {
+        await provider.sendAndConfirm!(
+          new Transaction().add(uniqueCuIx(), overrideIx),
+          [ctx.admin],
+        );
+        expect.fail("Expected OverrideWindowExpired error");
+      } catch (err: any) {
+        // 6072 = 6000 + 72
+        expect(String(err)).to.match(/0x17b8|OverrideWindowExpired|6072/i);
+      }
+    });
+  });
+
+  // =========================================================================
+  // redeem
+  // =========================================================================
+  describe("redeem", () => {
+    // Market 3: dedicated for redeem tests — create, mint, settle, then redeem
+    let ma3: MarketAccounts;
+    let m3CloseUnix: number;
+    let userYesAta3: PublicKey;
+    let userNoAta3: PublicKey;
+
+    before(async () => {
+      const clock = await ctx.context.banksClient.getClock();
+      const now = Number(clock.unixTimestamp);
+      m3CloseUnix = now + 5;
+
+      ma3 = await createTestMarket(
+        ctx.context, ctx.admin, config, TICKER,
+        220_000_000, // strike = $220, distinct PDA
+        m3CloseUnix,
+        PREVIOUS_CLOSE,
+        oracleFeed,
+        usdcMint,
+      );
+
+      userYesAta3 = getAssociatedTokenAddressSync(ma3.yesMint, ctx.admin.publicKey);
+      userNoAta3 = getAssociatedTokenAddressSync(ma3.noMint, ctx.admin.publicKey);
+
+      // Mint 50 pairs
+      const provider = new BankrunProvider(ctx.context);
+      const mintIx = buildMintPairIx({
+        user: ctx.admin.publicKey,
+        config,
+        market: ma3.market,
+        yesMint: ma3.yesMint,
+        noMint: ma3.noMint,
+        userUsdcAta,
+        userYesAta: userYesAta3,
+        userNoAta: userNoAta3,
+        usdcVault: ma3.usdcVault,
+        quantity: new BN(50 * ONE_TOKEN),
+      });
+      await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), mintIx), [ctx.admin]);
+    });
+
+    it("pair burn redeems Yes+No for $1 USDC anytime (before settlement)", async () => {
+      const provider = new BankrunProvider(ctx.context);
+
+      const usdcBefore = await getTokenBalance(ctx, userUsdcAta);
+      const yesBefore = await getTokenBalance(ctx, userYesAta3);
+      const noBefore = await getTokenBalance(ctx, userNoAta3);
+
+      const redeemQty = 5 * ONE_TOKEN;
+      const ix = buildRedeemIx({
+        user: ctx.admin.publicKey,
+        config,
+        market: ma3.market,
+        yesMint: ma3.yesMint,
+        noMint: ma3.noMint,
+        usdcVault: ma3.usdcVault,
+        userUsdcAta,
+        userYesAta: userYesAta3,
+        userNoAta: userNoAta3,
+        mode: 0, // pair burn
+        quantity: new BN(redeemQty),
+      });
+
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), ix),
+        [ctx.admin],
+      );
+
+      const usdcAfter = await getTokenBalance(ctx, userUsdcAta);
+      const yesAfter = await getTokenBalance(ctx, userYesAta3);
+      const noAfter = await getTokenBalance(ctx, userNoAta3);
+
+      expect(usdcAfter - usdcBefore).to.equal(redeemQty); // $5 USDC returned
+      expect(yesBefore - yesAfter).to.equal(redeemQty);    // 5 Yes burned
+      expect(noBefore - noAfter).to.equal(redeemQty);      // 5 No burned
+    });
+
+    it("rejects winner redeem during override window", async () => {
+      const provider = new BankrunProvider(ctx.context);
+
+      // Advance past market close and settle market 3
+      const settleTime = m3CloseUnix + 10;
+      await advanceClock(ctx, settleTime);
+
+      // Update oracle price to $225 (above $220 strike → Yes wins)
+      const updateIx = buildUpdatePriceIx({
+        authority: ctx.admin.publicKey,
+        priceFeed: oracleFeed,
+        price: new BN(225_000_000),
+        confidence: new BN(500_000),
+        timestamp: new BN(settleTime),
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), updateIx),
+        [ctx.admin],
+      );
+
+      // Settle
+      const settleIx = buildSettleMarketIx({
+        caller: ctx.admin.publicKey,
+        config,
+        market: ma3.market,
+        oracleFeed,
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), settleIx),
+        [ctx.admin],
+      );
+
+      const m = await readMarket(ctx, ma3.market);
+      expect(m.isSettled).to.be.true;
+      expect(m.outcome).to.equal(1); // Yes wins
+
+      // Now try winner redeem during override window — should fail
+      const ix = buildRedeemIx({
+        user: ctx.admin.publicKey,
+        config,
+        market: ma3.market,
+        yesMint: ma3.yesMint,
+        noMint: ma3.noMint,
+        usdcVault: ma3.usdcVault,
+        userUsdcAta,
+        userYesAta: userYesAta3,
+        userNoAta: userNoAta3,
+        mode: 1, // winner redeem
+        quantity: new BN(5 * ONE_TOKEN),
+      });
+
+      try {
+        await provider.sendAndConfirm!(
+          new Transaction().add(uniqueCuIx(), ix),
+          [ctx.admin],
+        );
+        expect.fail("Expected RedemptionBlockedOverride error");
+      } catch (err: any) {
+        // 6080 = 6000 + 80
+        expect(String(err)).to.match(/0x17c0|RedemptionBlockedOverride|6080/i);
+      }
+    });
+
+    it("winner redeems after override window", async () => {
+      const provider = new BankrunProvider(ctx.context);
+
+      // Advance past override deadline
+      const m = await readMarket(ctx, ma3.market);
+      await advanceClock(ctx, m.overrideDeadline + 10);
+
+      const usdcBefore = await getTokenBalance(ctx, userUsdcAta);
+      const yesBefore = await getTokenBalance(ctx, userYesAta3);
+
+      const redeemQty = 10 * ONE_TOKEN;
+      const ix = buildRedeemIx({
+        user: ctx.admin.publicKey,
+        config,
+        market: ma3.market,
+        yesMint: ma3.yesMint,
+        noMint: ma3.noMint,
+        usdcVault: ma3.usdcVault,
+        userUsdcAta,
+        userYesAta: userYesAta3,
+        userNoAta: userNoAta3,
+        mode: 1, // winner redeem
+        quantity: new BN(redeemQty),
+      });
+
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), ix),
+        [ctx.admin],
+      );
+
+      const usdcAfter = await getTokenBalance(ctx, userUsdcAta);
+      const yesAfter = await getTokenBalance(ctx, userYesAta3);
+
+      // Yes wins: 10 Yes tokens burned, $10 USDC returned
+      expect(usdcAfter - usdcBefore).to.equal(redeemQty);
+      expect(yesBefore - yesAfter).to.equal(redeemQty);
+    });
+  });
+
+  // =========================================================================
+  // crank_cancel
+  // =========================================================================
+  describe("crank_cancel", () => {
+    // Market 4: for crank_cancel tests
+    let ma4: MarketAccounts;
+    let m4CloseUnix: number;
+    let userYesAta4: PublicKey;
+    let userNoAta4: PublicKey;
+
+    // A separate user who places a resting order
+    let orderUser: Keypair;
+    let orderUserUsdcAta: PublicKey;
+    let orderUserYesAta: PublicKey;
+    let orderUserNoAta: PublicKey;
+
+    // Unsettled market 5 for the "rejects unsettled" test
+    let ma5: MarketAccounts;
+
+    before(async () => {
+      const clock = await ctx.context.banksClient.getClock();
+      const now = Number(clock.unixTimestamp);
+      m4CloseUnix = now + 5;
+
+      ma4 = await createTestMarket(
+        ctx.context, ctx.admin, config, TICKER,
+        230_000_000, // strike = $230
+        m4CloseUnix,
+        PREVIOUS_CLOSE,
+        oracleFeed,
+        usdcMint,
+      );
+
+      userYesAta4 = getAssociatedTokenAddressSync(ma4.yesMint, ctx.admin.publicKey);
+      userNoAta4 = getAssociatedTokenAddressSync(ma4.noMint, ctx.admin.publicKey);
+
+      // Mint 50 pairs on market 4 (by admin — puts tokens in vault)
+      const provider = new BankrunProvider(ctx.context);
+      const mintIx = buildMintPairIx({
+        user: ctx.admin.publicKey,
+        config,
+        market: ma4.market,
+        yesMint: ma4.yesMint,
+        noMint: ma4.noMint,
+        userUsdcAta,
+        userYesAta: userYesAta4,
+        userNoAta: userNoAta4,
+        usdcVault: ma4.usdcVault,
+        quantity: new BN(50 * ONE_TOKEN),
+      });
+      await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), mintIx), [ctx.admin]);
+
+      // Create a fresh user for placing orders (needs only USDC, no Yes/No)
+      orderUser = Keypair.generate();
+      ctx.context.setAccount(orderUser.publicKey, {
+        lamports: 10_000_000_000,
+        data: Buffer.alloc(0),
+        owner: new PublicKey("11111111111111111111111111111111"),
+        executable: false,
+      });
+
+      orderUserUsdcAta = await createAta(ctx.context, orderUser, usdcMint, orderUser.publicKey);
+      await mintTestUsdc(ctx.context, usdcMint, ctx.admin, orderUserUsdcAta, 1_000_000_000);
+      orderUserYesAta = await createAta(ctx.context, orderUser, ma4.yesMint, orderUser.publicKey);
+      orderUserNoAta = await createAta(ctx.context, orderUser, ma4.noMint, orderUser.publicKey);
+
+      // Place a resting USDC bid order at price 50
+      const placeIx = buildPlaceOrderIx({
+        user: orderUser.publicKey,
+        config,
+        market: ma4.market,
+        orderBook: ma4.orderBook,
+        usdcVault: ma4.usdcVault,
+        escrowVault: ma4.escrowVault,
+        yesEscrow: ma4.yesEscrow,
+        noEscrow: ma4.noEscrow,
+        yesMint: ma4.yesMint,
+        noMint: ma4.noMint,
+        userUsdcAta: orderUserUsdcAta,
+        userYesAta: orderUserYesAta,
+        userNoAta: orderUserNoAta,
+        side: 0, // USDC bid
+        price: 50,
+        quantity: new BN(10 * ONE_TOKEN),
+        orderType: 1, // Limit
+        maxFills: 0,
+      });
+      await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), placeIx), [orderUser]);
+
+      // Create unsettled market 5 (for "rejects unsettled" test)
+      ma5 = await createTestMarket(
+        ctx.context, ctx.admin, config, TICKER,
+        240_000_000, // strike = $240
+        now + 86400, // closes far in the future
+        PREVIOUS_CLOSE,
+        oracleFeed,
+        usdcMint,
+      );
+    });
+
+    it("rejects crank on unsettled market", async () => {
+      const provider = new BankrunProvider(ctx.context);
+
+      const ix = buildCrankCancelIx({
+        caller: ctx.admin.publicKey,
+        config,
+        market: ma5.market,
+        orderBook: ma5.orderBook,
+        escrowVault: ma5.escrowVault,
+        yesEscrow: ma5.yesEscrow,
+        noEscrow: ma5.noEscrow,
+        batchSize: 10,
+      });
+
+      try {
+        await provider.sendAndConfirm!(
+          new Transaction().add(uniqueCuIx(), ix),
+          [ctx.admin],
+        );
+        expect.fail("Expected MarketNotSettled error");
+      } catch (err: any) {
+        // 6021 = 6000 + 21
+        expect(String(err)).to.match(/0x17a5|MarketNotSettled|6021/i);
+      }
+    });
+
+    it("cancels resting orders post-settlement and returns escrow", async () => {
+      const provider = new BankrunProvider(ctx.context);
+
+      // Advance past market 4 close
+      const settleTime = m4CloseUnix + 10;
+      await advanceClock(ctx, settleTime);
+
+      // Update oracle for fresh timestamp
+      const updateIx = buildUpdatePriceIx({
+        authority: ctx.admin.publicKey,
+        priceFeed: oracleFeed,
+        price: new BN(235_000_000), // above $230 strike
+        confidence: new BN(500_000),
+        timestamp: new BN(settleTime),
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), updateIx),
+        [ctx.admin],
+      );
+
+      // Settle market 4
+      const settleIx = buildSettleMarketIx({
+        caller: ctx.admin.publicKey,
+        config,
+        market: ma4.market,
+        oracleFeed,
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), settleIx),
+        [ctx.admin],
+      );
+
+      // Verify market is settled
+      const m = await readMarket(ctx, ma4.market);
+      expect(m.isSettled).to.be.true;
+
+      // Record order user's USDC balance before crank
+      const usdcBefore = await getTokenBalance(ctx, orderUserUsdcAta);
+
+      // Crank cancel — the resting USDC bid should be refunded
+      const crankIx = buildCrankCancelIx({
+        caller: ctx.admin.publicKey,
+        config,
+        market: ma4.market,
+        orderBook: ma4.orderBook,
+        escrowVault: ma4.escrowVault,
+        yesEscrow: ma4.yesEscrow,
+        noEscrow: ma4.noEscrow,
+        batchSize: 10,
+        makerAccounts: [orderUserUsdcAta], // destination for USDC refund
+      });
+
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), crankIx),
+        [ctx.admin],
+      );
+
+      // Verify refund: 10 tokens * 50/100 = 5 USDC = 5_000_000
+      const usdcAfter = await getTokenBalance(ctx, orderUserUsdcAta);
+      expect(usdcAfter - usdcBefore).to.equal(5_000_000);
+    });
+
+    it("rejects crank on empty settled book (CrankNotNeeded)", async () => {
+      const provider = new BankrunProvider(ctx.context);
+
+      // Market 4 was just cranked — book should be empty now
+      const crankIx = buildCrankCancelIx({
+        caller: ctx.admin.publicKey,
+        config,
+        market: ma4.market,
+        orderBook: ma4.orderBook,
+        escrowVault: ma4.escrowVault,
+        yesEscrow: ma4.yesEscrow,
+        noEscrow: ma4.noEscrow,
+        batchSize: 10,
+      });
+
+      try {
+        await provider.sendAndConfirm!(
+          new Transaction().add(uniqueCuIx(), crankIx),
+          [ctx.admin],
+        );
+        expect.fail("Expected CrankNotNeeded error");
+      } catch (err: any) {
+        // 6090 = 6000 + 90
+        expect(String(err)).to.match(/0x17ca|CrankNotNeeded|6090/i);
+      }
+    });
+  });
+
+  // =========================================================================
+  // Oracle edge cases
+  // =========================================================================
+  describe("oracle edge cases", () => {
+    let maOracle: MarketAccounts;
+    let maOracleCloseUnix: number;
+
+    before(async () => {
+      const clock = await ctx.context.banksClient.getClock();
+      const now = Number(clock.unixTimestamp);
+      maOracleCloseUnix = now + 5;
+
+      maOracle = await createTestMarket(
+        ctx.context, ctx.admin, config, TICKER,
+        260_000_000, // unique strike for PDA
+        maOracleCloseUnix,
+        PREVIOUS_CLOSE,
+        oracleFeed,
+        usdcMint,
+      );
+    });
+
+    it("rejects stale oracle price", async () => {
+      const provider = new BankrunProvider(ctx.context);
+      const settleTime = maOracleCloseUnix + 10;
+      await advanceClock(ctx, settleTime);
+
+      // Set oracle timestamp far in the past (stale by > 120s default)
+      const updateIx = buildUpdatePriceIx({
+        authority: ctx.admin.publicKey,
+        priceFeed: oracleFeed,
+        price: new BN(265_000_000),
+        confidence: new BN(500_000),
+        timestamp: new BN(settleTime - 300), // 300s old — stale
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), updateIx),
+        [ctx.admin],
+      );
+
+      const settleIx = buildSettleMarketIx({
+        caller: ctx.admin.publicKey,
+        config,
+        market: maOracle.market,
+        oracleFeed,
+      });
+
+      try {
+        await provider.sendAndConfirm!(
+          new Transaction().add(uniqueCuIx(), settleIx),
+          [ctx.admin],
+        );
+        expect.fail("Expected OracleStale error");
+      } catch (err: any) {
+        // 6040 = 6000 + 40
+        expect(String(err)).to.match(/0x17a8|OracleStale|6040/i);
+      }
+    });
+
+    it("rejects oracle with too-wide confidence band", async () => {
+      const provider = new BankrunProvider(ctx.context);
+      const clock = await ctx.context.banksClient.getClock();
+      const now = Number(clock.unixTimestamp);
+
+      // Set confidence very wide (e.g. 50% of price — way over 0.5% default)
+      const updateIx = buildUpdatePriceIx({
+        authority: ctx.admin.publicKey,
+        priceFeed: oracleFeed,
+        price: new BN(265_000_000),
+        confidence: new BN(130_000_000), // ~49% of price — way too wide
+        timestamp: new BN(now),
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), updateIx),
+        [ctx.admin],
+      );
+
+      const settleIx = buildSettleMarketIx({
+        caller: ctx.admin.publicKey,
+        config,
+        market: maOracle.market,
+        oracleFeed,
+      });
+
+      try {
+        await provider.sendAndConfirm!(
+          new Transaction().add(uniqueCuIx(), settleIx),
+          [ctx.admin],
+        );
+        expect.fail("Expected OracleConfidenceTooWide error");
+      } catch (err: any) {
+        // 6041 = 6000 + 41
+        expect(String(err)).to.match(/0x17a9|OracleConfidenceTooWide|6041/i);
+      }
+    });
+
+    it("settles No wins when oracle price < strike", async () => {
+      const provider = new BankrunProvider(ctx.context);
+      const clock = await ctx.context.banksClient.getClock();
+      const now = Number(clock.unixTimestamp);
+
+      // Set oracle to valid price below strike ($260)
+      const updateIx = buildUpdatePriceIx({
+        authority: ctx.admin.publicKey,
+        priceFeed: oracleFeed,
+        price: new BN(255_000_000), // below $260 strike
+        confidence: new BN(500_000),
+        timestamp: new BN(now),
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), updateIx),
+        [ctx.admin],
+      );
+
+      const settleIx = buildSettleMarketIx({
+        caller: ctx.admin.publicKey,
+        config,
+        market: maOracle.market,
+        oracleFeed,
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), settleIx),
+        [ctx.admin],
+      );
+
+      const m = await readMarket(ctx, maOracle.market);
+      expect(m.isSettled).to.be.true;
+      expect(m.outcome).to.equal(2); // No wins
+      expect(m.settlementPrice).to.equal(255_000_000);
+      expect(m.settledAt).to.be.greaterThan(0);
+      expect(m.overrideDeadline).to.equal(m.settledAt + 3600);
+    });
+
+    it("settles Yes at exact strike boundary (price == strike)", async () => {
+      const provider = new BankrunProvider(ctx.context);
+      const clock = await ctx.context.banksClient.getClock();
+      const now = Number(clock.unixTimestamp);
+
+      // New market for boundary test
+      const maBoundary = await createTestMarket(
+        ctx.context, ctx.admin, config, TICKER,
+        270_000_000, // strike = $270
+        now + 5,
+        PREVIOUS_CLOSE,
+        oracleFeed,
+        usdcMint,
+      );
+
+      await advanceClock(ctx, now + 10);
+
+      // Set oracle price exactly at strike
+      const updateIx = buildUpdatePriceIx({
+        authority: ctx.admin.publicKey,
+        priceFeed: oracleFeed,
+        price: new BN(270_000_000), // exactly at strike
+        confidence: new BN(500_000),
+        timestamp: new BN(now + 10),
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), updateIx),
+        [ctx.admin],
+      );
+
+      const settleIx = buildSettleMarketIx({
+        caller: ctx.admin.publicKey,
+        config,
+        market: maBoundary.market,
+        oracleFeed,
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), settleIx),
+        [ctx.admin],
+      );
+
+      const m = await readMarket(ctx, maBoundary.market);
+      expect(m.isSettled).to.be.true;
+      expect(m.outcome).to.equal(1); // Yes wins (>= strike)
+      expect(m.settlementPrice).to.equal(270_000_000);
+    });
+  });
+
+  // =========================================================================
+  // Redeem edge cases
+  // =========================================================================
+  describe("redeem edge cases", () => {
+    // Market 6: No-wins market for No-token winner redeem
+    let ma6: MarketAccounts;
+    let m6CloseUnix: number;
+    let userYesAta6: PublicKey;
+    let userNoAta6: PublicKey;
+
+    before(async () => {
+      const clock = await ctx.context.banksClient.getClock();
+      const now = Number(clock.unixTimestamp);
+      m6CloseUnix = now + 5;
+
+      ma6 = await createTestMarket(
+        ctx.context, ctx.admin, config, TICKER,
+        280_000_000, // strike = $280, unique PDA
+        m6CloseUnix,
+        PREVIOUS_CLOSE,
+        oracleFeed,
+        usdcMint,
+      );
+
+      userYesAta6 = getAssociatedTokenAddressSync(ma6.yesMint, ctx.admin.publicKey);
+      userNoAta6 = getAssociatedTokenAddressSync(ma6.noMint, ctx.admin.publicKey);
+
+      // Mint 50 pairs
+      const provider = new BankrunProvider(ctx.context);
+      const mintIx = buildMintPairIx({
+        user: ctx.admin.publicKey,
+        config,
+        market: ma6.market,
+        yesMint: ma6.yesMint,
+        noMint: ma6.noMint,
+        userUsdcAta,
+        userYesAta: userYesAta6,
+        userNoAta: userNoAta6,
+        usdcVault: ma6.usdcVault,
+        quantity: new BN(50 * ONE_TOKEN),
+      });
+      await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), mintIx), [ctx.admin]);
+
+      // Settle as No wins (price below strike)
+      await advanceClock(ctx, m6CloseUnix + 10);
+      const updateIx = buildUpdatePriceIx({
+        authority: ctx.admin.publicKey,
+        priceFeed: oracleFeed,
+        price: new BN(275_000_000), // below $280 strike → No wins
+        confidence: new BN(500_000),
+        timestamp: new BN(m6CloseUnix + 10),
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), updateIx),
+        [ctx.admin],
+      );
+
+      const settleIx = buildSettleMarketIx({
+        caller: ctx.admin.publicKey,
+        config,
+        market: ma6.market,
+        oracleFeed,
+      });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), settleIx),
+        [ctx.admin],
+      );
+
+      // Verify No wins
+      const m = await readMarket(ctx, ma6.market);
+      expect(m.outcome).to.equal(2);
+
+      // Advance past override window
+      await advanceClock(ctx, m.overrideDeadline + 10);
+    });
+
+    it("No-wins: winner redeems No tokens for USDC", async () => {
+      const provider = new BankrunProvider(ctx.context);
+
+      const usdcBefore = await getTokenBalance(ctx, userUsdcAta);
+      const noBefore = await getTokenBalance(ctx, userNoAta6);
+
+      const redeemQty = 10 * ONE_TOKEN;
+      const ix = buildRedeemIx({
+        user: ctx.admin.publicKey,
+        config,
+        market: ma6.market,
+        yesMint: ma6.yesMint,
+        noMint: ma6.noMint,
+        usdcVault: ma6.usdcVault,
+        userUsdcAta,
+        userYesAta: userYesAta6,
+        userNoAta: userNoAta6,
+        mode: 1, // winner redeem
+        quantity: new BN(redeemQty),
+      });
+
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), ix),
+        [ctx.admin],
+      );
+
+      const usdcAfter = await getTokenBalance(ctx, userUsdcAta);
+      const noAfter = await getTokenBalance(ctx, userNoAta6);
+
+      // No wins: 10 No tokens burned, $10 USDC returned
+      expect(usdcAfter - usdcBefore).to.equal(redeemQty);
+      expect(noBefore - noAfter).to.equal(redeemQty);
+
+      // Verify total_redeemed updated
+      const m = await readMarket(ctx, ma6.market);
+      expect(m.totalRedeemed).to.equal(redeemQty);
+    });
+
+    it("pair burn rejects with insufficient Yes balance", async () => {
+      const provider = new BankrunProvider(ctx.context);
+
+      // Try to pair-burn more than available (user has 50 pairs minted, 10 No redeemed above)
+      // Yes balance is still 50, but let's try 100 — more than available
+      const ix = buildRedeemIx({
+        user: ctx.admin.publicKey,
+        config,
+        market: ma6.market,
+        yesMint: ma6.yesMint,
+        noMint: ma6.noMint,
+        usdcVault: ma6.usdcVault,
+        userUsdcAta,
+        userYesAta: userYesAta6,
+        userNoAta: userNoAta6,
+        mode: 0, // pair burn
+        quantity: new BN(100 * ONE_TOKEN), // more than held
+      });
+
+      try {
+        await provider.sendAndConfirm!(
+          new Transaction().add(uniqueCuIx(), ix),
+          [ctx.admin],
+        );
+        expect.fail("Expected InsufficientBalance error");
+      } catch (err: any) {
+        // InsufficientBalance = 50, on-chain = 6050
+        expect(String(err)).to.match(/0x17a2|InsufficientBalance|6050/i);
+      }
+    });
+
+    it("pair burn rejects with insufficient No balance", async () => {
+      const provider = new BankrunProvider(ctx.context);
+
+      // User redeemed 10 No tokens above via winner redeem, so No balance < Yes balance
+      // Try to pair-burn more No tokens than available (user has 40 No, 50 Yes)
+      const ix = buildRedeemIx({
+        user: ctx.admin.publicKey,
+        config,
+        market: ma6.market,
+        yesMint: ma6.yesMint,
+        noMint: ma6.noMint,
+        usdcVault: ma6.usdcVault,
+        userUsdcAta,
+        userYesAta: userYesAta6,
+        userNoAta: userNoAta6,
+        mode: 0, // pair burn
+        quantity: new BN(45 * ONE_TOKEN), // user has 50 Yes but only 40 No
+      });
+
+      try {
+        await provider.sendAndConfirm!(
+          new Transaction().add(uniqueCuIx(), ix),
+          [ctx.admin],
+        );
+        expect.fail("Expected InsufficientBalance error");
+      } catch (err: any) {
+        expect(String(err)).to.match(/0x17a2|InsufficientBalance|6050/i);
+      }
+    });
+
+    it("total_redeemed accumulates across multiple redemptions", async () => {
+      const provider = new BankrunProvider(ctx.context);
+
+      // Do another winner redeem of 5 No tokens
+      const redeemQty = 5 * ONE_TOKEN;
+      const ix = buildRedeemIx({
+        user: ctx.admin.publicKey,
+        config,
+        market: ma6.market,
+        yesMint: ma6.yesMint,
+        noMint: ma6.noMint,
+        usdcVault: ma6.usdcVault,
+        userUsdcAta,
+        userYesAta: userYesAta6,
+        userNoAta: userNoAta6,
+        mode: 1,
+        quantity: new BN(redeemQty),
+      });
+
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), ix),
+        [ctx.admin],
+      );
+
+      // total_redeemed should be 10 + 5 = 15
+      const m = await readMarket(ctx, ma6.market);
+      expect(m.totalRedeemed).to.equal(15 * ONE_TOKEN);
+    });
+  });
+});

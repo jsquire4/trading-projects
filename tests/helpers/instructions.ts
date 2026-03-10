@@ -606,3 +606,198 @@ export function buildUnpauseIx(params: UnpauseParams): TransactionInstruction {
     data,
   });
 }
+
+// ---------------------------------------------------------------------------
+// Meridian: settle_market
+// ---------------------------------------------------------------------------
+
+export interface SettleMarketParams {
+  caller: PublicKey;
+  config: PublicKey;
+  market: PublicKey;
+  oracleFeed: PublicKey;
+}
+
+export function buildSettleMarketIx(
+  params: SettleMarketParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("settle_market");
+
+  const keys = [
+    { pubkey: params.caller, isSigner: true, isWritable: true },
+    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.market, isSigner: false, isWritable: true },
+    { pubkey: params.oracleFeed, isSigner: false, isWritable: false },
+  ];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data: disc,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Meridian: admin_settle
+// ---------------------------------------------------------------------------
+
+export interface AdminSettleParams {
+  admin: PublicKey;
+  config: PublicKey;
+  market: PublicKey;
+  settlementPrice: BN;
+}
+
+export function buildAdminSettleIx(
+  params: AdminSettleParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("admin_settle");
+  const data = Buffer.concat([
+    disc,
+    params.settlementPrice.toArrayLike(Buffer, "le", 8),
+  ]);
+
+  const keys = [
+    { pubkey: params.admin, isSigner: true, isWritable: true },
+    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.market, isSigner: false, isWritable: true },
+  ];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Meridian: admin_override_settlement
+// ---------------------------------------------------------------------------
+
+export interface AdminOverrideParams {
+  admin: PublicKey;
+  config: PublicKey;
+  market: PublicKey;
+  newSettlementPrice: BN;
+}
+
+export function buildAdminOverrideIx(
+  params: AdminOverrideParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("admin_override_settlement");
+  const data = Buffer.concat([
+    disc,
+    params.newSettlementPrice.toArrayLike(Buffer, "le", 8),
+  ]);
+
+  const keys = [
+    { pubkey: params.admin, isSigner: true, isWritable: true },
+    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.market, isSigner: false, isWritable: true },
+  ];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Meridian: redeem
+// ---------------------------------------------------------------------------
+
+export interface RedeemParams {
+  user: PublicKey;
+  config: PublicKey;
+  market: PublicKey;
+  yesMint: PublicKey;
+  noMint: PublicKey;
+  usdcVault: PublicKey;
+  userUsdcAta: PublicKey;
+  userYesAta: PublicKey;
+  userNoAta: PublicKey;
+  /** 0=pair burn, 1=winner redemption */
+  mode: number;
+  quantity: BN;
+}
+
+export function buildRedeemIx(
+  params: RedeemParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("redeem");
+  const data = Buffer.concat([
+    disc,
+    Buffer.from([params.mode]),
+    params.quantity.toArrayLike(Buffer, "le", 8),
+  ]);
+
+  const keys = [
+    { pubkey: params.user, isSigner: true, isWritable: true },
+    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.market, isSigner: false, isWritable: true },
+    { pubkey: params.yesMint, isSigner: false, isWritable: true },
+    { pubkey: params.noMint, isSigner: false, isWritable: true },
+    { pubkey: params.usdcVault, isSigner: false, isWritable: true },
+    { pubkey: params.userUsdcAta, isSigner: false, isWritable: true },
+    { pubkey: params.userYesAta, isSigner: false, isWritable: true },
+    { pubkey: params.userNoAta, isSigner: false, isWritable: true },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+  ];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Meridian: crank_cancel
+// ---------------------------------------------------------------------------
+
+export interface CrankCancelParams {
+  caller: PublicKey;
+  config: PublicKey;
+  market: PublicKey;
+  orderBook: PublicKey;
+  escrowVault: PublicKey;
+  yesEscrow: PublicKey;
+  noEscrow: PublicKey;
+  batchSize: number;
+  /** One destination ATA per order to be cancelled */
+  makerAccounts?: PublicKey[];
+}
+
+export function buildCrankCancelIx(
+  params: CrankCancelParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("crank_cancel");
+  const data = Buffer.concat([
+    disc,
+    Buffer.from([params.batchSize]),
+  ]);
+
+  const keys = [
+    { pubkey: params.caller, isSigner: true, isWritable: true },
+    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.market, isSigner: false, isWritable: false },
+    { pubkey: params.orderBook, isSigner: false, isWritable: true },
+    { pubkey: params.escrowVault, isSigner: false, isWritable: true },
+    { pubkey: params.yesEscrow, isSigner: false, isWritable: true },
+    { pubkey: params.noEscrow, isSigner: false, isWritable: true },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+  ];
+
+  if (params.makerAccounts) {
+    for (const acct of params.makerAccounts) {
+      keys.push({ pubkey: acct, isSigner: false, isWritable: true });
+    }
+  }
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data,
+  });
+}

@@ -1,0 +1,26 @@
+{
+  "name": "meridian",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "lint:ts": "eslint . --ext .ts,.tsx",
+    "test": "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.test.ts",
+    "test:bankrun": "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.test.ts"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.30.1",
+    "@solana/web3.js": "^1.95.0",
+    "@solana/spl-token": "^0.4.0"
+  },
+  "devDependencies": {
+    "@types/bn.js": "^5.1.5",
+    "@types/chai": "^4.3.19",
+    "@types/mocha": "^10.0.8",
+    "chai": "^4.5.0",
+    "mocha": "^10.7.3",
+    "solana-bankrun": "^0.4.0",
+    "anchor-bankrun": "^0.5.0",
+    "ts-mocha": "^10.0.0",
+    "typescript": "^5.6.0"
+  }
+}

@@ -6,6 +6,20 @@ Tracks architectural reasoning, deviations from spec, and key decisions made dur
 
 ## Decision Log
 
+### 2026-03-09: Phase 1 Complete — Foundation
+
+**Status**: All 5 stages (1A–1E) complete. 36/36 bankrun tests passing. Programs compile and deploy to devnet.
+
+**Key architectural change — OrderBook allocation**:
+The ~127KB ZeroCopy OrderBook exceeds Solana's 10,240-byte CPI `MAX_PERMITTED_DATA_INCREASE` limit, so `#[account(init)]` cannot create it. Solution: `create_strike_market` uses `#[account(zero)]` (expects pre-allocated, zeroed, program-owned account). New `allocate_order_book` instruction handles incremental devnet allocation (~13 calls). Bankrun tests use `context.setAccount()` for instant pre-allocation.
+
+**Audit results (Stage 1E)**: 13 issues identified and fixed across 6 parallel review agents:
+- **High**: `expiry_day` PDA seed mismatch (added validation), `greeks.ts` division-by-zero (added guards), deploy script flag typo, weak test assertions (hardened with regex patterns)
+- **Medium**: post-expiry minting allowed (added `MarketClosed` guard), `GlobalConfig.is_valid_ticker` missing bounds check, Tradier rate limiter not concurrency-safe
+- **Low**: hardcoded rent in test helper (switched to dynamic `getRent()`), unused imports in test files
+
+**Files created**: ~50 files across `programs/`, `tests/`, `scripts/`, `services/`, `app/` — full Phase 1 codebase.
+
 ### 2026-03-09: Plan Review & Gap Resolution
 
 Full spec review against `Build_plan.md`. All 8 required smart contract functions, all 4 trade paths, all invariants, all testing requirements, and all success criteria are tracked. 15 total instructions (spec requires 8).

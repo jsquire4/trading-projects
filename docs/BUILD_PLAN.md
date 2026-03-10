@@ -355,53 +355,75 @@ Dependency graphs are shown in ASCII where the flow isn't obvious. Every phase e
 
 All smart contract tests use `solana-bankrun` for clock manipulation (settlement timing, admin delays, oracle staleness). Fallback: `solana-test-validator` with `warp_to_slot` if bankrun has ZeroCopy deserialization issues with the ~125 KB OrderBook account. **See "Bankrun + ZeroCopy Decision Point" section — compatibility must be validated in Stage 1D and the decision locked before Phase 2.**
 
-### Phase 1: Foundation
+### Phase 1: Foundation ✅ COMPLETE (2026-03-09)
 **Goal**: Both programs deployed on devnet. Can mint Yes/No token pairs via CLI.
 
-**Stage 1A — Sequential: workspace + data model**
+**Stage 1A — Sequential: workspace + data model** ✅
 These define the on-chain data model and project structure. Everything else in Phase 1 depends on them.
-1. Anchor workspace scaffolding (Cargo.toml, Anchor.toml, npm workspaces, directory structure)
-2. PDA seed definitions (Rust side) — all seeds from PDA Registry, exact byte encoding
-3. Meridian state accounts: `GlobalConfig`, `StrikeMarket` (with Yes/No mints + USDC vault + escrow vault + Yes escrow + No escrow + OrderBook as PDAs). Treasury PDA (`[b"treasury"]`) created during `initialize_config`.
-4. Mock oracle state: `PriceFeed` account
-5. Error enum (`error.rs`) — all Phase 1 error codes (6000–6016, 6030–6036, 6040–6044, 6060–6066, 6100–6101)
+1. ✅ Anchor workspace scaffolding (Cargo.toml, Anchor.toml, npm workspaces, directory structure)
+2. ✅ PDA seed definitions (Rust side) — all seeds from PDA Registry, exact byte encoding
+3. ✅ Meridian state accounts: `GlobalConfig`, `StrikeMarket` (with Yes/No mints + USDC vault + escrow vault + Yes escrow + No escrow + OrderBook as PDAs). Treasury PDA (`[b"treasury"]`) created during `initialize_config`.
+4. ✅ Mock oracle state: `PriceFeed` account
+5. ✅ Error enum (`error.rs`) — all Phase 1 error codes (6000–6016, 6030–6036, 6040–6044, 6060–6066, 6100–6101)
 
-**Stage 1B — Parallel: isolated modules (once 1A is complete)**
+**Stage 1B — Parallel: isolated modules (once 1A is complete)** ✅
 All depend on Stage 1A workspace + state being defined, but not on each other.
-- [ ] Mock oracle program: `initialize_feed`, `update_price` instructions
-- [ ] Meridian instructions: `initialize_config`, `create_strike_market`, `set_market_alt`, `mint_pair`
-- [ ] Tradier client library (`services/shared/src/tradier-client.ts` — pure HTTP, no chain interaction)
-- [ ] Frontend lib layer: `greeks.ts`, `volatility.ts`, `strikes.ts` (pure math, no deps). `strikes.ts` includes strike selection baseline: ±3%, ±6%, ±9% from previous close, rounded to nearest $10, deduplicate.
-- [ ] PDA derivation helpers `pda.ts` (TypeScript side — mirrors Rust seeds from 1A)
-- [ ] Deploy + init scripts (`deploy-devnet.sh`, `init-config.ts`, `init-oracle-feeds.ts`, `create-mock-usdc.ts`)
+- [x] Mock oracle program: `initialize_feed`, `update_price` instructions
+- [x] Meridian instructions: `initialize_config`, `create_strike_market`, `set_market_alt`, `mint_pair` + `allocate_order_book` (new — see architectural changes below)
+- [x] Tradier client library (`services/shared/src/tradier-client.ts` — pure HTTP, no chain interaction)
+- [x] Frontend lib layer: `greeks.ts`, `volatility.ts`, `strikes.ts` (pure math, no deps). `strikes.ts` includes strike selection baseline: ±3%, ±6%, ±9% from previous close, rounded to nearest $10, deduplicate.
+- [x] PDA derivation helpers `pda.ts` (TypeScript side — mirrors Rust seeds from 1A)
+- [x] Deploy + init scripts (`deploy-devnet.sh`, `init-config.ts`, `init-oracle-feeds.ts`, `create-mock-usdc.ts`)
 
-**Stage 1C — Sequential: integration + deploy (once all of 1B is complete)**
-1. `anchor build` — verify both programs compile
-2. Deploy to devnet — verify both programs deploy
-3. Run init scripts in dependency order: (a) `create-mock-usdc.ts` — USDC mint must exist first, (b) `init-config.ts` — references USDC mint + oracle program, creates Treasury PDA, (c) `init-oracle-feeds.ts` — references GlobalConfig for authority, (d) `create-test-markets.ts` — references GlobalConfig + oracle feeds, creates markets + ALTs per market + calls `set_market_alt` to write ALT address on-chain
-4. Verify: mint a Yes/No pair via CLI script, confirm vault balance = $1 × pairs minted
+**Stage 1C — Sequential: integration + deploy (once all of 1B is complete)** ✅
+1. ✅ `anchor build --no-idl` — both programs compile (IDL generation deferred due to Anchor 0.30.1 nightly toolchain issue)
+2. ✅ Deploy to devnet — both programs deploy
+3. ✅ Run init scripts in dependency order: (a) `create-mock-usdc.ts` — USDC mint must exist first, (b) `init-config.ts` — references USDC mint + oracle program, creates Treasury PDA, (c) `init-oracle-feeds.ts` — references GlobalConfig for authority, (d) `create-test-markets.ts` — references GlobalConfig + oracle feeds, creates markets + OrderBook pre-allocation + calls `set_market_alt` to write ALT address on-chain
+4. ✅ Verify: mint a Yes/No pair via CLI script, confirm vault balance = $1 × pairs minted
 
-**Stage 1D — Parallel: tests (bankrun, once 1C passes)**
+**Stage 1D — Parallel: tests (bankrun, once 1C passes)** ✅ 36/36 passing
 All test suites are independent of each other. Run against bankrun (local), not devnet. **Each test file must spawn its own isolated bankrun instance** — call `start()` at the top, initialize fresh GlobalConfig/PriceFeed/StrikeMarket state within the test, and never share state across test files. This is what makes true parallelism safe; shared bankrun state would cause race conditions between tests that write to the same accounts.
-- [ ] Oracle CRUD: initialize feed, update price, authority validation, staleness check
-- [ ] Config init: admin set, tickers stored, thresholds stored
-- [ ] Market creation: PDA derivation correct, mints created, vaults created, duplicate rejected
-- [ ] Mint pair: vault balance invariant (vault = $1 × pairs minted), Yes supply = No supply, ATAs created via `init_if_needed` (test fresh user with no existing ATA), insufficient USDC balance rejected with `InsufficientBalance`
-- [ ] Mint pair position constraint: rejects with `ConflictingPosition` if user holds Yes tokens; **allows** minting when user holds only No tokens (required for atomic Buy No flow)
-- [ ] OrderBook initialization: ZeroCopy account created with correct size (~125 KB), `next_order_id` starts at 0, all 99 levels empty
-- [ ] Treasury creation: `initialize_config` creates Treasury PDA (`[b"treasury"]`) as USDC token account owned by GlobalConfig PDA
-- [ ] Escrow setup: `create_strike_market` creates all three escrow accounts (escrow_vault, yes_escrow, no_escrow) with correct mint and market PDA ownership
-- [ ] `set_market_alt`: writes ALT address to `StrikeMarket.alt_address`, rejects if already set (prevents overwrite), rejects non-admin caller
+- [x] Oracle CRUD: initialize feed, update price, authority validation, staleness check
+- [x] Config init: admin set, tickers stored, thresholds stored
+- [x] Market creation: PDA derivation correct, mints created, vaults created, duplicate rejected
+- [x] Mint pair: vault balance invariant (vault = $1 × pairs minted), Yes supply = No supply, ATAs created via `init_if_needed` (test fresh user with no existing ATA), insufficient USDC balance rejected with `InsufficientBalance`
+- [x] Mint pair position constraint: rejects with `ConflictingPosition` if user holds Yes tokens; **allows** minting when user holds only No tokens (required for atomic Buy No flow)
+- [x] OrderBook initialization: ZeroCopy account created with correct size (~125 KB), `next_order_id` starts at 0, all 99 levels empty
+- [x] Treasury creation: `initialize_config` creates Treasury PDA (`[b"treasury"]`) as USDC token account owned by GlobalConfig PDA
+- [x] Escrow setup: `create_strike_market` creates all three escrow accounts (escrow_vault, yes_escrow, no_escrow) with correct mint and market PDA ownership
+- [x] `set_market_alt`: writes ALT address to `StrikeMarket.alt_address`, rejects if already set (prevents overwrite), rejects non-admin caller
 
-**Stage 1E — Audit**
-Run `/audit` against all Phase 1 code. Verify:
-- All error codes used correctly
-- No `unwrap()` in production code
-- PDA seeds match between Rust and TypeScript
-- Vault invariant tested
-- No dead code, no commented-out code
+**Stage 1E — Audit** ✅ 13 issues found and fixed
+Run `/audit` against all Phase 1 code. Verified:
+- ✅ All error codes used correctly
+- ✅ No `unwrap()` in production code
+- ✅ PDA seeds match between Rust and TypeScript
+- ✅ Vault invariant tested
+- ✅ No dead code, no commented-out code
 
-**Demo checkpoint**: `anchor test` passes locally. Programs deployed on devnet. Mint a pair via CLI.
+**Demo checkpoint**: ✅ `anchor test` passes locally (36/36). Programs deployed on devnet. Mint a pair via CLI.
+
+#### Phase 1 Architectural Changes (deviations from original plan)
+
+1. **OrderBook allocation pattern changed**: The ~127KB ZeroCopy OrderBook exceeds Solana's 10,240-byte CPI `MAX_PERMITTED_DATA_INCREASE` limit. `#[account(init)]` cannot create it in a single instruction.
+   - **Solution**: Changed `create_strike_market` to use `#[account(zero)]` constraint (expects pre-allocated, zeroed, program-owned account). Client pre-allocates before calling `create_strike_market`.
+   - **Devnet**: New `allocate_order_book` instruction handles incremental allocation (~13 calls of 10KB each). Can be batched into 2-3 transactions.
+   - **Bankrun tests**: Use `context.setAccount()` to inject the pre-allocated OrderBook directly (no multi-call overhead).
+   - **Impact on Phase 2+**: `create-test-markets.ts` script updated to call `allocate_order_book` before `create_strike_market`. No impact on trading instructions — OrderBook is fully allocated before any orders are placed.
+
+2. **`expiry_day` validation added** (audit fix): `create_strike_market` now validates `expiry_day == floor(market_close_unix / 86400)` to prevent PDA seed mismatches between creation and later derivation in `mint_pair`.
+
+3. **Post-expiry mint guard added** (audit fix): `mint_pair` now rejects with `MarketClosed` if `clock.unix_timestamp >= market.market_close_unix`.
+
+4. **`greeks.ts` division-by-zero guards** (audit fix): `binaryDelta` and `binaryGamma` return 0 when `sigma <= 0` or `S <= 0`.
+
+5. **Deploy script flag fix** (audit fix): `--program-keypairs` → `--program-keypair` (singular).
+
+6. **Test assertions hardened** (audit fix): Replaced weak `expect(err).to.exist` with specific error code/message regex patterns across all negative test cases.
+
+7. **Tradier rate limiter** (audit fix): Made concurrency-safe with promise queue pattern.
+
+8. **`GlobalConfig.is_valid_ticker`** (audit fix): Added defensive `.min(self.tickers.len())` bounds check on `ticker_count`.
 
 ---
 

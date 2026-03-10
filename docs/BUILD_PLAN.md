@@ -191,10 +191,10 @@ SettlementEvent {
 | `place_order` | Any user | Market not settled, not paused. Three side types: `side=0` (USDC bid, Buy Yes), `side=1` (Yes ask, Sell Yes), `side=2` (No-backed bid, Sell No). **Position constraint on side=0: user's No ATA balance must be 0** — see "Position Constraint Timing" section. Escrows USDC, Yes, or No tokens respectively. `max_fills` param caps compute (default 10). Min size: 1_000_000 lamports (1 token). When a No-backed bid matches a Yes ask, the engine merge/burns the pair — see "Merge/Burn Vault Math" section. |
 | `cancel_order` | Order owner only | Can cancel anytime, including post-settlement. Returns escrowed asset (USDC, Yes, or No) based on order's `side` field. |
 | `settle_market` | Anyone | `Clock::get() >= market_close_unix`. Oracle staleness (120s settlement threshold) + confidence (0.5% bps) validated. Sets outcome + `override_deadline = settled_at + 3600`. |
-| `admin_settle` | Admin only | `Clock::get() >= market_close_unix + 3600` (1hr delay). Accepts manual price. Fails if already settled. |
+| `admin_settle` | Admin only | `Clock::get() >= market_close_unix + 3600` (1hr delay). Accepts manual price. Fails if already settled. This is the "oracle completely failed" fallback — if the oracle recovers within the first hour, anyone can call `settle_market` first, making `admin_settle` unnecessary (intended behavior: oracle settlement is always preferred). |
 | `admin_override_settlement` | Admin only | `Clock::get() < override_deadline` (within 1hr of original settlement). Accepts corrected price. Rewrites outcome + settlement_price. Resets `override_deadline = now + 3600` (one more hour for further correction). After deadline, outcome is truly final. |
-| `redeem` | Any token holder | Burns winning tokens → $1 USDC per token. Burns losing tokens → $0. Also callable with Yes+No pair → $1 (user-facing auto-redeem, not just internal). **Blocked during override window** (first hour after settlement) to prevent redemptions based on potentially incorrect outcome. |
-| `crank_cancel` | Anyone (permissionless) | Market must be settled. Iterates up to 32 order slots per call, cancels each and returns escrow (USDC, Yes, or No tokens based on order's `side`) to owner. Returns count of cancelled orders. Settlement service cranks until 0 remain. **Not blocked by override window** — escrow refunds are outcome-independent. |
+| `redeem` | Any token holder | Two modes with distinct preconditions: **(1) Pair burn** (Yes + No → $1 USDC): available **anytime**, no settlement required, not blocked by override window — economically the inverse of `mint_pair`, outcome-independent. **(2) Winner/loser redemption** (winning → $1, losing → $0): requires `is_settled == true`, **blocked during override window** (first hour after settlement) to prevent payouts based on potentially incorrect outcome. |
+| `crank_cancel` | Anyone (permissionless) | Market must be settled. Iterates up to 32 order slots per call, cancels each and returns escrow (USDC, Yes, or No tokens based on order's `side`) to owner. Returns count of cancelled orders. Settlement service cranks until 0 remain. **Not blocked by override window** — escrow refunds are outcome-independent. No rate limiting needed — callers pay their own tx fees (natural rate limit), calls are idempotent, and external crankers are welcome (they reduce settlement service load and speed up escrow returns). |
 | `pause` / `unpause` | Admin only | Sets `is_paused` on GlobalConfig (global) or StrikeMarket (per-market). |
 
 **ATA Creation Strategy**: `mint_pair`, `place_order` (when filling — taker/maker may receive Yes, No, or USDC depending on side types), and `redeem` all use Anchor's `init_if_needed` for the recipient's ATA. This requires the `init_if_needed` feature flag in `Cargo.toml`. Payer = the user calling the instruction. Cost: ~0.002 SOL per new ATA (rent-exempt minimum).
@@ -225,7 +225,7 @@ SettlementEvent {
 2. **Admin trust assumption** — admin can call `admin_settle` with arbitrary price after 1hr delay, or `admin_override_settlement` to correct a bad oracle settlement within 1hr. No on-chain governance. Mitigated: override window is time-limited and resets only once per override call; outcome becomes truly immutable after deadline.
 3. **Market account closure is phased** (Phase 6) — on devnet, settled markets remain on-chain forever (free airdrops cover rent). On mainnet, three-phase lifecycle: `close_market` (partial close at 90 days, reclaims ~98% of rent), `treasury_redeem` (indefinite late claims), `cleanup_market` (final close once supply = 0). Orphaned mints from lost wallets (~0.004 SOL/market) remain indefinitely — acceptable cost. See DEV_LOG for future cleanup paths (Token-2022 migration, governance-gated burns, economic incentives).
 4. **Mock oracle is centralized** — single authority keypair. Compromise = bad prices. Swap for Pyth on mainnet (Phase 6).
-5. **Order book depth** — 16 orders per price level. If exceeded, new orders at that level are rejected. Sufficient for prototype.
+5. **Order book depth** — 16 orders per price level. If exceeded, new orders at that level are rejected with `OrderBookFull` (6051). Frontend should display "This price level is full — try a different price." Sufficient for prototype.
 6. **No partial redemption** — `redeem` burns all of a user's tokens for a market in one call. Users who want to redeem only a portion must first transfer the remainder to another wallet. Simpler implementation; the spec does not require partial redemption. If needed later, add a `quantity` parameter to `redeem`.
 7. **Multi-wallet position constraint bypass** — On-chain position checks (`ConflictingPosition`) enforce single-wallet constraints, but SPL tokens are freely transferable. A user could transfer No to wallet B, then Buy Yes from wallet A. This requires deliberate effort and is the user's own capital inefficiency — not a safety risk.
 
@@ -289,10 +289,10 @@ SettlementEvent {
 
 ### Compute Budget
 - Simple instructions (mint, cancel, redeem): default 200k CUs
-- Standard matching instructions (place_order with swap fills only): request 400k CUs via `ComputeBudgetProgram.setComputeUnitLimit`
-- **Merge/burn matching** (place_order where No-backed bid matches Yes ask): request **800k CUs**. Each merge/burn fill involves 2 token burns + 2 USDC transfers + invariant check (~20,000–28,000 CUs per fill). At `max_fills=10`, worst case is ~280k CUs for fills alone plus overhead — 800k gives ~2x headroom while staying well under Solana's 1,400,000 CU per-transaction maximum.
-- `place_order` accepts `max_fills` parameter (default 10). If order can't fully fill within N matches, remainder rests as limit order. Bounds compute predictably. **`max_fills` is the primary CU safety valve** — if Phase 2 CU measurements come in higher than estimated, lower the default before adjusting the CU request.
-- **CU measurement gate (Phase 2C)**: Run a dedicated test that executes a 10-fill merge/burn sweep (worst-case path), reads `compute_units_consumed` from transaction metadata, and logs the actual number. This measurement locks the `max_fills` default and CU request values for the rest of the build. If actual CU per merge/burn fill exceeds 35,000, lower `max_fills` default to 8; if under 20,000, raise to 12–15.
+- Standard matching instructions (place_order with swap fills only): request 400k CUs via `ComputeBudgetProgram.setComputeUnitLimit`. Each swap fill involves ~2 CPIs (1 transfer out of escrow + 1 transfer to buyer), estimated ~40,000–60,000 CUs per fill.
+- **Merge/burn matching** (place_order where No-backed bid matches Yes ask): request **800k CUs**. Each merge/burn fill involves 4 CPIs (2 token burns + 2 USDC transfers) + invariant check — estimated **80,000–120,000 CUs per fill**. CPI calls to Token Program are ~20,000–30,000 CUs each; 4 per fill dominates the cost.
+- `place_order` accepts `max_fills` parameter with **per-path defaults**: **10 for swap fills** (standard USDC bid × Yes ask), **5 for merge/burn fills** (No-backed bid × Yes ask). At `max_fills=5` merge/burn, worst case is ~600k CUs for fills plus overhead — 800k provides headroom while staying well under Solana's 1,400,000 CU per-transaction maximum. If order can't fully fill within N matches, remainder rests as limit order. Bounds compute predictably. **`max_fills` is the primary CU safety valve** — if Phase 2 CU measurements come in higher than estimated, lower the default before adjusting the CU request.
+- **CU measurement gate (Phase 2C)**: Run two dedicated tests — a 10-fill swap sweep and a 5-fill merge/burn sweep — reading `compute_units_consumed` from transaction metadata for each. This measurement locks the `max_fills` defaults and CU request values for the rest of the build. **Swap path thresholds**: if CU per swap fill > 60,000 → lower swap `max_fills` to 8; if < 30,000 → raise to 12–15. **Merge/burn path thresholds**: if CU per merge/burn fill > 100,000 → cap merge/burn `max_fills` at 5; if > 80,000 → cap at 6; if < 60,000 → raise to 8. Record both measurements in DEV_LOG.
 - Monitor program binary size during Phase 2 — if instructions + matching engine (with merge/burn) exceed 200KB BPF limit, use `solana program deploy --max-len`
 
 ### Prerequisites — What the Developer Needs Before Building
@@ -312,8 +312,8 @@ A zero SOL balance is expected and normal — scripts handle funding as step 1.
 Script dependencies must run in this order (all automated by `make dev`):
 1. `solana airdrop` — fund deployer wallet with SOL (devnet, free)
 2. `anchor deploy` — deploy both programs
-3. `scripts/create-mock-usdc.ts` — create mock USDC mint
-4. `scripts/init-config.ts` — initialize GlobalConfig with admin, USDC mint, oracle program
+3. `scripts/create-mock-usdc.ts` — create mock USDC mint, auto-write `FAUCET_KEYPAIR` + `USDC_MINT` + `NEXT_PUBLIC_USDC_MINT` to `.env`
+4. `scripts/init-config.ts` — initialize GlobalConfig with admin, USDC mint (reads from `.env`), oracle program
 5. `scripts/init-oracle-feeds.ts` — initialize PriceFeed for all 7 tickers
 6. `scripts/create-test-markets.ts` — create markets for today's strikes
 7. Start oracle feeder → start AMM bot → start frontend
@@ -424,8 +424,42 @@ Once steps 1–3 are complete, **gate step 3.5** must run before parallel work b
 
 Once gate 3.5 is complete, the following can proceed in parallel:
 - [ ] `place_order` instruction (`instructions/place_order.rs` only): wires matching engine + escrow together. Accepts `side: u8` (0/1/2) and `order_type` (Market/Limit). Min size: 1 token. For side=2 (Sell No): user must hold sufficient No tokens; escrowed in no_escrow. Error codes 6050–6059 already in `error.rs` from gate 3.5.
+
+  **`place_order` account list** (heaviest instruction — documented explicitly for tx size validation):
+  ```
+  Fixed accounts (always present, 19 accounts):
+   1. signer              — user/taker, mut, signer
+   2. global_config       — GlobalConfig, read-only
+   3. market              — StrikeMarket, mut
+   4. order_book          — OrderBook, mut (ZeroCopy)
+   5. usdc_vault          — main collateral vault, mut (for merge/burn debits)
+   6. escrow_vault        — USDC escrow, mut
+   7. yes_escrow          — Yes token escrow, mut
+   8. no_escrow           — No token escrow, mut
+   9. yes_mint            — mut (for merge/burn burns)
+  10. no_mint             — mut (for merge/burn burns)
+  11. user_usdc_ata       — mut (escrow source for side=0, payout dest for merge/burn)
+  12. user_yes_ata        — mut (escrow source for side=1, receipt for swap fills)
+  13. user_no_ata         — mut (escrow source for side=2, position constraint for side=0)
+  14. token_program       — SPL Token
+  15. associated_token_program
+  16. system_program
+  17. rent                — Sysvar (for init_if_needed ATA creation)
+  18. market_alt          — Address Lookup Table (for v0 tx building, client-side only)
+  19. clock               — Sysvar (for order timestamp)
+
+  Per-fill remaining accounts (up to max_fills makers):
+  Per maker matched, 2-3 accounts passed via remaining_accounts:
+   - maker               — wallet Pubkey (for ATA derivation)
+   - maker_usdc_ata      — mut, init_if_needed (receives USDC on swap/merge fills)
+   - maker_yes_ata       — mut, init_if_needed (receives Yes tokens when filling a USDC bid)
+  The instruction reads order.side from the book to determine which maker ATAs are needed per fill.
+
+  Worst case: 19 fixed + 3 × 10 (swap) = 49 accounts, or 19 + 3 × 5 (merge/burn) = 34 accounts.
+  With ALTs: 49 accounts × 1 byte = 49 bytes of keys. Well under 1,232-byte tx limit.
+  ```
 - [ ] `cancel_order` instruction (`instructions/cancel_order.rs` only): owner-only, refund from escrow (checks order's `side` to return USDC, Yes, or No), cancel by `(price_level, order_id)`. Works post-settlement.
-- [ ] `pause` / `unpause` instructions (`instructions/pause.rs` only): admin only. Global (`GlobalConfig.is_paused`) or per-market (`StrikeMarket.is_paused`). Reads/writes `is_paused` flags — no dependency on matching engine or escrow.
+- [ ] `pause` / `unpause` instructions (`instructions/pause.rs` and `instructions/unpause.rs`): admin only. Global (`GlobalConfig.is_paused`) or per-market (`StrikeMarket.is_paused`). Reads/writes `is_paused` flags — no dependency on matching engine or escrow.
 
 **Parallel safety rule**: Each parallel agent writes ONLY its own `instructions/<name>.rs` file. No agent touches `lib.rs`, `mod.rs`, or `error.rs` — those are locked after gate 3.5.
 
@@ -481,7 +515,7 @@ On-chain unit tests (matching engine — run these first, they validate the core
 - [ ] Matching engine: 20+ scenarios (exact fill, partial fill, sweep multiple levels, no cross, book full at level, price-time priority, market order fills, limit order rests)
 - [ ] Escrow: USDC locked on bid (→escrow_vault), Yes locked on ask (→yes_escrow), No locked on No-backed bid (→no_escrow), returned on cancel, correct asset transferred on fill
 - [ ] Merge/burn vault math: vault decrements by quantity, total_redeemed increments, invariant holds
-- [ ] **CU measurement (merge/burn worst-case)**: Execute a 10-fill merge/burn sweep (No-backed bid sweeping 10 Yes asks across price levels). Read `compute_units_consumed` from transaction metadata. Log actual CU. **This test locks the `max_fills` default and CU request values**: if per-fill CU > 35,000 → lower `max_fills` default to 8; if < 20,000 → raise to 12–15. Record the measurement in DEV_LOG.
+- [ ] **CU measurement (both paths)**: Execute two worst-case sweeps: (1) a 10-fill swap sweep (USDC bid sweeping 10 Yes asks), and (2) a 5-fill merge/burn sweep (No-backed bid sweeping 5 Yes asks across price levels). Read `compute_units_consumed` from transaction metadata for each. Log actual CU per fill. **This test locks the per-path `max_fills` defaults and CU request values.** Swap thresholds: per-fill > 60k → lower swap `max_fills` to 8; < 30k → raise to 12–15. Merge/burn thresholds: per-fill > 100k → cap at 5; > 80k → cap at 6; < 60k → raise to 8. Record both measurements in DEV_LOG.
 
 On-chain integration tests (need deployed instructions — parallel with each other):
 - [ ] Place order: happy path, insufficient balance, paused market, settled market, min quantity, price bounds
@@ -504,7 +538,7 @@ Run `/audit` against all Phase 2 code. Verify:
 - Matching engine correctness: price-time priority, partial fills, no fund leaks across all three side types
 - Escrow balances (USDC, Yes, No) always match outstanding orders by side
 - Merge/burn correctness: vault decrements exactly, total_redeemed increments, Yes+No supply stays equal after burns
-- No CU overflows on max_fills sweeps: verify standard swap path stays under 400k CUs, merge/burn path stays under 800k CUs. Confirm `max_fills` default matches the CU measurement gate results from Stage 2C.
+- No CU overflows on max_fills sweeps: verify standard swap path (max_fills=10) stays under 400k CUs, merge/burn path (max_fills=5) stays under 800k CUs. Confirm per-path `max_fills` defaults match the CU measurement gate results from Stage 2C.
 - Frontend: no direct RPC calls in components (hooks only)
 - TypeScript strict mode, no `any` types
 
@@ -545,7 +579,7 @@ Once `settle_market` is complete, the following are parallel (independent precon
 - [ ] `admin_override_settlement` instruction (`instructions/admin_override_settlement.rs` only): admin only, requires `Clock < override_deadline`. Corrects outcome + settlement_price. Resets `override_deadline = now + 3600`. Must correctly flip winning/losing status. (For already-settled markets where oracle was wrong.)
 
 Once both admin settlement paths are complete, the following are parallel (no dependency on each other — each writes only its own instruction file):
-- [ ] `redeem` instruction (`instructions/redeem.rs` only): burns winning tokens → $1 USDC. Burns losing tokens → $0. Burns Yes+No pair → $1. **Blocked during override window** (`Clock < override_deadline`). Needs override logic finalized to correctly check the window.
+- [ ] `redeem` instruction (`instructions/redeem.rs` only): two modes — **(1) Pair burn** (Yes + No → $1 USDC): available anytime, no settlement required, not blocked by override window (outcome-independent, inverse of `mint_pair`). **(2) Winner/loser redemption** (winning → $1, losing → $0): requires `is_settled == true`, **blocked during override window** (`Clock < override_deadline`). Needs override logic finalized to correctly check the window for mode 2.
 - [ ] `crank_cancel` instruction (`instructions/crank_cancel.rs` only): permissionless, market must be settled. Iterates up to 32 order slots per call. Returns escrowed assets based on order's `side`: USDC (side=0 bids), Yes tokens (side=1 asks), No tokens (side=2 No-backed bids) to owners. Skips already-cancelled slots. Returns count. **Not blocked by override window** (escrow refunds are outcome-independent).
 
 **Stage 3B — Gate → parallel: frontend + services (once 3A is complete)**
@@ -606,12 +640,13 @@ On-chain tests (parallel with each other):
 - [ ] Oracle validation: stale price rejected (>120s), wide confidence rejected (>0.5%), valid price accepted
 - [ ] `admin_settle`: delay enforced (1hr after market close), succeeds after delay, fails if already settled
 - [ ] `admin_override_settlement`: succeeds within window, fails after deadline, flips outcome correctly, resets deadline
-- [ ] `redeem` blocked during override window (`RedemptionBlockedOverride`), succeeds immediately after deadline passes
+- [ ] `redeem` winner/loser mode blocked during override window (`RedemptionBlockedOverride`), succeeds immediately after deadline passes
+- [ ] `redeem` pair burn mode succeeds during override window (outcome-independent, not blocked)
 - [ ] `crank_cancel` succeeds during override window (escrow refunds are outcome-independent)
 - [ ] Admin overrides outcome during window → post-deadline `redeem` pays based on corrected outcome, not original
 - [ ] `crank_cancel` mid-flight during admin override → crank unaffected (returns same assets regardless of outcome flip)
 - [ ] Redeem: winning tokens paid $1, losing tokens zeroed, vault empties after full redemption
-- [ ] Redeem Yes+No pair: burns both for $1 USDC
+- [ ] Redeem Yes+No pair burn: burns both for $1 USDC, works pre-settlement (no `is_settled` requirement), works during override window
 - [ ] `crank_cancel`: batch processing (32 slots), skip inactive, reject unsettled market, returns 0 when empty
 - [ ] Manual `cancel_order` still works post-settlement alongside crank
 - [ ] Add strike intraday: `create_strike_market` callable by admin anytime, PDA prevents duplicates
@@ -637,7 +672,7 @@ Frontend tests (vitest — parallel with on-chain tests):
 Run `/audit` against all Phase 3 code. Verify:
 - Settlement logic: >= rule correct, immutable after override window, oracle validation tight
 - Override: outcome flip is correct (winners become losers and vice versa)
-- Redemption: blocked during window, unblocked after, pair burn works
+- Redemption: winner/loser mode blocked during override window, unblocked after; pair burn mode works anytime (pre-settlement, during override window)
 - Crank: no fund leaks, skips inactive correctly, compatible with manual cancel
 - Automation: retry logic correct, timezone handling (DST), alert on failure
 - Invariants hold across entire lifecycle (vault, supply, payout sum)
@@ -721,7 +756,7 @@ Run `/complexity-sweep` across entire codebase (Phases 1–4). Focus areas:
 - [ ] Risks/limitations note — must include known technical limitations, trust assumptions, and economic edge cases. **Must NOT make any regulatory or compliance claims** (per spec: "no regulatory or compliance claims"). State that the system is a prototype and does not constitute a regulated financial product. Do not assert compliance with SEC, CFTC, or any other regulatory body.
 - [ ] Dependency justification doc (see `docs/DEV_LOG.md` for table — extract to standalone doc)
 - [ ] CI workflows (GitHub Actions, `.github/workflows/ci.yml`):
-  - **Anchor tests job**: Install Rust 1.75, Solana CLI 1.18, Anchor CLI 0.30.1. Run `anchor build`, then `anchor test` (bankrun, no validator needed). Cache `~/.cargo` and `target/` across runs.
+  - **Anchor tests job**: Install Rust 1.94, Solana CLI 2.1, Anchor CLI 0.30.1. Run `anchor build`, then `anchor test` (bankrun, no validator needed). Cache `~/.cargo` and `target/` across runs.
   - **Frontend job**: Install Node 18, Yarn. Run `yarn install --frozen-lockfile`, `yarn lint` (ESLint), `yarn typecheck` (tsc --noEmit), `yarn test` (Vitest). Working directory: `app/meridian-web/`.
   - **Services job**: Install Node 18, Yarn. Run lint + typecheck + unit tests for `services/oracle-feeder/`, `services/amm-bot/`, `services/market-initializer/`, `services/event-indexer/`, `services/shared/`.
   - **Triggers**: push to `main`, pull requests to `main`. All three jobs run in parallel.
@@ -764,7 +799,7 @@ Run `/audit` against entire codebase. Verify:
 
 **Prerequisites (manual, before any Stage 6 work):**
 - [ ] Generate dedicated mainnet keypair: `solana-keygen new -o ~/.config/solana/mainnet-deployer.json` — never reuse devnet key
-- [ ] Fund mainnet keypair with ~100 SOL (program deploy ~5 SOL, account rent ~75 SOL for 49 markets, automation tx fees ~0.1 SOL/day)
+- [ ] Fund mainnet keypair with ~100 SOL (program deploy ~5 SOL, account rent ~75 SOL for 49 markets — dominated by ~0.877 SOL per OrderBook account at ~126 KB each, automation tx fees ~0.1 SOL/day). Market initializer script should validate sufficient SOL balance before creating markets.
 - [ ] Sign up for Helius RPC (helius.dev, free tier = 50 RPS) — mainnet public RPC is too rate-limited
 - [ ] Set up monitoring endpoint (Discord webhook for alerts — simplest path)
 
@@ -783,7 +818,7 @@ error codes + is_closed field (gate)
 
 Gate (must complete before both tracks):
 1. Add `is_closed: bool` field to StrikeMarket schema (takes 1 byte from existing padding).
-2. Error codes: add all Phase 6 codes to `error.rs`:
+2. Error codes: add all Phase 6 codes to `error.rs` (these are the same codes documented in the Error Codes reference section below — listed here so the gate step is self-contained):
    - `6110 CloseMarketNotSettled` — market not settled
    - `6111 CloseMarketOverrideActive` — override window still open
    - `6112 CloseMarketOrderBookNotEmpty` — resting orders remain
@@ -976,7 +1011,7 @@ Comprehensive error handling is non-negotiable — when money is involved, trust
 ### Redemption
 | Code | Name | Trigger |
 |---|---|---|
-| 6080 | `RedemptionBlockedOverride` | `redeem` during override window (1hr post-settlement) |
+| 6080 | `RedemptionBlockedOverride` | `redeem` winner/loser mode during override window (1hr post-settlement). Does not apply to pair burn mode. |
 | 6081 | `NoTokensToRedeem` | User has 0 balance of relevant tokens |
 | 6082 | `InvalidRedemptionMode` | Not winner-redeem, loser-redeem, or pair-redeem |
 
@@ -1121,7 +1156,7 @@ make clean        # remove build artifacts + target dirs
 | 6 | `settle_market` | 3 | Anyone calls. Requires `Clock >= market_close_unix`. Oracle staleness (120s) + confidence (0.5% bps) validated. Sets outcome + `override_deadline = settled_at + 3600`. Phase 6 adds Pyth oracle path via `oracle_type` flag in GlobalConfig. |
 | 7 | `admin_settle` | 3 | Admin only. Requires `Clock >= market_close_unix + 3600`. Accepts manual price. Fails if already settled. |
 | 8 | `admin_override_settlement` | 3 | Admin only. `Clock < override_deadline`. Corrects outcome + settlement_price. Resets `override_deadline = now + 3600`. After deadline, outcome is truly final. |
-| 9 | `redeem` | 3 | Burns tokens → pay USDC. Winners: $1/token. Losers: $0. Also: burn Yes+No pair → $1. **Blocked during override window** (1hr post-settlement). |
+| 9 | `redeem` | 3 | Two modes: **(1) Pair burn** (Yes + No → $1): anytime, no settlement required, not blocked by override window (outcome-independent). **(2) Winner/loser** (winning → $1, losing → $0): requires settlement, **blocked during override window** (1hr post-settlement). |
 | 10 | `crank_cancel` | 3 | Permissionless. Market must be settled. Iterates up to 32 order slots per call, returns escrow (USDC, Yes, or No) to owners. **Not blocked by override window** (escrow refunds are outcome-independent — see Override Window Safety below). |
 | 11 | `pause` | 3 | Admin only. Global (`GlobalConfig.is_paused`) or per-market (`StrikeMarket.is_paused`). |
 | 12 | `unpause` | 3 | Admin only. Resume. |
@@ -1223,7 +1258,7 @@ Every spec requirement mapped to a phase:
 **Smart Contract (Phase 1-3 + Phase 6, 15 instructions):**
 - [P1] initialize_config, create_strike_market (also serves as add_strike), mint_pair
 - [P2] place_order (market + limit, `max_fills` param, three side types: USDC bid / Yes ask / No-backed bid, merge/burn on No×Yes match), cancel_order (works anytime including post-settlement)
-- [P3] settle_market (anyone, >= rule), admin_settle (admin, 1hr delay), admin_override_settlement (1hr correction window), redeem (winners + pair burn, blocked during override window), crank_cancel (permissionless batch cleanup), pause, unpause
+- [P3] settle_market (anyone, >= rule), admin_settle (admin, 1hr delay), admin_override_settlement (1hr correction window), redeem (two modes: pair burn anytime, winner/loser blocked during override window), crank_cancel (permissionless batch cleanup), pause, unpause
 - [P6] close_market (admin, standard close if all redeemed; partial close after 90 days — closes OrderBook + vaults, keeps settlement record, sweeps unclaimed USDC to treasury)
 - [P6] treasury_redeem (permissionless, no time limit — late claim against treasury for partially-closed markets)
 - [P6] cleanup_market (admin, closes remaining StrikeMarket + mints once all token supply is burned)
@@ -1343,7 +1378,7 @@ Every spec requirement mapped to a phase:
 
 ### Mock USDC on Devnet
 Real USDC doesn't exist on Solana devnet. We create our own SPL token:
-- `scripts/create-mock-usdc.ts` — generates a dedicated faucet keypair, creates an SPL mint with 6 decimals using the faucet keypair as mint authority (not the deployer), outputs the faucet keypair's base58 secret key for `FAUCET_KEYPAIR` in `.env`
+- `scripts/create-mock-usdc.ts` — generates a dedicated faucet keypair, creates an SPL mint with 6 decimals using the faucet keypair as mint authority (not the deployer). **Automatically writes `FAUCET_KEYPAIR`, `USDC_MINT`, and `NEXT_PUBLIC_USDC_MINT` to `.env`** (appends if not present, updates if present). No manual copy-paste step — `make dev` runs this script and `.env` is ready for the frontend.
 - `scripts/airdrop-usdc.ts` — mints mock USDC to test wallets (deployer, test users)
 - GlobalConfig stores the mock USDC mint address; all program instructions reference it
 - Frontend `.env` includes `NEXT_PUBLIC_USDC_MINT` pointing to our devnet mock mint
@@ -1360,7 +1395,7 @@ Two paths — CLI for developers, in-app for end users:
 - SOL: `/api/faucet/sol` — calls `connection.requestAirdrop(wallet, 2 SOL)`. Button in header when SOL balance < 0.01.
 - USDC: `/api/faucet/usdc` — server-side `mintTo(wallet, 1000 USDC)` using faucet keypair (USDC mint authority). Button in header when USDC balance is 0.
 - Rate limit: 1 request per wallet per 60 seconds (in-memory map). Prevents abuse without needing a database.
-- **Faucet keypair**: A **dedicated keypair** used only as the mock USDC mint authority. Generated separately from the deployer keypair — `create-mock-usdc.ts` generates a new keypair, creates the mint with it as authority, and outputs the base58-encoded secret key for `FAUCET_KEYPAIR` in `.env`. This keypair can mint mock USDC but cannot deploy programs, act as admin, or sign any other instruction. Principle of least privilege — consistent with the mainnet keypair separation strategy. Stored as `FAUCET_KEYPAIR` env var (base58-encoded secret key).
+- **Faucet keypair**: A **dedicated keypair** used only as the mock USDC mint authority. Generated separately from the deployer keypair — `create-mock-usdc.ts` generates a new keypair, creates the mint with it as authority, and writes the base58-encoded secret key directly to `.env` as `FAUCET_KEYPAIR` (along with `USDC_MINT` and `NEXT_PUBLIC_USDC_MINT`). This keypair can mint mock USDC but cannot deploy programs, act as admin, or sign any other instruction. Principle of least privilege — consistent with the mainnet keypair separation strategy.
 - On mainnet: faucet routes return 403. No `FAUCET_KEYPAIR` exists. Users acquire real USDC from exchanges.
 
 ### Deployment
@@ -1407,7 +1442,7 @@ Railway project: meridian
 
 ### Transaction Size & Compute Budget
 - Solana tx limit: 1,232 bytes. All transactions use v0 + ALTs, so account key overhead is ~1 byte each instead of 32. Size is never a constraint, even for heaviest instructions (Buy No, Sell No merge/burn via `place_order`).
-- Default compute: 200,000 CUs. Simple operations (mint, cancel) are well under. Standard swap fills: request 400k CUs. **Merge/burn fills (No-backed bid × Yes ask): request 800k CUs** — each merge/burn involves 2 burns + 2 transfers (~20k–28k CUs per fill). 800k gives ~2x headroom at `max_fills=10`. Solana max is 1,400,000 CUs. Exact values locked by CU measurement gate in Phase 2C.
+- Default compute: 200,000 CUs. Simple operations (mint, cancel) are well under. Standard swap fills: request 400k CUs (`max_fills=10`). **Merge/burn fills (No-backed bid × Yes ask): request 800k CUs** (`max_fills=5`) — each merge/burn involves 4 CPIs (2 burns + 2 transfers), estimated ~80k–120k CUs per fill. 800k provides headroom at 5 fills. Solana max is 1,400,000 CUs. Exact values locked by CU measurement gate in Phase 2C.
 
 ### Order Book Account Sizing
 - ZeroCopy account with 99 price levels (1-99 cents). Each level has N order slots.
@@ -1498,8 +1533,9 @@ vault_debit = quantity                 // exactly $1.00 per pair in token lampor
 **Required test cases (Stage 3C)**:
 - [ ] `crank_cancel` succeeds during override window (within 1hr of settlement): orders cancelled, escrow returned correctly
 - [ ] `crank_cancel` succeeds after override window expires: same behavior
-- [ ] `redeem` fails during override window with `RedemptionBlockedOverride`
-- [ ] `redeem` succeeds immediately after override window expires
+- [ ] `redeem` winner/loser mode fails during override window with `RedemptionBlockedOverride`
+- [ ] `redeem` pair burn mode succeeds during override window (outcome-independent)
+- [ ] `redeem` winner/loser mode succeeds immediately after override window expires
 - [ ] Admin overrides outcome during window → `redeem` after new deadline pays based on corrected outcome
 - [ ] Admin overrides outcome during window while `crank_cancel` is in progress → crank unaffected (returns same assets regardless of outcome flip)
 
@@ -1507,7 +1543,7 @@ vault_debit = quantity                 // exactly $1.00 per pair in token lampor
 ### Trade History & Event Storage
 - **On-chain**: Anchor `emit!` events for every fill, cancel, settle, redeem. Events are in transaction logs.
 - **Event indexer** (`services/event-indexer/`): Long-running service that watches `connection.onLogs(programId)` for Anchor events, parses them, and persists to a **SQLite database** (`events.db`). On startup, backfills missed events via `getSignaturesForAddress` (starting from last-processed signature checkpoint in the DB — incremental, not full rescan). Exposes a REST API consumed by the frontend History page and Settlement Analytics. Eliminates slow on-the-fly transaction parsing.
-- **Storage**: SQLite via `better-sqlite3`. Tables: `fills`, `settlements`, `cancels`, `redeems`, plus a `checkpoints` table (last processed tx signature per program). Queries use SQL filtering (market, type, date range, pagination) instead of scanning files. Atomic writes — no partial-file corruption risk.
+- **Storage**: SQLite via `better-sqlite3`. **Must enable WAL mode** (`PRAGMA journal_mode=WAL`) at startup — `better-sqlite3` is synchronous, so without WAL, long writes (batch backfill) block API reads. WAL allows concurrent readers during writes. Tables: `fills`, `settlements`, `cancels`, `redeems`, plus a `checkpoints` table (last processed tx signature per program). Queries use SQL filtering (market, type, date range, pagination) instead of scanning files. Atomic writes — no partial-file corruption risk.
 - **Railway deployment**: 1GB persistent volume attached to the `event-indexer` service, mounted at `/data`. SQLite DB at `/data/events.db`. Volume survives redeploys, restarts, and service rebuilds ($0.25/month). Volume is single-attach — only the event-indexer reads/writes the DB; frontend hits the indexer's REST API. Backfill runs once on first deploy; subsequent deploys resume from checkpoint.
 - **Local development**: DB file at `data/events.db` (gitignored). Created automatically on first run.
 - **Frontend History page**: Queries the event indexer via `/api/events/*` Next.js proxy routes. TanStack Query with polling. Falls back to direct `getSignaturesForAddress` parsing if indexer is down.
@@ -1516,7 +1552,7 @@ vault_debit = quantity                 // exactly $1.00 per pair in token lampor
 ### Real-Time Updates
 - **Order book + positions**: Solana `connection.onAccountChange(orderBookPDA)` WebSocket subscription — instant updates when any order is placed/filled/cancelled. Used alongside TanStack Query (polling as fallback).
 - **Oracle prices**: `connection.onAccountChange(priceFeedPDA)` — live price updates from oracle feeder.
-- **Tradier streaming**: `stream.tradier.com/v1/markets/events` for live intraday stock prices in the oracle feeder. REST polling as fallback if streaming has issues. Streaming doesn't count against rate limits.
+- **Tradier streaming**: `stream.tradier.com/v1/markets/events` for live intraday stock prices in the oracle feeder. Streaming doesn't count against rate limits. **Disconnect handling**: heartbeat timeout (no data for 30s during market hours → assume disconnected), exponential backoff reconnect (1s, 2s, 4s, … capped at 60s), automatic REST polling fallback (`/v1/markets/quotes` every 5s) while reconnecting. Alert via `alerting.ts` if disconnected for >60s during market hours — stale oracle prices risk failed settlements.
 
 ### Prerequisites (README)
 - Rust 1.94+ (tested with 1.94.0; Anchor 0.30.x requires 1.75+ minimum)

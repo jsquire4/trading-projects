@@ -40,3 +40,6 @@ htmlcov/
 
 # Solana
 test-ledger/
+
+# Stress test state
+scripts/stress-test/last-run.json

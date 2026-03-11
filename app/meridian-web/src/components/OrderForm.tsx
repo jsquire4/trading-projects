@@ -8,6 +8,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { useAnchorProgram } from "@/hooks/useAnchorProgram";
 import { useTransaction } from "@/hooks/useTransaction";
 import { useNetwork } from "@/hooks/useNetwork";
+import { usePositions } from "@/hooks/usePositions";
 import { USDC_MINT } from "@/hooks/useWalletState";
 import { TradeConfirmationModal } from "@/components/TradeConfirmationModal";
 import {
@@ -63,8 +64,25 @@ export function OrderForm({ marketKey, ticker, strikePrice }: OrderFormProps) {
   const { sendTransaction } = useTransaction();
   const { publicKey: walletPublicKey } = useWallet();
   const { isMainnet } = useNetwork();
+  const { data: positions = [] } = usePositions();
 
   const marketPubkey = useMemo(() => new PublicKey(marketKey), [marketKey]);
+
+  // Position constraint: can't Buy Yes while holding No, or Buy No while holding Yes
+  const currentPosition = useMemo(() => {
+    return positions.find((p) => p.market.publicKey.toBase58() === marketKey);
+  }, [positions, marketKey]);
+
+  const positionConflict = useMemo((): string | null => {
+    if (!currentPosition) return null;
+    if ((side === "buy-yes") && currentPosition.noBal > BigInt(0)) {
+      return "You hold No tokens for this strike. Sell your No position first.";
+    }
+    if ((side === "buy-no") && currentPosition.yesBal > BigInt(0)) {
+      return "You hold Yes tokens for this strike. Sell your Yes position first.";
+    }
+    return null;
+  }, [side, currentPosition]);
 
   const effectivePrice = useMemo(() => {
     if (orderType === "market") return null;
@@ -287,10 +305,17 @@ export function OrderForm({ marketKey, ticker, strikePrice }: OrderFormProps) {
         {ticker} @ ${(strikePrice / 1_000_000).toFixed(2)} strike
       </div>
 
+      {/* Position constraint warning */}
+      {positionConflict && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
+          {positionConflict}
+        </div>
+      )}
+
       {/* Submit */}
       <button
         onClick={handleSubmit}
-        disabled={!isValid || submitting}
+        disabled={!isValid || submitting || !!positionConflict}
         className={`w-full rounded-md py-2.5 text-sm font-semibold transition-colors ${
           isBuying
             ? "bg-yes hover:bg-yes-dark disabled:bg-yes/30"

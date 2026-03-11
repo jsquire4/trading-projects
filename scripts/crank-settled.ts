@@ -29,6 +29,7 @@ import {
   MERIDIAN_PROGRAM_ID,
   MOCK_ORACLE_PROGRAM_ID,
 } from "./shared";
+import { TradierClient } from "../services/shared/src/tradier-client";
 
 const RPC_URL = process.env.RPC_URL ?? "http://127.0.0.1:8899";
 const ENV_PATH = path.resolve(__dirname, "..", ".env");
@@ -37,10 +38,13 @@ const ADMIN_KEYPAIR_PATH = path.resolve(
   ".config/solana/id.json",
 );
 
-const MAG7_PRICES: Record<string, number> = {
+const MAG7_FALLBACK: Record<string, number> = {
   AAPL: 198, MSFT: 420, GOOGL: 175, AMZN: 200,
   NVDA: 130, META: 600, TSLA: 250,
 };
+
+const TICKERS = (process.env.TICKERS ?? "AAPL,TSLA,AMZN,MSFT,NVDA,GOOGL,META")
+  .split(",").map((t) => t.trim()).filter(Boolean);
 
 function roundToNearest(value: number, nearest: number): number {
   return Math.round(value / nearest) * nearest;
@@ -61,6 +65,26 @@ function expiryDayFromUnix(unix: number): number {
   const admin = loadKeypair(ADMIN_KEYPAIR_PATH);
   const env = readEnv(ENV_PATH);
   const usdcMint = new PublicKey(env["USDC_MINT"]);
+
+  // Load env vars for TradierClient
+  for (const [k, v] of Object.entries(env)) {
+    if (!process.env[k]) process.env[k] = v;
+  }
+
+  // Fetch live prices from Tradier
+  const MAG7_PRICES: Record<string, number> = {};
+  try {
+    const tradier = new TradierClient();
+    const quotes = await tradier.getQuotes(TICKERS);
+    for (const q of quotes) {
+      if (q.prevclose && q.prevclose > 0) MAG7_PRICES[q.symbol] = q.prevclose;
+    }
+  } catch {
+    // Fall through to fallback
+  }
+  for (const ticker of TICKERS) {
+    if (!MAG7_PRICES[ticker]) MAG7_PRICES[ticker] = MAG7_FALLBACK[ticker] ?? 200;
+  }
 
   const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], MERIDIAN_PROGRAM_ID);
 

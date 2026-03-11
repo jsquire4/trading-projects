@@ -5,7 +5,9 @@
 // 2. Update mock oracle price feeds
 // 3. Settle all expired, unsettled markets (with oracle retry)
 // 4. Crank cancel resting orders on settled markets
-// 5. Log results + alert on failures
+// 5. Close eligible markets
+// 6. Auto-create next-day markets
+// 7. Log results + alert on failures
 // ---------------------------------------------------------------------------
 
 import { AnchorProvider, Program, Wallet } from "@coral-xyz/anchor";
@@ -28,6 +30,7 @@ import {
 import { settleMarkets, MarketInfo, tickerFromBytes } from "./settler.js";
 import { crankCancelAll } from "./cranker.js";
 import { closeEligibleMarkets } from "./closer.js";
+import { initializeMarkets } from "../../market-initializer/src/initializer.js";
 
 const log = createLogger("settlement");
 
@@ -170,7 +173,7 @@ async function main(): Promise<void> {
   const startTime = Date.now();
 
   // ---- Environment ----------------------------------------------------------
-  const RPC_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
+  const RPC_URL = process.env.RPC_URL ?? "http://127.0.0.1:8899";
   const ADMIN_KEYPAIR_B58 = process.env.ADMIN_KEYPAIR;
 
   if (!ADMIN_KEYPAIR_B58) {
@@ -278,7 +281,39 @@ async function main(): Promise<void> {
       });
     }
 
-    // ---- Step 6: Summary ----
+    // ---- Step 6: Auto-create next-day markets ----
+    log.info("Creating markets for next trading day");
+    try {
+      const initResults = await initializeMarkets();
+      const totalCreated = initResults.reduce((s, r) => s + r.strikesCreated, 0);
+      const totalSkipped = initResults.reduce((s, r) => s + r.strikesSkipped, 0);
+      const initErrors = initResults.flatMap((r) => r.errors);
+
+      if (totalCreated > 0) {
+        log.info(`Next-day markets created: ${totalCreated} new, ${totalSkipped} skipped`, {
+          results: initResults.map((r) => ({
+            ticker: r.ticker,
+            previousClose: r.previousClose,
+            created: r.strikesCreated,
+            skipped: r.strikesSkipped,
+          })),
+        });
+      } else if (totalSkipped > 0) {
+        log.info(`Next-day markets already exist (${totalSkipped} skipped)`);
+      }
+
+      if (initErrors.length > 0) {
+        log.error(`Market creation had ${initErrors.length} errors`, { errors: initErrors });
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log.error(`Failed to create next-day markets: ${errMsg}`, {
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+      // Non-fatal — settlement was successful, markets can be created by morning-init
+    }
+
+    // ---- Step 7: Summary ----
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     const summary = {
       elapsed: `${elapsed}s`,

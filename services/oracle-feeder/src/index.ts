@@ -80,7 +80,7 @@ async function readTickersFromChain(
 async function main(): Promise<void> {
   log.info("Oracle Feeder starting up");
 
-  const rpcUrl = process.env.RPC_URL ?? "https://api.devnet.solana.com";
+  const rpcUrl = process.env.RPC_URL ?? "http://127.0.0.1:8899";
   const connection = new Connection(rpcUrl, "confirmed");
   log.info(`RPC: ${rpcUrl}`);
 

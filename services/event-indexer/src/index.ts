@@ -24,7 +24,7 @@ import idlJson from "../../shared/src/idl/meridian.json" with { type: "json" };
 import type { Idl } from "@coral-xyz/anchor";
 
 const log = createLogger("event-indexer");
-const DEFAULT_RPC_URL = "https://api.devnet.solana.com";
+const DEFAULT_RPC_URL = "http://127.0.0.1:8899";
 const DEFAULT_PORT = 3001;
 
 async function main(): Promise<void> {

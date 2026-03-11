@@ -30,7 +30,7 @@ async function main(): Promise<void> {
   log.info("Market verification starting");
 
   // ---- Environment ---------------------------------------------------------
-  const rpcUrl = process.env.RPC_URL ?? "https://api.devnet.solana.com";
+  const rpcUrl = process.env.RPC_URL ?? "http://127.0.0.1:8899";
   const adminSecret = process.env.ADMIN_KEYPAIR;
   if (!adminSecret) {
     throw new Error("ADMIN_KEYPAIR env var is required (base58 secret key)");

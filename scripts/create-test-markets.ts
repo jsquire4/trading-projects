@@ -51,22 +51,18 @@ import {
   MERIDIAN_PROGRAM_ID,
   MOCK_ORACLE_PROGRAM_ID,
 } from "./shared";
+import { TradierClient } from "../services/shared/src/tradier-client";
 import { binaryCallPrice, probToCents } from "../services/amm-bot/src/pricer";
 import { generateQuotes } from "../services/amm-bot/src/quoter";
 
-// ---------------------------------------------------------------------------
-// MAG7 reference prices (approximate — used for strike generation only)
-// ---------------------------------------------------------------------------
-
-const MAG7_PRICES: Record<string, { price: number }> = {
-  AAPL:  { price: 198 },
-  MSFT:  { price: 420 },
-  GOOGL: { price: 175 },
-  AMZN:  { price: 200 },
-  NVDA:  { price: 130 },
-  META:  { price: 600 },
-  TSLA:  { price: 250 },
+// Fallback prices — only used if Tradier API is unavailable
+const MAG7_FALLBACK: Record<string, number> = {
+  AAPL: 198, MSFT: 420, GOOGL: 175, AMZN: 200,
+  NVDA: 130, META: 600, TSLA: 250,
 };
+
+const TICKERS = (process.env.TICKERS ?? "AAPL,TSLA,AMZN,MSFT,NVDA,GOOGL,META")
+  .split(",").map((t) => t.trim()).filter(Boolean);
 
 // ---------------------------------------------------------------------------
 // Strike generation (same algorithm as services/shared/src/strikes.ts)
@@ -367,6 +363,34 @@ function toScriptMarketAddrs(addrs: MarketAddresses) {
   const usdcMint = new PublicKey(env["USDC_MINT"]);
   console.log(`USDC Mint: ${usdcMint.toBase58()}`);
 
+  // Load env vars for TradierClient (scripts don't auto-load .env into process.env)
+  for (const [k, v] of Object.entries(env)) {
+    if (!process.env[k]) process.env[k] = v;
+  }
+
+  // Fetch live prices from Tradier API
+  const MAG7_PRICES: Record<string, number> = {};
+  try {
+    const tradier = new TradierClient();
+    const quotes = await tradier.getQuotes(TICKERS);
+    for (const q of quotes) {
+      if (q.prevclose && q.prevclose > 0) {
+        MAG7_PRICES[q.symbol] = q.prevclose;
+        console.log(`  ${q.symbol}: prevclose=$${q.prevclose} (live from Tradier)`);
+      }
+    }
+  } catch (err: any) {
+    console.warn(`Tradier API unavailable: ${err.message?.slice(0, 80)}`);
+  }
+
+  // Fill in any missing tickers with fallback prices
+  for (const ticker of TICKERS) {
+    if (!MAG7_PRICES[ticker]) {
+      MAG7_PRICES[ticker] = MAG7_FALLBACK[ticker] ?? 200;
+      console.log(`  ${ticker}: prevclose=$${MAG7_PRICES[ticker]} (fallback — Tradier unavailable)`);
+    }
+  }
+
   const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], MERIDIAN_PROGRAM_ID);
   const marketCloseUnix = todayMarketCloseUnix();
   const expiryDay = expiryDayFromUnix(marketCloseUnix);
@@ -382,7 +406,7 @@ function toScriptMarketAddrs(addrs: MarketAddresses) {
   }
 
   const specs: MarketSpec[] = [];
-  for (const [ticker, { price }] of Object.entries(MAG7_PRICES)) {
+  for (const [ticker, price] of Object.entries(MAG7_PRICES)) {
     const strikes = generateStrikes(price);
     for (const strike of strikes) {
       specs.push({ ticker, strikeDollars: strike, previousClose: price });
@@ -390,7 +414,7 @@ function toScriptMarketAddrs(addrs: MarketAddresses) {
   }
 
   console.log(`\nWill create ${specs.length} markets across ${Object.keys(MAG7_PRICES).length} tickers:`);
-  for (const [ticker, { price }] of Object.entries(MAG7_PRICES)) {
+  for (const [ticker, price] of Object.entries(MAG7_PRICES)) {
     const strikes = generateStrikes(price);
     console.log(`  ${ticker} ($${price}): strikes ${strikes.map((s) => `$${s}`).join(", ")}`);
   }

@@ -46,7 +46,7 @@ function tickerFromBytes(bytes: number[]): string {
 }
 
 export async function runChecks(): Promise<void> {
-  const RPC_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
+  const RPC_URL = process.env.RPC_URL ?? "http://127.0.0.1:8899";
   const connection = new Connection(RPC_URL, "confirmed");
 
   // Minimal wallet — monitor is read-only, no signing needed

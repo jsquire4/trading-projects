@@ -63,7 +63,7 @@ export interface InitResult {
 
 export async function initializeMarkets(): Promise<InitResult[]> {
   // ---- Environment ---------------------------------------------------------
-  const rpcUrl = process.env.RPC_URL ?? "https://api.devnet.solana.com";
+  const rpcUrl = process.env.RPC_URL ?? "http://127.0.0.1:8899";
   const tickers = (
     process.env.TICKERS ?? "AAPL,TSLA,AMZN,MSFT,NVDA,GOOGL,META"
   )
@@ -444,6 +444,13 @@ export function computeMarketCloseUnix(date?: Date): number {
   // Convert to UTC: 960 - etOffsetMinutes (offset is negative for behind UTC)
   const marketCloseUTC = startOfDayUTC + (16 * 60 - etOffsetMinutes) * 60 * 1000;
 
-  return Math.floor(marketCloseUTC / 1000);
+  const closeUnix = Math.floor(marketCloseUTC / 1000);
+
+  // If today's close has already passed, shift to tomorrow's close
+  if (closeUnix <= Math.floor(Date.now() / 1000)) {
+    return closeUnix + 86400;
+  }
+
+  return closeUnix;
 }
 

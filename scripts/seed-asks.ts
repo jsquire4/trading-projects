@@ -33,6 +33,7 @@ import {
   MERIDIAN_PROGRAM_ID,
   MOCK_ORACLE_PROGRAM_ID,
 } from "./shared";
+import { TradierClient } from "../services/shared/src/tradier-client";
 import { binaryCallPrice, probToCents } from "../services/amm-bot/src/pricer";
 import { generateQuotes } from "../services/amm-bot/src/quoter";
 
@@ -51,10 +52,13 @@ const ASK_QTY = 200;
 const DEFAULT_VOL = 0.35;
 const SEED_LEVELS = 3;
 
-const MAG7_PRICES: Record<string, number> = {
+const MAG7_FALLBACK: Record<string, number> = {
   AAPL: 198, MSFT: 420, GOOGL: 175, AMZN: 200,
   NVDA: 130, META: 600, TSLA: 250,
 };
+
+const TICKERS = (process.env.TICKERS ?? "AAPL,TSLA,AMZN,MSFT,NVDA,GOOGL,META")
+  .split(",").map((t) => t.trim()).filter(Boolean);
 
 function roundToNearest(value: number, nearest: number): number {
   return Math.round(value / nearest) * nearest;
@@ -91,6 +95,30 @@ function expiryDayFromUnix(unix: number): number {
   const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], MERIDIAN_PROGRAM_ID);
   const marketCloseUnix = todayMarketCloseUnix();
   const expiryDay = expiryDayFromUnix(marketCloseUnix);
+
+  // Load env vars for TradierClient
+  for (const [k, v] of Object.entries(env)) {
+    if (!process.env[k]) process.env[k] = v;
+  }
+
+  // Fetch live prices from Tradier
+  const MAG7_PRICES: Record<string, number> = {};
+  try {
+    const tradier = new TradierClient();
+    const quotes = await tradier.getQuotes(TICKERS);
+    for (const q of quotes) {
+      if (q.prevclose && q.prevclose > 0) MAG7_PRICES[q.symbol] = q.prevclose;
+    }
+    console.log(`Fetched live prices for ${Object.keys(MAG7_PRICES).length} tickers`);
+  } catch (err: any) {
+    console.warn(`Tradier API unavailable: ${err.message?.slice(0, 80)}`);
+  }
+  for (const ticker of TICKERS) {
+    if (!MAG7_PRICES[ticker]) {
+      MAG7_PRICES[ticker] = MAG7_FALLBACK[ticker] ?? 200;
+      console.log(`  ${ticker}: using fallback $${MAG7_PRICES[ticker]}`);
+    }
+  }
 
   // Build same spec list as create-test-markets.ts
   const specs: { ticker: string; strikeDollars: number; spotPrice: number }[] = [];

@@ -93,7 +93,7 @@ async function main(): Promise<void> {
   log.info("AMM Bot starting up");
 
   // Load configuration from env
-  const rpcUrl = process.env.RPC_URL ?? "https://api.devnet.solana.com";
+  const rpcUrl = process.env.RPC_URL ?? "http://127.0.0.1:8899";
   const connection = new Connection(rpcUrl, "confirmed");
   log.info(`RPC: ${rpcUrl}`);
 

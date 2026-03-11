@@ -6,7 +6,7 @@ import {
   WalletProvider,
 } from "@solana/wallet-adapter-react";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
-import { PhantomWalletAdapter, SolflareWalletAdapter } from "@solana/wallet-adapter-wallets";
+// Phantom and Solflare auto-register as Standard Wallets — no manual adapters needed.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import "@solana/wallet-adapter-react-ui/styles.css";
@@ -31,14 +31,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
   }
   const queryClient = queryClientRef.current;
 
-  const wallets = useMemo(
-    () => [new PhantomWalletAdapter(), new SolflareWalletAdapter()],
-    [],
-  );
+  const wallets = useMemo(() => [], []);
 
   return (
     <ConnectionProvider endpoint={RPC_URL}>
-      <WalletProvider wallets={wallets}>
+      <WalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>
           <QueryClientProvider client={queryClient}>
             {children}

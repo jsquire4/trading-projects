@@ -102,6 +102,7 @@ export function useTransaction(): UseTransactionReturn {
         if (!("version" in tx)) {
           tx.recentBlockhash = blockhash;
           tx.lastValidBlockHeight = lastValidBlockHeight;
+          tx.feePayer = provider.wallet.publicKey;
         }
 
         const signed = await provider.wallet.signTransaction(tx);

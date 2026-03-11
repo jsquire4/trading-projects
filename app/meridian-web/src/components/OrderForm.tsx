@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useMemo, useCallback } from "react";
-import { PublicKey } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from "@solana/spl-token";
+import { PublicKey, Transaction } from "@solana/web3.js";
+import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountIdempotentInstruction } from "@solana/spl-token";
 import { BN } from "@coral-xyz/anchor";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useAnchorProgram } from "@/hooks/useAnchorProgram";
@@ -108,12 +108,18 @@ export function OrderForm({ marketKey, ticker, strikePrice }: OrderFormProps) {
       const userYesAta = await getAssociatedTokenAddress(yesMint, user);
       const userNoAta = await getAssociatedTokenAddress(noMint, user);
 
+      // Idempotent ATA creation — no-ops if accounts already exist, creates if missing
+      const tx = new Transaction();
+      tx.add(createAssociatedTokenAccountIdempotentInstruction(user, userUsdcAta, user, USDC_MINT));
+      tx.add(createAssociatedTokenAccountIdempotentInstruction(user, userYesAta, user, yesMint));
+      tx.add(createAssociatedTokenAccountIdempotentInstruction(user, userNoAta, user, noMint));
+
       const sideU8 = sideToU8(side);
       const priceU8 = orderType === "market" ? 0 : effectivePrice!;
-      const orderTypeU8 = orderType === "limit" ? 0 : 1;
+      const orderTypeU8 = orderType === "limit" ? 1 : 0;
       const maxFills = 10;
 
-      const tx = await program.methods
+      const placeOrderIx = await program.methods
         .placeOrder(sideU8, priceU8, new BN(quantityLamports!), orderTypeU8, maxFills)
         .accountsPartial({
           user,
@@ -131,7 +137,9 @@ export function OrderForm({ marketKey, ticker, strikePrice }: OrderFormProps) {
           userNoAta,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
-        .transaction();
+        .instruction();
+
+      tx.add(placeOrderIx);
 
       const sideLabel = side.replace("-", " ").replace(/\b\w/g, (c) => c.toUpperCase());
       await sendTransaction(tx, { description: `Place ${sideLabel} Order` });

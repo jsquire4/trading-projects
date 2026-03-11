@@ -188,7 +188,12 @@ export function createLiveListener(
 
             if (events.length === 0) return;
 
+            // Assign sequence numbers per type+market combo within this tx
+            const seqCounters = new Map<string, number>();
             for (const event of events) {
+              const key = `${event.type}:${event.market}`;
+              const seq = seqCounters.get(key) ?? 0;
+              seqCounters.set(key, seq + 1);
               insertEvent({
                 type: event.type,
                 market: event.market,
@@ -196,6 +201,7 @@ export function createLiveListener(
                 signature,
                 slot,
                 timestamp: event.timestamp,
+                seq,
               });
             }
 

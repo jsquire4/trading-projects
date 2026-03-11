@@ -37,10 +37,11 @@ function sideToU8(side: OrderSide): number {
       return 0;
     case "sell-yes":
       return 1;
-    case "buy-no":
-      return 2;
     case "sell-no":
-      // Sell No = Buy Yes at (100 - price) from the contract's perspective
+      // Sell No = No-backed bid (side 2) — user offers No tokens at stated price
+      return 2;
+    case "buy-no":
+      // No native "buy no" — approximate as Buy Yes (side 0)
       return 0;
   }
 }
@@ -62,10 +63,8 @@ export function OrderForm({ marketKey, ticker, strikePrice }: OrderFormProps) {
     if (orderType === "market") return null;
     const p = parseInt(price, 10);
     if (isNaN(p) || p < 1 || p > 99) return null;
-    // For sell-no, we flip to buy-yes at (100 - price)
-    if (side === "sell-no") return 100 - p;
     return p;
-  }, [price, side, orderType]);
+  }, [price, orderType]);
 
   const quantityLamports = useMemo(() => {
     const q = parseFloat(quantity);
@@ -76,13 +75,8 @@ export function OrderForm({ marketKey, ticker, strikePrice }: OrderFormProps) {
   const estimatedCost = useMemo(() => {
     if (!quantityLamports || (!effectivePrice && orderType === "limit")) return null;
     const p = effectivePrice ?? 50; // placeholder for market orders
-    const isBuying = side === "buy-yes" || side === "buy-no";
-    // For buys, cost = effective price. For sells, proceeds = user's stated price.
-    // sell-yes: effectivePrice = user price, so proceeds = p.
-    // sell-no: effectivePrice = 100 - user price, but user proceeds = user price = 100 - p.
-    const costCents = isBuying ? p : (side === "sell-no" ? 100 - p : p);
-    return (costCents / 100) * (quantityLamports / LAMPORTS_PER_TOKEN);
-  }, [quantityLamports, effectivePrice, side, orderType]);
+    return (p / 100) * (quantityLamports / LAMPORTS_PER_TOKEN);
+  }, [quantityLamports, effectivePrice, orderType]);
 
   const isValid = useMemo(() => {
     if (!quantityLamports || quantityLamports < LAMPORTS_PER_TOKEN) return false;

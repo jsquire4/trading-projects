@@ -11,8 +11,9 @@ export interface SuggestedTrade {
   change: number;
   changePct: number;
   momentum: "hot" | "warm" | "neutral";
-  tradersActive: number; // fake social proof
-  recentWinPct: number; // fake win rate
+  tradersActive: number; // simulated social proof
+  recentWinPct: number; // simulated win rate
+  simulated: true; // marks tradersActive and recentWinPct as simulated data
 }
 
 /** Deterministic-ish "random" from a string seed */
@@ -81,6 +82,7 @@ export function generateSuggestedTrades(
         momentum,
         tradersActive,
         recentWinPct,
+        simulated: true as const,
       };
     })
     .sort((a, b) => {

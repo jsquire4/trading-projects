@@ -21,13 +21,13 @@ import { createHash } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 
+import { MOCK_ORACLE_PROGRAM_ID } from "./shared";
+
 const DEVNET_URL = "https://api.devnet.solana.com";
 const ADMIN_KEYPAIR_PATH = path.resolve(
   process.env.HOME || "~",
   ".config/solana/id.json"
 );
-
-const MOCK_ORACLE_PROGRAM_ID = new PublicKey("HJpHCfz1mqFFNa4ANfU8mMAZ5WoNRfo7EV1sZfEV2vZ");
 
 const MAG7_TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"];
 

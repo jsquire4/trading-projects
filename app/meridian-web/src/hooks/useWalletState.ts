@@ -24,6 +24,7 @@ export const USDC_MINT = new PublicKey(
 
 export type WalletFundingState =
   | "disconnected"
+  | "loading"
   | "unfunded"
   | "no-usdc"
   | "funded"
@@ -130,7 +131,7 @@ export function useWalletState(): UseWalletStateReturn {
 
   const state = useMemo<WalletFundingState>(() => {
     if (!connected || !publicKey) return "disconnected";
-    if (solBalance === null) return "disconnected"; // Still loading
+    if (solBalance === null) return "loading"; // Balances still loading
     if (solBalance === 0) return "unfunded";
     if (usdcBalance === null || usdcBalance === 0) return "no-usdc";
     if (hasPositions) return "has-positions";

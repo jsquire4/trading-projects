@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { usePositions, type Position } from "@/hooks/usePositions";
 import { useOrderBook } from "@/hooks/useMarkets";
+import { useCostBasis } from "@/hooks/useCostBasis";
 import { InsightTooltip } from "@/components/InsightTooltip";
 import { interpretPosition } from "@/lib/insights";
 
@@ -12,7 +13,7 @@ interface MyPositionsProps {
   marketKey: string;
 }
 
-function PositionRow({ position }: { position: Position }) {
+function PositionRow({ position, totalCost }: { position: Position; totalCost: number }) {
   const { data: book } = useOrderBook(position.market.publicKey.toBase58());
 
   const yesBal = Number(position.yesBal) / 1_000_000;
@@ -34,7 +35,7 @@ function PositionRow({ position }: { position: Position }) {
   const now = Math.floor(Date.now() / 1000);
   const minutesLeft = Math.max(0, (closeUnix - now) / 60);
   const side = yesBal >= noBal ? "yes" : "no";
-  const pnl = totalValue > 0 ? totalValue : -1; // approximate: positive value = winning
+  const pnl = totalValue - totalCost;
   const positionInsight = interpretPosition(side, pnl, minutesLeft);
 
   return (
@@ -69,6 +70,7 @@ function PositionRow({ position }: { position: Position }) {
 export function MyPositions({ marketKey }: MyPositionsProps) {
   const { publicKey } = useWallet();
   const { data: positions = [], isLoading } = usePositions();
+  const { costBasis } = useCostBasis();
 
   // Filter to this market
   const marketPositions = useMemo(
@@ -101,9 +103,16 @@ export function MyPositions({ marketKey }: MyPositionsProps) {
         <p className="text-xs text-white/30">No positions in this market</p>
       ) : (
         <div className="space-y-1.5">
-          {marketPositions.map((pos) => (
-            <PositionRow key={pos.market.publicKey.toBase58()} position={pos} />
-          ))}
+          {marketPositions.map((pos) => {
+            const cb = costBasis.get(pos.market.publicKey.toBase58());
+            return (
+              <PositionRow
+                key={pos.market.publicKey.toBase58()}
+                position={pos}
+                totalCost={cb?.totalCostUsdc ?? 0}
+              />
+            );
+          })}
         </div>
       )}
     </div>

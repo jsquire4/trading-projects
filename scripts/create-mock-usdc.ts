@@ -50,8 +50,32 @@ function readEnv(): Record<string, string> {
 }
 
 function writeEnv(env: Record<string, string>): void {
-  const lines = Object.entries(env).map(([k, v]) => `${k}=${v}`);
-  fs.writeFileSync(ENV_PATH, lines.join("\n") + "\n");
+  // Read existing file content to preserve comments and formatting
+  let content = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, "utf-8") : "";
+  const updatedKeys = new Set<string>();
+
+  for (const [key, value] of Object.entries(env)) {
+    // Match lines like KEY=value (not commented out)
+    const regex = new RegExp(`^(${key})=.*$`, "m");
+    if (regex.test(content)) {
+      content = content.replace(regex, `${key}=${value}`);
+      updatedKeys.add(key);
+    }
+  }
+
+  // Append any new keys that weren't already in the file
+  const newKeys = Object.entries(env).filter(([k]) => !updatedKeys.has(k));
+  if (newKeys.length > 0) {
+    // Ensure there's a trailing newline before appending
+    if (content.length > 0 && !content.endsWith("\n")) {
+      content += "\n";
+    }
+    for (const [key, value] of newKeys) {
+      content += `${key}=${value}\n`;
+    }
+  }
+
+  fs.writeFileSync(ENV_PATH, content);
 }
 
 (async () => {
@@ -113,13 +137,6 @@ function writeEnv(env: Record<string, string>): void {
   console.log(`Minted 1,000,000 USDC to ${adminAta.address.toBase58()}`);
 
   // ── Write to .env ──────────────────────────────────────────────────────────
-  // Encode faucet secret key as base58 for portability
-  const bs58 = await import("@coral-xyz/anchor").then((m) => {
-    // Anchor re-exports bs58 via its utils — fall back to manual encoding
-    return null;
-  }).catch(() => null);
-
-  // Manual base58 encoding since we can't guarantee bs58 package is available
   const faucetSecretArray = Array.from(faucet.secretKey);
   const faucetJson = JSON.stringify(faucetSecretArray);
 

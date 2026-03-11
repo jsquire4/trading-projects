@@ -194,15 +194,15 @@ function HotTradeCard({
           </button>
         </div>
 
-        {/* Social proof + win rate (dark pattern) */}
+        {/* Social proof (simulated) */}
         <div className="flex items-center justify-between text-[11px] text-white/30">
           <span>
             <span className="text-white/50 font-medium">{trade.tradersActive}</span> traders
-            today
+            today <span className="text-white/20">(simulated)</span>
           </span>
           <span>
             <span className="text-green-400/70 font-medium">{trade.recentWinPct}%</span> win
-            rate this week
+            rate <span className="text-white/20">(simulated)</span>
           </span>
         </div>
       </div>
@@ -251,7 +251,8 @@ function ActivityTape({ trades }: { trades: SuggestedTrade[] }) {
         <span className={side === "YES" ? "text-green-400/70" : "text-red-400/70"}>
           {amount} {side}
         </span>{" "}
-        on <span className="text-white/50">{trade.ticker}</span> at ${trade.strike}
+        on <span className="text-white/50">{trade.ticker}</span> at ${trade.strike}{" "}
+        <span className="text-white/15">(simulated)</span>
       </span>
     </div>
   );
@@ -555,7 +556,7 @@ export default function TradePage() {
                   <span className="text-blue-400 font-bold">
                     {suggestedTrades.reduce((s, t) => s + t.tradersActive, 0)}
                   </span>{" "}
-                  traders active
+                  traders active <span className="text-white/20">(simulated)</span>
                 </span>
                 <span className="text-white/10">|</span>
                 <span>

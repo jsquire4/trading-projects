@@ -36,11 +36,11 @@ services:
 	@echo "  - oracle-feeder (Tradier -> on-chain oracle)"
 	@echo "  - amm-bot (liquidity seeder)"
 	@echo "  - event-indexer (on-chain event listener + REST API)"
-	@echo "  - automation (scheduler: market-init + settlement)"
+	@echo "  - automation (scheduler: market-initializer + settlement + verification)"
 
 # Run all test suites
 test:
-	yarn run ts-mocha -p ./tsconfig.json -t 1000000 'tests/**/*.test.ts'
+	SBF_OUT_DIR=$(shell pwd)/target/deploy yarn run ts-mocha -p ./tsconfig.json -t 1000000 'tests/**/*.test.ts'
 	cd app/meridian-web && yarn test run
 	cd services/amm-bot && yarn vitest run
 	cd services/market-initializer && yarn vitest run

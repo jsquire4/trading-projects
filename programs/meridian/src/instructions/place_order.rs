@@ -172,20 +172,50 @@ pub fn handle_place_order<'info>(
         )?;
     }
 
+    // --- Handle resting order failure: refund remaining quantity ---
+    if match_result.resting_failed && match_result.remaining_quantity > 0 {
+        msg!(
+            "Resting order failed (level full): refunding {} remaining to user={}",
+            match_result.remaining_quantity,
+            ctx.accounts.user.key(),
+        );
+        // Force refund as if it were a market order (treat remaining as unfilled)
+        let failed_refund_result = MatchResult {
+            fills: Vec::new(),
+            remaining_quantity: match_result.remaining_quantity,
+            resting_failed: false,
+        };
+        refund_unfilled(
+            &failed_refund_result,
+            side,
+            price,
+            ORDER_TYPE_MARKET, // treat as market order to force refund
+            &ctx,
+            &tp,
+            &market_ai,
+            &escrow_ai,
+            &yes_escrow_ai,
+            &no_escrow_ai,
+            signer_seeds,
+        )?;
+    }
+
     // --- Refund unfilled escrow ---
-    refund_unfilled(
-        &match_result,
-        side,
-        price,
-        order_type,
-        &ctx,
-        &tp,
-        &market_ai,
-        &escrow_ai,
-        &yes_escrow_ai,
-        &no_escrow_ai,
-        signer_seeds,
-    )?;
+    if !match_result.resting_failed {
+        refund_unfilled(
+            &match_result,
+            side,
+            price,
+            order_type,
+            &ctx,
+            &tp,
+            &market_ai,
+            &escrow_ai,
+            &yes_escrow_ai,
+            &no_escrow_ai,
+            signer_seeds,
+        )?;
+    }
 
     // --- Update market stats and validate fill requirements ---
     update_market_stats(&mut ctx.accounts.market, &match_result, order_type)?;
@@ -243,6 +273,14 @@ fn validate_order(
     if side == SIDE_USDC_BID {
         require!(
             ctx.accounts.user_no_ata.amount == 0,
+            MeridianError::ConflictingPosition
+        );
+    }
+
+    // Position constraint: side=2 (Sell No / No-backed bid) requires Yes balance == 0
+    if side == SIDE_NO_BID {
+        require!(
+            ctx.accounts.user_yes_ata.amount == 0,
             MeridianError::ConflictingPosition
         );
     }

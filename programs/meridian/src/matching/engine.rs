@@ -45,6 +45,8 @@ pub struct MatchResult {
     pub fills: Vec<Fill>,
     /// Remaining quantity that wasn't filled (rests as limit or rejected for market)
     pub remaining_quantity: u64,
+    /// True if the resting order placement failed (e.g. level full)
+    pub resting_failed: bool,
 }
 
 /// Place a new order into the book, attempting to match against resting orders.
@@ -74,6 +76,7 @@ pub fn match_order(
     let mut result = MatchResult {
         fills: Vec::new(),
         remaining_quantity: quantity,
+        resting_failed: false,
     };
 
     // Match against the opposite side of the book
@@ -98,7 +101,7 @@ pub fn match_order(
 
     // If limit order and there's remaining quantity, place it on the book
     if order_type == ORDER_TYPE_LIMIT && result.remaining_quantity >= MIN_ORDER_SIZE {
-        let _ = place_resting_order(
+        match place_resting_order(
             book,
             taker,
             side,
@@ -106,7 +109,12 @@ pub fn match_order(
             result.remaining_quantity,
             quantity,
             timestamp,
-        );
+        ) {
+            Ok(_order_id) => {}
+            Err(()) => {
+                result.resting_failed = true;
+            }
+        }
     }
 
     result
@@ -282,6 +290,7 @@ fn match_at_level_for_side(
             // Fully filled — deactivate
             order_mut.quantity = 0;
             order_mut.set_active(false);
+            debug_assert!(level.count > 0);
             if level.count > 0 {
                 level.count -= 1;
             }
@@ -386,6 +395,7 @@ pub fn cancel_resting_order(
         let order_mut = &mut level.orders[slot_idx];
         order_mut.set_active(false);
         order_mut.quantity = 0;
+        debug_assert!(level.count > 0);
         if level.count > 0 {
             level.count -= 1;
         }
@@ -450,6 +460,7 @@ pub fn crank_cancel_batch(
             let order_mut = &mut level.orders[slot_idx];
             order_mut.set_active(false);
             order_mut.quantity = 0;
+            debug_assert!(level.count > 0);
             if level.count > 0 {
                 level.count -= 1;
             }

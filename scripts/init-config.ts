@@ -24,15 +24,14 @@ import * as fs from "fs";
 import * as path from "path";
 import BN from "bn.js";
 
+import { MERIDIAN_PROGRAM_ID, MOCK_ORACLE_PROGRAM_ID } from "./shared";
+
 const DEVNET_URL = "https://api.devnet.solana.com";
 const ENV_PATH = path.resolve(__dirname, "..", ".env");
 const ADMIN_KEYPAIR_PATH = path.resolve(
   process.env.HOME || "~",
   ".config/solana/id.json"
 );
-
-const MERIDIAN_PROGRAM_ID = new PublicKey("7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth");
-const MOCK_ORACLE_PROGRAM_ID = new PublicKey("HJpHCfz1mqFFNa4ANfU8mMAZ5WoNRfo7EV1sZfEV2vZ");
 
 const MAG7_TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"];
 

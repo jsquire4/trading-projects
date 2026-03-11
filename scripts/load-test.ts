@@ -491,8 +491,9 @@ async function placeOrders(
       const m = markets[mi];
 
       for (let oi = 0; oi < ordersPerMarketPerWallet; oi++) {
-        const side = oi % 2 === 0 ? SIDE_YES_ASK : SIDE_NO_BID;
-        const priceBase = side === SIDE_YES_ASK ? 55 : 45;
+        const sides = [SIDE_USDC_BID, SIDE_YES_ASK, SIDE_NO_BID];
+        const side = sides[oi % 3];
+        const priceBase = side === SIDE_YES_ASK ? 55 : side === SIDE_NO_BID ? 45 : 50;
         const priceOffset = (oi * 3 + wi) % 15;
         const price = Math.max(1, Math.min(99, priceBase + priceOffset - 7));
 

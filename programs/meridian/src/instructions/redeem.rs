@@ -87,6 +87,32 @@ fn handle_pair_burn(ctx: Context<Redeem>, quantity: u64) -> Result<()> {
         MeridianError::InsufficientVaultBalance
     );
 
+    // Ring-fence: if market is settled with a winner, ensure vault retains enough
+    // for outstanding winning token holders after this burn withdrawal.
+    // Pair burn reduces both vault AND winning supply by `quantity` (burns Yes + No equally),
+    // so we compare post-burn vault against post-burn winning supply.
+    let market = &ctx.accounts.market;
+    if market.is_settled && market.outcome > 0 {
+        let winning_supply = match market.outcome {
+            1 => ctx.accounts.yes_mint.supply,
+            2 => ctx.accounts.no_mint.supply,
+            _ => 0,
+        };
+        let vault_after_burn = ctx
+            .accounts
+            .usdc_vault
+            .amount
+            .checked_sub(quantity)
+            .ok_or(MeridianError::ArithmeticOverflow)?;
+        let winning_supply_after_burn = winning_supply
+            .checked_sub(quantity)
+            .ok_or(MeridianError::ArithmeticOverflow)?;
+        require!(
+            vault_after_burn >= winning_supply_after_burn,
+            MeridianError::InsufficientVaultBalance
+        );
+    }
+
     // Build market PDA signer seeds
     let market = &ctx.accounts.market;
     market_signer_seeds!(market => strike_bytes, expiry_bytes, bump_byte, seeds, signer_seeds);

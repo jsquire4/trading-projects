@@ -1,6 +1,6 @@
 "use client";
 
-import { useId } from "react";
+import { useId, useMemo } from "react";
 import {
   ResponsiveContainer,
   AreaChart,
@@ -13,6 +13,7 @@ import {
 import { usePortfolioSnapshot } from "@/hooks/usePortfolioSnapshot";
 import { useCostBasis } from "@/hooks/useCostBasis";
 import { usePositions } from "@/hooks/usePositions";
+import { useMarketSummaries } from "@/hooks/useMarketSummaries";
 import {
   COLORS,
   AXIS_STYLE,
@@ -106,6 +107,18 @@ export function PnlTab() {
   const greenGradientId = `${id}-pnlGradientGreen`;
   const redGradientId = `${id}-pnlGradientRed`;
 
+  // Build mid-price map from live order book data
+  const { data: summaries = [] } = useMarketSummaries();
+  const midPriceMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const s of summaries) {
+      if (s.bestBid != null && s.bestAsk != null) {
+        map.set(s.marketKey, (s.bestBid + s.bestAsk) / 200); // cents → 0-1 range
+      }
+    }
+    return map;
+  }, [summaries]);
+
   const {
     intradayData,
     dailySummaries,
@@ -114,7 +127,8 @@ export function PnlTab() {
     topPerformer,
     bottomPerformer,
     isReady,
-  } = usePortfolioSnapshot();
+    approximate,
+  } = usePortfolioSnapshot(midPriceMap);
 
   const { costBasis } = useCostBasis();
   const { data: positions = [] } = usePositions();
@@ -140,8 +154,9 @@ export function PnlTab() {
     const yesBal = Number(pos.yesBal) / 1_000_000;
     const noBal = Number(pos.noBal) / 1_000_000;
 
-    // Rough current value at 50c mid (same as snapshot hook)
-    const currentVal = (yesBal + noBal) * 0.5;
+    // Use actual mid price from order book, fallback to 0.5 when no book data
+    const mid = midPriceMap.get(marketKey) ?? 0.5;
+    const currentVal = yesBal * mid + noBal * (1 - mid);
 
     const totalCost = cb ? cb.totalCostUsdc : 0;
     const pnl = currentVal - totalCost;
@@ -179,6 +194,13 @@ export function PnlTab() {
 
   return (
     <div className="flex flex-col gap-6">
+      {/* Approximate valuation disclaimer */}
+      {approximate && (
+        <p className="text-xs text-white/30">
+          Some positions valued at 50c mid (no order book data available).
+        </p>
+      )}
+
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <SummaryCard

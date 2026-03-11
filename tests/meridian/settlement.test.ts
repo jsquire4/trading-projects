@@ -1944,6 +1944,7 @@ describe("Settlement Lifecycle", () => {
       await advanceClock(ctx, settleTime);
 
       // Set oracle timestamp in the future (beyond current clock)
+      // The mock oracle now rejects future timestamps at the update_price level (H7 fix).
       const updateIx = buildUpdatePriceIx({
         authority: ctx.admin.publicKey,
         priceFeed: oracleFeed,
@@ -1951,27 +1952,16 @@ describe("Settlement Lifecycle", () => {
         confidence: new BN(500_000),
         timestamp: new BN(settleTime + 3600), // future timestamp — invalid
       });
-      await provider.sendAndConfirm!(
-        new Transaction().add(uniqueCuIx(), updateIx),
-        [ctx.admin],
-      );
-
-      const settleIx = buildSettleMarketIx({
-        caller: ctx.admin.publicKey,
-        config,
-        market: ma.market,
-        oracleFeed,
-      });
 
       try {
         await provider.sendAndConfirm!(
-          new Transaction().add(uniqueCuIx(), settleIx),
+          new Transaction().add(uniqueCuIx(), updateIx),
           [ctx.admin],
         );
-        expect.fail("Expected OracleStale error");
+        expect.fail("Expected InvalidTimestamp error");
       } catch (err: any) {
-        // OracleStale = 40, on-chain = 6040 = 0x17A8
-        expect(String(err)).to.match(/0x17a8|OracleStale|6040/i);
+        // InvalidTimestamp = 6003 = 0x1773
+        expect(String(err)).to.match(/0x1773|InvalidTimestamp|6003/i);
       }
     });
 

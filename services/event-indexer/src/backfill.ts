@@ -18,6 +18,7 @@ import {
   insertEventsBatch,
   upsertCheckpoint,
   signatureExists,
+  type EventRow,
 } from "./db.js";
 import { parseEventsFromLogs } from "./listener.js";
 
@@ -69,14 +70,22 @@ async function processBatch(
       const events = parseEventsFromLogs(coder, logMessages, programIdStr);
       if (events.length === 0) continue;
 
-      const rows = events.map((event) => ({
-        type: event.type,
-        market: event.market,
-        data: JSON.stringify(event.data),
-        signature: sigInfo.signature,
-        slot: sigInfo.slot,
-        timestamp: event.timestamp,
-      }));
+      // Assign sequence numbers per type+market combo within this tx
+      const seqCounters = new Map<string, number>();
+      const rows: Omit<EventRow, "id" | "created_at">[] = events.map((event) => {
+        const key = `${event.type}:${event.market}`;
+        const seq = seqCounters.get(key) ?? 0;
+        seqCounters.set(key, seq + 1);
+        return {
+          type: event.type,
+          market: event.market,
+          data: JSON.stringify(event.data),
+          signature: sigInfo.signature,
+          slot: sigInfo.slot,
+          timestamp: event.timestamp,
+          seq,
+        };
+      });
 
       insertEventsBatch(rows);
       totalEvents += rows.length;
@@ -150,6 +159,11 @@ export async function runBackfill(
       newestSignature = signatures[0];
     }
 
+    // Checkpoint after each batch so a crash doesn't require full re-scan
+    if (newestSignature) {
+      upsertCheckpoint(newestSignature.signature, newestSignature.slot);
+    }
+
     // Move cursor backward
     const oldest = signatures[signatures.length - 1];
     before = oldest.signature;
@@ -163,11 +177,6 @@ export async function runBackfill(
       totalSignatures,
       totalEvents,
     });
-  }
-
-  // Write checkpoint only after all batches complete successfully
-  if (newestSignature) {
-    upsertCheckpoint(newestSignature.signature, newestSignature.slot);
   }
 
   log.info("Backfill complete", { totalSignatures, totalEvents });

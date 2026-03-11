@@ -141,7 +141,7 @@ pub fn handle_create_strike_market(
 
     // Enforce expiry_day == floor(market_close_unix / 86400) so that
     // PDA seeds are deterministically reconstructable from stored state.
-    let expected_expiry_day = (market_close_unix / 86400) as u32;
+    let expected_expiry_day = crate::helpers::expiry_day(market_close_unix);
     require!(
         _expiry_day == expected_expiry_day,
         MeridianError::InvalidMarketCloseTime

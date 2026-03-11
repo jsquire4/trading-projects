@@ -89,7 +89,7 @@ export function QuoteTable({ markets }: QuoteTableProps) {
             <th className="py-3 px-3 font-medium">Best Bid</th>
             <th className="py-3 px-3 font-medium">Best Ask</th>
             <th className="py-3 px-3 font-medium">Spread</th>
-            <th className="py-3 px-3 font-medium">Volume</th>
+            <th className="py-3 px-3 font-medium">Minted</th>
             <th className="py-3 px-3 font-medium">Inventory</th>
             <th className="py-3 px-3 font-medium">Status</th>
           </tr>

@@ -20,6 +20,7 @@ export interface EventRow {
   signature: string;
   slot: number;
   timestamp: number;
+  seq: number;
   created_at?: string;
 }
 
@@ -55,9 +56,9 @@ export function initDb(dbPath?: string): Database.Database {
       signature TEXT NOT NULL,
       slot INTEGER NOT NULL,
       timestamp INTEGER NOT NULL,
+      seq INTEGER NOT NULL DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now'))
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_events_sig_type ON events(signature, type, market);
     CREATE INDEX IF NOT EXISTS idx_events_market ON events(market);
     CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
     CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
@@ -70,6 +71,15 @@ export function initDb(dbPath?: string): Database.Database {
     );
   `);
 
+  // Migration: add seq column to existing databases and fix unique index
+  try {
+    db.exec(`ALTER TABLE events ADD COLUMN seq INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    // Column already exists — expected on fresh databases or after first migration
+  }
+  db.exec(`DROP INDEX IF EXISTS idx_events_sig_type`);
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_sig_type_seq ON events(signature, type, market, seq)`);
+
   log.info("Database initialized", { path: resolvedPath });
   return db;
 }
@@ -81,15 +91,15 @@ let _insertEvent: Database.Statement | null = null;
 function getInsertStmt(): Database.Statement {
   if (!_insertEvent) {
     _insertEvent = getDb().prepare(`
-      INSERT OR IGNORE INTO events (type, market, data, signature, slot, timestamp)
-      VALUES (@type, @market, @data, @signature, @slot, @timestamp)
+      INSERT OR IGNORE INTO events (type, market, data, signature, slot, timestamp, seq)
+      VALUES (@type, @market, @data, @signature, @slot, @timestamp, @seq)
     `);
   }
   return _insertEvent;
 }
 
 export function insertEvent(row: Omit<EventRow, "id" | "created_at">): void {
-  getInsertStmt().run(row);
+  getInsertStmt().run({ ...row, seq: row.seq ?? 0 });
 }
 
 export function insertEventsBatch(
@@ -99,7 +109,7 @@ export function insertEventsBatch(
   const stmt = getInsertStmt();
   const tx = getDb().transaction((items: typeof rows) => {
     for (const row of items) {
-      stmt.run(row);
+      stmt.run({ ...row, seq: row.seq ?? 0 });
     }
   });
   tx(rows);
@@ -172,6 +182,7 @@ export function upsertCheckpoint(sig: string, slot: number): void {
 
 export interface CostBasisRow {
   market: string;
+  side: 'yes' | 'no';
   avgPrice: number;       // weighted average fill price in cents
   totalQuantity: number;  // total tokens acquired (micro-tokens)
   totalCostUsdc: number;  // total USDC spent (in micro-USDC × cents)
@@ -181,11 +192,18 @@ export interface CostBasisRow {
 export function queryCostBasis(wallet: string): CostBasisRow[] {
   // Fill events have JSON data with: maker, taker, price, quantity, takerSide, makerSide
   // Buy-side fills:
-  //   - Taker buys: taker = wallet AND takerSide IN (0, 2)
-  //   - Maker bought when taker sold: maker = wallet AND takerSide = 1
+  //   - Taker buys Yes: taker = wallet AND takerSide = 0 (USDC_BID)
+  //   - Taker buys No:  taker = wallet AND takerSide = 2 (NO_BID)
+  //   - Maker bought when taker sold: maker = wallet AND takerSide = 1 (YES_ASK)
+  // Discriminate by side: takerSide 0 → 'yes', takerSide 2 → 'no', takerSide 1 (maker fill) → 'yes'
   const stmt = getDb().prepare(`
     SELECT
       market,
+      CASE
+        WHEN json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 0 THEN 'yes'
+        WHEN json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 2 THEN 'no'
+        WHEN json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 1 THEN 'yes'
+      END as side,
       SUM(CAST(json_extract(data, '$.quantity') AS REAL)) as totalQuantity,
       SUM(CAST(json_extract(data, '$.quantity') AS REAL) * CAST(json_extract(data, '$.price') AS REAL)) as totalCost,
       COUNT(*) as fillCount
@@ -196,13 +214,14 @@ export function queryCostBasis(wallet: string): CostBasisRow[] {
         OR
         (json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 1)
       )
-    GROUP BY market
+    GROUP BY market, side
   `);
 
-  const rows = stmt.all({ wallet }) as { market: string; totalQuantity: number; totalCost: number; fillCount: number }[];
+  const rows = stmt.all({ wallet }) as { market: string; side: 'yes' | 'no'; totalQuantity: number; totalCost: number; fillCount: number }[];
 
   return rows.map(r => ({
     market: r.market,
+    side: r.side,
     totalQuantity: r.totalQuantity,
     totalCostUsdc: r.totalCost,
     avgPrice: r.totalQuantity > 0 ? r.totalCost / r.totalQuantity : 0,

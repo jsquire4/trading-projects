@@ -59,6 +59,7 @@ describe("Database Layer", () => {
       expect(names).toContain("idx_events_market");
       expect(names).toContain("idx_events_type");
       expect(names).toContain("idx_events_timestamp");
+      expect(names).toContain("idx_events_sig_type_seq");
     });
   });
 

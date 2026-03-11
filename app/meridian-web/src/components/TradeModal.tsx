@@ -185,16 +185,21 @@ export function TradeModal({
 
           {/* Action button */}
           {connected ? (
-            <button
-              onClick={handleTrade}
-              className={`w-full rounded-xl py-3 font-bold text-white transition-all ${
-                side === "YES"
-                  ? "bg-gradient-to-r from-green-600 to-green-500 hover:from-green-500 hover:to-green-400 shadow-lg shadow-green-500/20"
-                  : "bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 shadow-lg shadow-red-500/20"
-              }`}
-            >
-              Buy {quantity} {side} @ {unitPrice}¢
-            </button>
+            <>
+              <button
+                onClick={handleTrade}
+                className={`w-full rounded-xl py-3 font-bold text-white transition-all ${
+                  side === "YES"
+                    ? "bg-gradient-to-r from-green-600 to-green-500 hover:from-green-500 hover:to-green-400 shadow-lg shadow-green-500/20"
+                    : "bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 shadow-lg shadow-red-500/20"
+                }`}
+              >
+                Trade {ticker} {side} &rarr;
+              </button>
+              <p className="text-[10px] text-white/30 text-center mt-1">
+                Opens trading page
+              </p>
+            </>
           ) : (
             <button
               onClick={() => setWalletVisible(true)}

@@ -95,9 +95,11 @@ export function useTransaction(): UseTransactionReturn {
         // --- Sign ---
         toastId = toast.loading(`${label}: Awaiting signature...`);
 
+        // Fetch blockhash once and reuse for both signing and confirmation
+        const { blockhash, lastValidBlockHeight } =
+          await connection.getLatestBlockhash("confirmed");
+
         if (!("version" in tx)) {
-          const { blockhash, lastValidBlockHeight } =
-            await connection.getLatestBlockhash("confirmed");
           tx.recentBlockhash = blockhash;
           tx.lastValidBlockHeight = lastValidBlockHeight;
         }
@@ -130,13 +132,12 @@ export function useTransaction(): UseTransactionReturn {
           return signature;
         }
 
-        // --- Confirm ---
-        const latestBlockhash = await connection.getLatestBlockhash("confirmed");
+        // --- Confirm (reuse same blockhash) ---
         await connection.confirmTransaction(
           {
             signature,
-            blockhash: latestBlockhash.blockhash,
-            lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+            blockhash,
+            lastValidBlockHeight,
           },
           "confirmed",
         );

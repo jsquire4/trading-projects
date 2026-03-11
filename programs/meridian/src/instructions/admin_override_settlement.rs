@@ -56,9 +56,18 @@ pub fn handle_admin_override_settlement(
     // Apply the override
     market.settlement_price = new_settlement_price;
     market.outcome = new_outcome;
-    market.override_deadline = clock
-        .unix_timestamp
-        .checked_add(3600)
+    // Cap total extension: settled_at + 3600 * (override_count + 2)
+    // Pre-increment: use current override_count + 2 (first override = settled_at + 2h, second = +3h, third = +4h)
+    let deadline_multiplier = (market.override_count as i64)
+        .checked_add(2)
+        .ok_or(MeridianError::ArithmeticOverflow)?;
+    market.override_deadline = market
+        .settled_at
+        .checked_add(
+            3600i64
+                .checked_mul(deadline_multiplier)
+                .ok_or(MeridianError::ArithmeticOverflow)?,
+        )
         .ok_or(MeridianError::ArithmeticOverflow)?;
     market.override_count += 1;
 

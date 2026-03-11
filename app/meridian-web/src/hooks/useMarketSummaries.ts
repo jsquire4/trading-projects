@@ -14,7 +14,7 @@ export interface MarketSummary {
   bestBid: number | null;
   bestAsk: number | null;
   spread: number | null;
-  volume: number;
+  totalMinted: number;
   openInterest: number;
 }
 
@@ -62,7 +62,7 @@ export function useMarketSummaries() {
               bestBid,
               bestAsk,
               spread,
-              volume: Number(market.totalMinted) / 1_000_000,
+              totalMinted: Number(market.totalMinted) / 1_000_000,
               openInterest: Math.max(0, (Number(market.totalMinted) - Number(market.totalRedeemed)) / 1_000_000),
             };
           }),

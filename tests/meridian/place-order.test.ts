@@ -458,8 +458,21 @@ describe("Place Order", () => {
   });
 
   it("places a No-backed bid (Sell No) limit order", async () => {
-    // Admin holds No tokens. Place a No-backed bid.
+    // Admin holds both Yes and No tokens from mint_pair.
+    // The ConflictingPosition constraint requires user_yes_ata.amount == 0
+    // to place a No-backed bid. First sell all Yes tokens via a Yes Ask.
     const provider = new BankrunProvider(ctx.context);
+
+    // Check remaining Yes balance and sell it all via Yes Ask (side=1)
+    const yesBal = await getTokenBalance(ctx, userYesAta);
+    if (yesBal > 0) {
+      const sellYesIx = placeOrderIx(SIDE_YES_ASK, 99, yesBal, ORDER_TYPE_LIMIT, 0);
+      await provider.sendAndConfirm!(new Transaction().add(sellYesIx), [ctx.admin]);
+    }
+
+    // Verify Yes balance is zero (escrowed in yesEscrow)
+    const yesBalAfter = await getTokenBalance(ctx, userYesAta);
+    expect(yesBalAfter).to.equal(0);
 
     const noBal = await getTokenBalance(ctx, userNoAta);
     expect(noBal).to.be.greaterThan(0);

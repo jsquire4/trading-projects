@@ -14,20 +14,7 @@ import { MarketInfo } from "@/components/MarketInfo";
 import { MyOrders } from "@/components/MyOrders";
 import { MyPositions } from "@/components/MyPositions";
 import { RedeemPanel } from "@/components/RedeemPanel";
-import { TransactionReceipt } from "@/components/TransactionReceipt";
 import { FillFeed } from "@/components/FillFeed";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface ReceiptData {
-  signature: string;
-  side: string;
-  price: number;
-  quantity: number;
-  cost: number;
-}
 
 // ---------------------------------------------------------------------------
 // Strike selector
@@ -129,17 +116,12 @@ export default function TradingCockpit({
     [positions, activeKey],
   );
 
-  // Receipt state
-  const [receipt, setReceipt] = useState<ReceiptData | null>(null);
-
   // Mobile section toggles
   const [showOrderBook, setShowOrderBook] = useState(true);
   const [showMyOrders, setShowMyOrders] = useState(true);
 
   // Keyboard shortcuts
-  useKeyboardShortcuts({
-    onClose: () => setReceipt(null),
-  });
+  useKeyboardShortcuts({});
 
   // Loading state
   if (marketsLoading) {
@@ -250,25 +232,13 @@ export default function TradingCockpit({
           <MarketInfo market={market} />
         </div>
 
-        {/* Center column — Order Form + Receipt + Redeem */}
+        {/* Center column — Order Form + Redeem */}
         <div className="lg:col-span-4 space-y-4">
-          {receipt ? (
-            <TransactionReceipt
-              signature={receipt.signature}
-              ticker={ticker}
-              side={receipt.side}
-              price={receipt.price}
-              quantity={receipt.quantity}
-              cost={receipt.cost}
-              onClose={() => setReceipt(null)}
-            />
-          ) : (
-            <OrderForm
-              marketKey={activeKey}
-              ticker={ticker}
-              strikePrice={Number(market.strikePrice)}
-            />
-          )}
+          <OrderForm
+            marketKey={activeKey}
+            ticker={ticker}
+            strikePrice={Number(market.strikePrice)}
+          />
 
           {/* Redeem panel — show when user has positions */}
           {position && (

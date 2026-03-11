@@ -40,7 +40,6 @@ pub struct SettleMarket<'info> {
 ///   bump:           u8
 ///   _padding:       [u8; 6]
 struct OraclePriceFeed {
-    #[allow(dead_code)]
     pub ticker: [u8; 8],
     pub price: u64,
     pub confidence: u64,
@@ -117,6 +116,7 @@ pub fn handle_settle_market(ctx: Context<SettleMarket>) -> Result<()> {
     let feed = OraclePriceFeed::parse(&oracle_data)?;
 
     // ── Oracle validation ──
+    require!(feed.ticker == market.ticker, MeridianError::InvalidTicker);
     require!(feed.is_initialized, MeridianError::OracleNotInitialized);
     require!(feed.price > 0, MeridianError::OraclePriceInvalid);
 

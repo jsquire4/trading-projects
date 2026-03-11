@@ -14,6 +14,7 @@
 
 import { Connection, PublicKey } from "@solana/web3.js";
 import { createLogger } from "../../shared/src/alerting.ts";
+import { MERIDIAN_PROGRAM_ID } from "../../shared/src/pda.ts";
 import { initDb, closeDb } from "./db.js";
 import { runBackfill } from "./backfill.js";
 import { startLiveListener, stopLiveListener } from "./listener.js";
@@ -23,8 +24,6 @@ import idlJson from "../../shared/src/idl/meridian.json" with { type: "json" };
 import type { Idl } from "@coral-xyz/anchor";
 
 const log = createLogger("event-indexer");
-
-const PROGRAM_ID = "7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth";
 const DEFAULT_RPC_URL = "https://api.devnet.solana.com";
 const DEFAULT_PORT = 3001;
 
@@ -32,10 +31,10 @@ async function main(): Promise<void> {
   const rpcUrl = process.env.RPC_URL ?? DEFAULT_RPC_URL;
   const dbPath = process.env.DB_PATH ?? "./data/events.db";
   const port = parseInt(process.env.PORT ?? String(DEFAULT_PORT), 10);
-  const programId = new PublicKey(PROGRAM_ID);
+  const programId = MERIDIAN_PROGRAM_ID;
   const idl = idlJson as unknown as Idl;
 
-  log.info("Event Indexer starting", { rpcUrl, dbPath, port, programId: PROGRAM_ID });
+  log.info("Event Indexer starting", { rpcUrl, dbPath, port, programId: programId.toBase58() });
 
   // 1. Initialize database
   initDb(dbPath);

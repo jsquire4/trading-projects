@@ -4,10 +4,11 @@ import Link from "next/link";
 import { useMemo } from "react";
 import { usePositions, type Position } from "@/hooks/usePositions";
 import { useOrderBook } from "@/hooks/useMarkets";
+import { useCostBasis } from "@/hooks/useCostBasis";
 import { InsightTooltip } from "@/components/InsightTooltip";
 import { interpretPosition } from "@/lib/insights";
 
-function PositionCard({ position }: { position: Position }) {
+function PositionCard({ position, totalCost }: { position: Position; totalCost: number }) {
   const { data: book } = useOrderBook(position.market.publicKey.toBase58());
   const yesBal = Number(position.yesBal) / 1_000_000;
   const noBal = Number(position.noBal) / 1_000_000;
@@ -39,7 +40,7 @@ function PositionCard({ position }: { position: Position }) {
 
   const minutesLeft = Math.max(0, remaining / 60);
   const side = yesBal >= noBal ? "yes" : "no";
-  const pnl = totalValue > 0 ? totalValue : -1;
+  const pnl = totalValue - totalCost;
   const positionInsight = interpretPosition(side, pnl, minutesLeft);
 
   return (
@@ -108,6 +109,7 @@ function PositionCard({ position }: { position: Position }) {
 
 export function PositionsTab() {
   const { data: positions = [], isLoading } = usePositions();
+  const { costBasis } = useCostBasis();
 
   if (isLoading) {
     return (
@@ -138,9 +140,16 @@ export function PositionsTab() {
 
   return (
     <div className="space-y-3">
-      {positions.map((pos) => (
-        <PositionCard key={pos.market.publicKey.toBase58()} position={pos} />
-      ))}
+      {positions.map((pos) => {
+        const cb = costBasis.get(pos.market.publicKey.toBase58());
+        return (
+          <PositionCard
+            key={pos.market.publicKey.toBase58()}
+            position={pos}
+            totalCost={cb?.totalCostUsdc ?? 0}
+          />
+        );
+      })}
     </div>
   );
 }

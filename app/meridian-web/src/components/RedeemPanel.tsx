@@ -46,7 +46,8 @@ export function RedeemPanel({ market, yesBal, noBal, onSuccess }: RedeemPanelPro
   const maxWinnerNum = Number(winnerBal) / 1_000_000;
 
   const canPairBurn = maxPairBurn > BigInt(0) && !market.isPaused;
-  const canWinnerRedeem = market.isSettled && !inOverrideWindow && winnerBal > BigInt(0) && !market.isPaused;
+  const hasValidOutcome = market.outcome === 1 || market.outcome === 2;
+  const canWinnerRedeem = market.isSettled && hasValidOutcome && !inOverrideWindow && winnerBal > BigInt(0) && !market.isPaused;
 
   const qtyNum = parseFloat(quantity) || 0;
   const qtyLamports = Math.round(qtyNum * 1_000_000);

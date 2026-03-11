@@ -18,6 +18,9 @@ pub fn handle_update_price(ctx: Context<UpdatePrice>, price: u64, confidence: u6
     require!(price > 0, OracleError::InvalidPrice);
     require!(timestamp > 0, OracleError::InvalidTimestamp);
 
+    let clock = Clock::get()?;
+    require!(timestamp <= clock.unix_timestamp, OracleError::InvalidTimestamp);
+
     let feed = &mut ctx.accounts.price_feed;
     feed.price = price;
     feed.confidence = confidence;

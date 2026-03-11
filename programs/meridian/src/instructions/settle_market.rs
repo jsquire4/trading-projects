@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use crate::error::MeridianError;
 use crate::state::events::SettlementEvent;
-use crate::state::{GlobalConfig, StrikeMarket};
+use crate::state::{GlobalConfig, StrikeMarket, OVERRIDE_WINDOW_SECS};
 
 #[derive(Accounts)]
 pub struct SettleMarket<'info> {
@@ -166,7 +166,7 @@ pub fn handle_settle_market(ctx: Context<SettleMarket>) -> Result<()> {
     market.settled_at = clock.unix_timestamp;
     market.override_deadline = clock
         .unix_timestamp
-        .checked_add(3600)
+        .checked_add(OVERRIDE_WINDOW_SECS)
         .ok_or(MeridianError::ArithmeticOverflow)?;
 
     emit!(SettlementEvent {

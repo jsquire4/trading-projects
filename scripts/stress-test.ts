@@ -7,14 +7,16 @@
  *   Phase 3: Mint Yes/No token pairs on trading markets
  *   Phase 4: Place ~1,000+ orders (resting, crossing, no-backed, cancels, market)
  *   Phase 5: Settle lifecycle markets + pair-burn redemptions
- *   Phase 6: Close/cleanup lifecycle markets (may require --resume after 1h)
+ *   Phase 6: Close/cleanup lifecycle markets + treasury redeem
  *
  * Usage:
- *   npx tsx scripts/stress-test.ts              # full run
+ *   npx tsx scripts/stress-test.ts              # full run (requires stress-test build)
  *   npx tsx scripts/stress-test.ts --resume     # resume from last run
  *   STRESS_NUM_WALLETS=20 npx tsx scripts/stress-test.ts  # fewer wallets
  *
  * Prerequisites:
+ *   - Program built with stress-test feature: anchor build -- --features stress-test
+ *     (reduces override window + admin settle delay from 1h to 5s for full coverage)
  *   - Local validator running: ./scripts/local-stack.sh
  *   - GlobalConfig + USDC mint initialized (local-stack.sh handles this)
  */
@@ -92,11 +94,11 @@ async function main(): Promise<void> {
   const runId = runState?.runId ?? Math.floor(Date.now() / 1000);
   const now = Math.floor(Date.now() / 1000);
 
-  // Lifecycle markets: close 180s from now — enough time for Phase 1 to create them
-  // and Phase 3 to mint a few pairs before close. Expired by Phase 5 (~4 min later).
-  // admin_settle requires +1h so needs --resume.
-  // Trading markets: close is tomorrow (allows minting + trading)
-  const marketCloseUnixLifecycle = runState?.marketCloseUnixLifecycle ?? (now + 180);
+  // Lifecycle markets: close 300s from now — enough time for Phase 1 to create them
+  // and Phase 3 to mint all lifecycle pairs before close. Expired by Phase 5 (~8 min in).
+  // With stress-test build: admin_settle delay = 5s, override window = 5s.
+  // Trading markets: close is tomorrow (allows minting + trading throughout run).
+  const marketCloseUnixLifecycle = runState?.marketCloseUnixLifecycle ?? (now + 300);
   const marketCloseUnixTrading = runState?.marketCloseUnixTrading ?? (now + 86400);
 
   console.log(`Run ID:  ${runId}`);
@@ -197,39 +199,9 @@ async function main(): Promise<void> {
       .add("admin_override_settlement").add("redeem").add("update_price");
   }
 
-  // ── Phase 6: Lifecycle ──
-  if (!completedPhases.has(6)) {
-    const result = await phase6Lifecycle(connection, admin, wallets, usdcMint, markets);
-    allPhaseStats.push(result.stats);
-    // Only mark complete if close_market actually succeeded for all
-    const lifecycleMarkets = markets.filter((m) => m.def.isLifecycle);
-    let closedCount = 0;
-    for (const m of lifecycleMarkets) {
-      const state = await readMarketState(connection, m.market);
-      if (state?.isClosed) closedCount++;
-    }
-    if (closedCount >= lifecycleMarkets.length) {
-      completedPhases.add(6);
-    }
-    // Track instruction types that were actually attempted (even if they failed due to timing)
-    exercisedTypes.add("crank_cancel").add("close_market");
-    if (closedCount > 0) {
-      exercisedTypes.add("treasury_redeem").add("cleanup_market");
-    }
-    saveRunState(runId, wallets, allPhaseStats, marketCloseUnixLifecycle, marketCloseUnixTrading, completedPhases);
-  } else {
-    console.log("[Phase 6] Already completed — skipping.");
-    exercisedTypes.add("crank_cancel").add("close_market")
-      .add("treasury_redeem").add("cleanup_market");
-  }
-
-  // ── Build report ──
-  const endMs = Date.now();
-
-  // Count metrics
+  // ── Snapshot metrics BEFORE Phase 6 (which destroys market accounts) ──
   let marketsCreated = 0;
   let marketsSettled = 0;
-  let marketsClosed = 0;
   const lifecycleMarkets = markets.filter((m) => m.def.isLifecycle);
 
   for (const m of markets) {
@@ -239,8 +211,33 @@ async function main(): Promise<void> {
   for (const m of lifecycleMarkets) {
     const state = await readMarketState(connection, m.market);
     if (state?.isSettled) marketsSettled++;
-    if (state?.isClosed) marketsClosed++;
   }
+
+  // ── Phase 6: Lifecycle ──
+  let marketsClosed = 0;
+  if (!completedPhases.has(6)) {
+    const result = await phase6Lifecycle(connection, admin, wallets, usdcMint, markets);
+    allPhaseStats.push(result.stats);
+    // Count closed markets from Phase 6 stats (standard close destroys account,
+    // partial close sets is_closed — check both by counting Phase 6 close successes)
+    marketsClosed = result.closedCount;
+    if (marketsClosed >= lifecycleMarkets.length) {
+      completedPhases.add(6);
+    }
+    exercisedTypes.add("crank_cancel").add("close_market");
+    if (marketsClosed > 0) {
+      exercisedTypes.add("treasury_redeem").add("cleanup_market");
+    }
+    saveRunState(runId, wallets, allPhaseStats, marketCloseUnixLifecycle, marketCloseUnixTrading, completedPhases);
+  } else {
+    console.log("[Phase 6] Already completed — skipping.");
+    marketsClosed = lifecycleMarkets.length;
+    exercisedTypes.add("crank_cancel").add("close_market")
+      .add("treasury_redeem").add("cleanup_market");
+  }
+
+  // ── Build report ──
+  const endMs = Date.now();
 
   const overrideWindowActive = marketsClosed < lifecycleMarkets.length && marketsSettled > 0;
 

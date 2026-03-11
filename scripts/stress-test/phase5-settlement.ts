@@ -20,6 +20,7 @@ import {
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import BN from "bn.js";
 import {
+  DEFAULTS,
   SETTLEMENT_PRICES,
   type Ticker,
   type PhaseStats,
@@ -77,7 +78,10 @@ export async function phase5Settlement(
   // ── Step 2: Update oracle + settle_market for each lifecycle market ──
   // Oracle prices are updated immediately before each settlement to avoid
   // staleness (settlement_staleness = 120s).
+  // After settling the first market, immediately exercise admin_override_settlement
+  // before the override window expires (5s in stress-test builds).
   console.log(`  Settling ${oracleSettleMarkets.length} lifecycle markets via oracle (settle_market)...`);
+  let overrideExercised = false;
   for (const m of oracleSettleMarkets) {
     const ticker = m.def.ticker as Ticker;
     const price = SETTLEMENT_PRICES[ticker];
@@ -102,6 +106,7 @@ export async function phase5Settlement(
     }
 
     // Settle
+    let settled = false;
     stats.attempted++;
     try {
       const ix = buildSettleMarketIx({
@@ -112,19 +117,72 @@ export async function phase5Settlement(
       });
       await sendTx(connection, new Transaction().add(ix), [admin]);
       stats.succeeded++;
+      settled = true;
       console.log(`    Settled (oracle): ${ticker} $${Number(m.def.strikeLamports) / 1_000_000}`);
     } catch (e: any) {
       stats.failed++;
       stats.errors.push(`settle_market ${ticker}: ${e.message?.slice(0, 120)}`);
       console.error(`    ERROR settle ${ticker}: ${e.message?.slice(0, 120)}`);
     }
+
+    // Exercise admin_override_settlement immediately after first settle
+    // (must happen before override window expires)
+    if (settled && !overrideExercised) {
+      overrideExercised = true;
+      const originalState = await readMarketState(connection, m.market);
+      const originalOutcome = originalState?.outcome ?? 0;
+      const flippedPrice = originalOutcome === 1
+        ? m.def.strikeLamports - 1n
+        : m.def.strikeLamports + 1n;
+
+      stats.attempted++;
+      try {
+        const ix = buildAdminOverrideIx({
+          admin: admin.publicKey,
+          config: configPda,
+          market: m.market,
+          newSettlementPrice: new BN(flippedPrice.toString()),
+        });
+        await sendTx(connection, new Transaction().add(ix), [admin]);
+        stats.succeeded++;
+        const newState = await readMarketState(connection, m.market);
+        console.log(`    Override ${ticker}: outcome ${originalOutcome} → ${newState?.outcome}`);
+
+        // Restore original outcome so redemptions work correctly
+        stats.attempted++;
+        const restoreIx = buildAdminOverrideIx({
+          admin: admin.publicKey,
+          config: configPda,
+          market: m.market,
+          newSettlementPrice: new BN(price.toString()),
+        });
+        await sendTx(connection, new Transaction().add(restoreIx), [admin]);
+        stats.succeeded++;
+        console.log(`    Restored ${ticker} to original outcome`);
+      } catch (e: any) {
+        stats.failed++;
+        stats.errors.push(`override ${ticker}: ${e.message?.slice(0, 200)}`);
+        console.error(`    ERROR override ${ticker}: ${e.message?.slice(0, 200)}`);
+      }
+    }
   }
 
   // ── Step 3: admin_settle on reserved last lifecycle market ──
-  // admin_settle requires clock >= market_close + 3600. On a fresh run this will fail
-  // (too early), so we fall back to oracle settle. Re-run with --resume after 1h to
-  // exercise admin_settle successfully.
+  // admin_settle requires clock >= market_close + ADMIN_SETTLE_DELAY_SECS.
+  // With stress-test feature: 5s delay. Production: 3600s (use --resume).
+  // Wait for the delay to pass before attempting.
   if (adminSettleMarket) {
+    const marketAcct2 = await connection.getAccountInfo(adminSettleMarket.market);
+    if (marketAcct2) {
+      const closeUnix = Number(Buffer.from(marketAcct2.data).readBigInt64LE(304));
+      // Wait up to 30s for admin_settle delay; beyond that, skip wait and fall back to oracle
+      const nowSec2 = Math.floor(Date.now() / 1000);
+      const adminWait = closeUnix + 5 - nowSec2 + 1; // 5s = stress-test delay
+      if (adminWait > 0 && adminWait <= 30) {
+        console.log(`  Waiting ${adminWait}s for admin_settle delay...`);
+        await new Promise((r) => setTimeout(r, adminWait * 1000));
+      }
+    }
     const ticker = adminSettleMarket.def.ticker as Ticker;
     console.log(`  Attempting admin_settle on ${ticker}...`);
     let adminSettled = false;
@@ -142,7 +200,7 @@ export async function phase5Settlement(
       console.log(`    admin_settle succeeded on ${ticker}`);
     } catch (e: any) {
       stats.failed++;
-      console.log(`    admin_settle not available yet (requires market_close + 1h). Falling back to oracle settle.`);
+      console.log(`    admin_settle not available yet (too early). Falling back to oracle settle.`);
     }
     // Fall back to oracle settle if admin_settle failed
     if (!adminSettled) {
@@ -184,56 +242,28 @@ export async function phase5Settlement(
     }
   }
 
-  // ── Step 4: Override settlement on first settled market ──
-  // Exercises admin_override_settlement: flip the outcome, then verify it changed.
-  const firstSettled = lifecycleMarkets.find((m) => {
-    // Synchronously check — we just settled these above
-    return true; // first market was always settled via oracle
-  });
-  if (firstSettled) {
-    const overrideTicker = firstSettled.def.ticker as Ticker;
-    const originalState = await readMarketState(connection, firstSettled.market);
-    const originalOutcome = originalState?.outcome ?? 0;
-    // Flip the price to change outcome: if Yes won (price >= strike), use a price below strike
-    const originalPrice = SETTLEMENT_PRICES[overrideTicker];
-    const flippedPrice = originalOutcome === 1
-      ? firstSettled.def.strikeLamports - 1n   // below strike → No wins
-      : firstSettled.def.strikeLamports + 1n;  // above strike → Yes wins
-
-    stats.attempted++;
-    try {
-      const ix = buildAdminOverrideIx({
-        admin: admin.publicKey,
-        config: configPda,
-        market: firstSettled.market,
-        newSettlementPrice: new BN(flippedPrice.toString()),
-      });
-      await sendTx(connection, new Transaction().add(ix), [admin]);
-      stats.succeeded++;
-      const newState = await readMarketState(connection, firstSettled.market);
-      console.log(`  Override ${overrideTicker}: outcome ${originalOutcome} → ${newState?.outcome}`);
-
-      // Override back to original so redemptions work correctly
-      stats.attempted++;
-      const restoreIx = buildAdminOverrideIx({
-        admin: admin.publicKey,
-        config: configPda,
-        market: firstSettled.market,
-        newSettlementPrice: new BN(originalPrice.toString()),
-      });
-      await sendTx(connection, new Transaction().add(restoreIx), [admin]);
-      stats.succeeded++;
-      console.log(`  Restored ${overrideTicker} to original outcome`);
-    } catch (e: any) {
-      stats.failed++;
-      stats.errors.push(`override ${overrideTicker}: ${e.message?.slice(0, 120)}`);
-      console.error(`    ERROR override ${overrideTicker}: ${e.message?.slice(0, 80)}`);
+  // ── Step 4: Wait for override window to pass ──
+  // Winner redemption requires clock >= override_deadline.
+  // With stress-test feature: 5s. Production: 3600s (use --resume).
+  const firstLifecycle = lifecycleMarkets[0];
+  if (firstLifecycle) {
+    const state = await readMarketState(connection, firstLifecycle.market);
+    if (state?.isSettled) {
+      const overrideDeadline = Number(state.overrideDeadline);
+      const nowSec = Math.floor(Date.now() / 1000);
+      const waitSec = overrideDeadline - nowSec + 1;
+      if (waitSec > 0 && waitSec <= 30) {
+        console.log(`  Waiting ${waitSec}s for override window to pass...`);
+        await new Promise((r) => setTimeout(r, waitSec * 1000));
+      } else if (waitSec > 30) {
+        console.log(`  Override window expires in ${waitSec}s (use --resume after it passes)`);
+      }
     }
   }
 
-  // ── Step 5: Winner redemption (modes 1/2) on lifecycle markets ──
+  // ── Step 5: Winner redemption on lifecycle markets ──
   // 5 ask wallets hold Yes+No tokens on lifecycle markets from Phase 3.
-  // After settlement, winning tokens can be redeemed for USDC.
+  // After settlement + override window, winning tokens can be redeemed for USDC.
   const halfWallets = Math.floor(wallets.length / 2);
   const lifecycleRedeemWallets = wallets.slice(halfWallets, halfWallets + 5);
   let winnerRedeems = 0;
@@ -246,7 +276,6 @@ export async function phase5Settlement(
 
       // Mode 1 = winner redemption (handles both Yes/No outcomes internally).
       // On-chain only supports mode 0 (pair burn) and mode 1 (winner redeem).
-      // Note: winner redeem requires clock >= override_deadline (settled_at + 1h).
       const mode = 1;
 
       stats.attempted++;
@@ -276,7 +305,7 @@ export async function phase5Settlement(
     }
   }
   const redeemTotal = lifecycleRedeemWallets.length * lifecycleMarkets.length;
-  console.log(`  Winner redeems: ${winnerRedeems}/${redeemTotal}${winnerRedeems === 0 ? " (blocked by override window — requires settled_at + 1h)" : ""}`);
+  console.log(`  Winner redeems: ${winnerRedeems}/${redeemTotal}`);
 
   // ── Step 6: Pair burn (redeem mode=0) on trading markets ──
   // Use ask wallets (second half) who hold Yes+No tokens from minting.
@@ -315,9 +344,45 @@ export async function phase5Settlement(
       }
     }
   }
-  console.log(`  Pair burns: ${pairBurnSucceeded} succeeded, ${pairBurnFailed} failed`);
+  console.log(`  Pair burns (trading): ${pairBurnSucceeded} succeeded, ${pairBurnFailed} failed`);
 
-  // ── Step 7: Verify settlement ──
+  // ── Step 7: Pair burn remaining lifecycle tokens ──
+  // After winner redeem (1 token), each wallet has 9M winning + 10M losing.
+  // Pair burn 9M to reduce to 0 winning + 1M losing (enables partial close in Phase 6).
+  const lcPairBurnQty = new BN(DEFAULTS.PAIRS_PER_MARKET - 1_000_000); // 9 tokens
+  let lcPairBurns = 0;
+  console.log(`  Pair-burning remaining lifecycle tokens (${lifecycleRedeemWallets.length} wallets × ${lifecycleMarkets.length} markets)...`);
+  for (const wallet of lifecycleRedeemWallets) {
+    for (const m of lifecycleMarkets) {
+      stats.attempted++;
+      try {
+        const ix = buildRedeemIx({
+          user: wallet.publicKey,
+          config: configPda,
+          market: m.market,
+          yesMint: m.yesMint,
+          noMint: m.noMint,
+          usdcVault: m.usdcVault,
+          userUsdcAta: getAssociatedTokenAddressSync(usdcMint, wallet.publicKey),
+          userYesAta: getAssociatedTokenAddressSync(m.yesMint, wallet.publicKey),
+          userNoAta: getAssociatedTokenAddressSync(m.noMint, wallet.publicKey),
+          mode: 0,  // pair burn
+          quantity: lcPairBurnQty,
+        });
+        await sendTx(connection, new Transaction().add(ix), [wallet]);
+        stats.succeeded++;
+        lcPairBurns++;
+      } catch (e: any) {
+        stats.failed++;
+        if (!e.message?.includes("InsufficientBalance")) {
+          stats.errors.push(`lc_pair_burn ${m.def.ticker}: ${e.message?.slice(0, 100)}`);
+        }
+      }
+    }
+  }
+  console.log(`  Lifecycle pair burns: ${lcPairBurns}/${lifecycleRedeemWallets.length * lifecycleMarkets.length}`);
+
+  // ── Step 8: Verify settlement ──
   let settledCount = 0;
   for (const m of lifecycleMarkets) {
     const state = await readMarketState(connection, m.market);
@@ -325,7 +390,7 @@ export async function phase5Settlement(
   }
   console.log(`  Verification: ${settledCount}/${lifecycleMarkets.length} lifecycle markets settled`);
 
-  // ── Step 8: Verify vault invariants on trading markets ──
+  // ── Step 9: Verify vault invariants on trading markets ──
   // The invariant is: vault + escrow >= total_minted - total_redeemed
   // We check vault + escrow + yes_escrow + no_escrow >= net_minted
   let vaultViolations = 0;

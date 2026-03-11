@@ -14,12 +14,23 @@ pub const PRICE_TO_USDC_LAMPORTS: u64 = USDC_LAMPORTS_PER_DOLLAR / 100;
 pub const CRANK_BATCH_SIZE: usize = 32;
 /// Maximum settlement overrides
 pub const MAX_OVERRIDES: u8 = 3;
-/// Override window duration in seconds (1 hour)
+/// Override window duration in seconds (1 hour; 5s in stress-test builds)
+#[cfg(not(feature = "stress-test"))]
 pub const OVERRIDE_WINDOW_SECS: i64 = 3600;
-/// Admin settle delay in seconds (1 hour after market close)
+#[cfg(feature = "stress-test")]
+pub const OVERRIDE_WINDOW_SECS: i64 = 5;
+
+/// Admin settle delay in seconds (1 hour after market close; 5s in stress-test builds)
+#[cfg(not(feature = "stress-test"))]
 pub const ADMIN_SETTLE_DELAY_SECS: i64 = 3600;
-/// Grace period for partial market close (90 days in seconds)
+#[cfg(feature = "stress-test")]
+pub const ADMIN_SETTLE_DELAY_SECS: i64 = 5;
+
+/// Grace period for partial market close (90 days in seconds; 5s in stress-test builds)
+#[cfg(not(feature = "stress-test"))]
 pub const CLOSE_GRACE_PERIOD_SECS: i64 = 7_776_000;
+#[cfg(feature = "stress-test")]
+pub const CLOSE_GRACE_PERIOD_SECS: i64 = 5;
 
 /// Order side types
 pub const SIDE_USDC_BID: u8 = 0;   // Buy Yes — escrow USDC

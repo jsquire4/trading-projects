@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 
 use crate::error::MeridianError;
-use crate::state::{GlobalConfig, StrikeMarket};
+use crate::state::{GlobalConfig, StrikeMarket, OVERRIDE_WINDOW_SECS};
 
 #[derive(Accounts)]
 pub struct AdminOverrideSettlement<'info> {
@@ -56,15 +56,15 @@ pub fn handle_admin_override_settlement(
     // Apply the override
     market.settlement_price = new_settlement_price;
     market.outcome = new_outcome;
-    // Cap total extension: settled_at + 3600 * (override_count + 2)
-    // Pre-increment: use current override_count + 2 (first override = settled_at + 2h, second = +3h, third = +4h)
+    // Cap total extension: settled_at + OVERRIDE_WINDOW * (override_count + 2)
+    // Pre-increment: use current override_count + 2 (first override = +2 windows, second = +3, third = +4)
     let deadline_multiplier = (market.override_count as i64)
         .checked_add(2)
         .ok_or(MeridianError::ArithmeticOverflow)?;
     market.override_deadline = market
         .settled_at
         .checked_add(
-            3600i64
+            OVERRIDE_WINDOW_SECS
                 .checked_mul(deadline_multiplier)
                 .ok_or(MeridianError::ArithmeticOverflow)?,
         )

@@ -1,15 +1,9 @@
 /**
  * phase6-lifecycle.ts — Close market, treasury redeem, cleanup.
  *
- * NOTE: close_market requires clock >= override_deadline (settled_at + 1 hour).
- * On a local validator, the clock is real wall-time, so this phase will fail
- * if run immediately after settlement. The script handles this gracefully
- * and reports it as an expected timing constraint, not a bug.
- *
- * To run Phase 6 successfully:
- *   1. Run phases 1-5 first
- *   2. Wait 1+ hour
- *   3. Run with --resume to retry phase 6
+ * close_market requires clock >= override_deadline (settled_at + override window).
+ * With stress-test feature: 5s window (completes in a single run).
+ * Production build: 3600s window (use --resume after 1h).
  */
 
 import {
@@ -50,7 +44,7 @@ export async function phase6Lifecycle(
   wallets: Keypair[],
   usdcMint: PublicKey,
   markets: MarketAddresses[],
-): Promise<{ stats: PhaseStats }> {
+): Promise<{ stats: PhaseStats; closedCount: number }> {
   console.log("\n[Phase 6] Market lifecycle (close → treasury_redeem → cleanup)...");
   const stats = newPhaseStats("Lifecycle Close");
   const [configPda] = findGlobalConfig();
@@ -58,6 +52,7 @@ export async function phase6Lifecycle(
 
   const lifecycleMarkets = markets.filter((m) => m.def.isLifecycle);
   let overrideWindowActive = false;
+  let closedCount = 0;
 
   // ── Step 1: Crank cancel any remaining orders on lifecycle markets ──
   console.log("  Cranking cancel on lifecycle markets...");
@@ -99,7 +94,22 @@ export async function phase6Lifecycle(
     }
   }
 
-  // ── Step 2: close_market ──
+  // ── Step 2: Wait for override window, then close_market ──
+  // With stress-test feature: override window = 5s. Production: 3600s.
+  const firstSettled = lifecycleMarkets[0];
+  if (firstSettled) {
+    const firstState = await readMarketState(connection, firstSettled.market);
+    if (firstState?.isSettled) {
+      const deadline = Number(firstState.overrideDeadline);
+      const nowSec = Math.floor(Date.now() / 1000);
+      const waitSec = deadline - nowSec + 1;
+      if (waitSec > 0 && waitSec <= 30) {
+        console.log(`  Waiting ${waitSec}s for override window to pass...`);
+        await new Promise((r) => setTimeout(r, waitSec * 1000));
+      }
+    }
+  }
+
   console.log("  Attempting close_market on lifecycle markets...");
   for (const m of lifecycleMarkets) {
     const state = await readMarketState(connection, m.market);
@@ -125,16 +135,20 @@ export async function phase6Lifecycle(
       });
       await sendTx(connection, new Transaction().add(ix), [admin]);
       stats.succeeded++;
+      closedCount++;
       console.log(`    Closed: ${m.def.ticker}`);
     } catch (e: any) {
       const msg = e.message ?? String(e);
-      if (msg.includes("OverrideActive") || msg.includes("0x1784") || msg.includes("CloseMarketOverrideActive")) {
+      if (msg.includes("OverrideActive") || msg.includes("CloseMarketOverrideActive")) {
         if (!overrideWindowActive) {
           overrideWindowActive = true;
-          console.log(`    EXPECTED: Override window still active (1h after settlement).`);
-          console.log(`    To complete Phase 6, wait 1h then rerun with --resume.`);
+          console.log(`    EXPECTED: Override window still active. Rerun with --resume after it passes.`);
         }
-        // Don't count this as a failure — it's an expected timing constraint
+        stats.attempted--;
+      } else if (msg.includes("GracePeriod") || msg.includes("CloseMarketGracePeriodActive")) {
+        if (!overrideWindowActive) {
+          console.log(`    EXPECTED: Grace period active. Rerun with --resume after it passes.`);
+        }
         stats.attempted--;
       } else {
         stats.failed++;
@@ -208,5 +222,5 @@ export async function phase6Lifecycle(
     console.log("  Phase 6 partially skipped: override window active (expected for immediate runs).");
   }
 
-  return { stats: finishPhaseStats(stats) };
+  return { stats: finishPhaseStats(stats), closedCount };
 }

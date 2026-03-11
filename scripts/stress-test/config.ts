@@ -39,7 +39,7 @@ export interface MarketDef {
 
 /**
  * 21 markets: 7 tickers × 3 strikes each.
- * Strike 1 per ticker = lifecycle (close in past), Strikes 2-3 = trading (close tomorrow).
+ * Strike 1 per ticker = lifecycle (close in ~3 min), Strikes 2-3 = trading (close tomorrow).
  */
 export const MARKET_DEFS: MarketDef[] = [
   // AAPL

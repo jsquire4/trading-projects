@@ -90,12 +90,12 @@ async function ensureOracleFeeds(
     stats.attempted++;
     try {
       const price = SETTLEMENT_PRICES[ticker as Ticker] ?? 200_000_000n;
-      const now = Math.floor(Date.now() / 1000);
+      const now = Math.floor(Date.now() / 1000) - 2;
       const ix = buildUpdatePriceIx({
         authority: admin.publicKey,
         priceFeed: feedPda,
         price: new BN(price.toString()),
-        confidence: new BN(1_000_000), // $1 confidence
+        confidence: new BN(Math.floor(Number(price) * 40 / 10_000)),  // 0.4% of price (under 0.5% cap)
         timestamp: new BN(now),
       });
       await sendTx(connection, new Transaction().add(ix), [admin]);

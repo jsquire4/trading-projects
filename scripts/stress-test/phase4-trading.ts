@@ -1,6 +1,11 @@
 /**
- * phase4-trading.ts — Parallel order placement across 14 trading markets.
- * Five rounds: resting orders, crossing fills, no-backed bids, cancels, market orders.
+ * phase4-trading.ts — Order placement across 14 trading markets.
+ *
+ * Round 1: Resting orders (bids + asks, no fills)
+ * Round 2: Crossing fills (sequential with fresh orderbook reads)
+ * Round 3: Pause/unpause exercise (verify market resumes after unpause)
+ * Round 4: Cancels (cancel resting orders from Round 1)
+ * Round 5: Market orders (sweep remaining resting bids)
  */
 
 import {
@@ -21,15 +26,14 @@ import {
   findGlobalConfig,
   sendTx,
   parseOrderBook,
-  batch,
   type MarketAddresses,
+  type ParsedOrder,
 } from "./helpers";
-import { buildPlaceOrderIx, buildCancelOrderIx } from "./instructions";
+import { buildPlaceOrderIx, buildCancelOrderIx, buildPauseIx, buildUnpauseIx } from "./instructions";
 
 // Side constants
 const SIDE_USDC_BID = 0;
 const SIDE_YES_ASK = 1;
-const SIDE_NO_BID = 2;
 
 // Order type constants
 const ORDER_TYPE_MARKET = 0;
@@ -55,6 +59,7 @@ async function placeOrder(
   orderType: number,
   maxFills: number,
   stats: PhaseStats,
+  makerAccounts?: PublicKey[],
 ): Promise<boolean> {
   stats.attempted++;
   try {
@@ -77,6 +82,7 @@ async function placeOrder(
       quantity: new BN(quantity),
       orderType,
       maxFills,
+      makerAccounts,
     });
     await sendTx(connection, new Transaction().add(ix), [wallet]);
     stats.succeeded++;
@@ -85,7 +91,7 @@ async function placeOrder(
     stats.failed++;
     const msg = e.message?.slice(0, 100) ?? String(e);
     // Only log non-common errors
-    if (!msg.includes("OrderBookFull") && !msg.includes("InsufficientBalance")) {
+    if (!msg.includes("OrderBookFull") && !msg.includes("InsufficientBalance") && !msg.includes("already been processed")) {
       stats.errors.push(`order ${m.def.ticker} s=${side} p=${price}: ${msg}`);
     }
     return false;
@@ -104,10 +110,57 @@ async function runBatched(tasks: DeferredOrder[], concurrency: number): Promise<
 }
 
 /**
+ * Compute the maker ATAs needed as remaining_accounts for a crossing order.
+ *
+ * Matching rules:
+ *   - Incoming USDC BID (side=0) at price P crosses resting Yes asks (side=1) at price <= P.
+ *     Maker receives USDC → remaining_account = maker's USDC ATA.
+ *   - Incoming Yes ASK (side=1) at price P crosses resting USDC bids (side=0) at price >= P.
+ *     Maker receives Yes tokens → remaining_account = maker's Yes ATA.
+ *
+ * Returns up to `maxFills` PublicKeys, sorted best-price-first.
+ */
+function getMatchingMakerAccounts(
+  orders: ParsedOrder[],
+  incomingSide: number,
+  incomingPrice: number,
+  maxFills: number,
+  usdcMint: PublicKey,
+  yesMint: PublicKey,
+): PublicKey[] {
+  let candidates: ParsedOrder[];
+
+  if (incomingSide === SIDE_USDC_BID) {
+    // Incoming USDC bid crosses resting Yes asks at price <= incomingPrice.
+    // Best price for taker = lowest ask first.
+    candidates = orders
+      .filter((o) => o.side === SIDE_YES_ASK && o.priceLevel <= incomingPrice)
+      .sort((a, b) => a.priceLevel - b.priceLevel);
+  } else {
+    // Incoming Yes ask crosses resting USDC bids at price >= incomingPrice.
+    // Best price for taker = highest bid first.
+    candidates = orders
+      .filter((o) => o.side === SIDE_USDC_BID && o.priceLevel >= incomingPrice)
+      .sort((a, b) => b.priceLevel - a.priceLevel);
+  }
+
+  return candidates.slice(0, maxFills).map((o) => {
+    if (incomingSide === SIDE_USDC_BID) {
+      // Maker is a Yes seller; they receive USDC.
+      return getAssociatedTokenAddressSync(usdcMint, o.owner);
+    } else {
+      // Maker is a USDC bidder; they receive Yes tokens.
+      return getAssociatedTokenAddressSync(yesMint, o.owner);
+    }
+  });
+}
+
+/**
  * Phase 4: Execute trading rounds across all trading markets.
  */
 export async function phase4Trading(
   connection: Connection,
+  admin: Keypair,
   wallets: Keypair[],
   usdcMint: PublicKey,
   markets: MarketAddresses[],
@@ -123,7 +176,9 @@ export async function phase4Trading(
   const askWallets = wallets.slice(halfWallets);
 
   let totalOrders = 0;
-  const concurrency = 20;
+  // Moderate concurrency — skipPreflight lets the validator schedule write-locked
+  // txns sequentially within a slot instead of failing preflight simulation.
+  const concurrency = 10;
 
   for (let mi = 0; mi < tradingMarkets.length; mi++) {
     const m = tradingMarkets[mi];
@@ -150,35 +205,57 @@ export async function phase4Trading(
     totalOrders += r1Tasks.length;
 
     // ── Round 2: Crossing fills ──
-    // Bid wallets place high bids that cross existing asks at 40-55
-    // Ask wallets place low asks that cross existing bids at 35-50
+    // Each crossing order is processed sequentially with a fresh orderbook read
+    // to ensure maker accounts in remaining_accounts match the actual fill order.
     const r2Bids = bidWallets.slice(20, 35);
     const r2Asks = askWallets.slice(20, 35);
 
-    const r2Tasks: DeferredOrder[] = [];
+    // Crossing bids (high bids that cross existing asks at 40-55)
     for (let i = 0; i < r2Bids.length; i++) {
-      const price = 55 + Math.floor(i * 11 / r2Bids.length); // 55-65 crosses asks
+      const price = 55 + Math.floor(i * 11 / r2Bids.length);
       const w = r2Bids[i];
-      r2Tasks.push(() => placeOrder(connection, configPda, w, m, usdcMint, SIDE_USDC_BID, price, qty, ORDER_TYPE_LIMIT, 5, stats));
+      const obData = await connection.getAccountInfo(m.orderBook);
+      const orders = obData ? parseOrderBook(Buffer.from(obData.data)) : [];
+      const makerAccounts = getMatchingMakerAccounts(orders, SIDE_USDC_BID, price, 5, usdcMint, m.yesMint);
+      await placeOrder(connection, configPda, w, m, usdcMint, SIDE_USDC_BID, price, qty, ORDER_TYPE_LIMIT, 5, stats, makerAccounts);
+      totalOrders++;
     }
+    // Crossing asks (low asks that cross existing bids at 35-50)
     for (let i = 0; i < r2Asks.length; i++) {
-      const price = 30 + Math.floor(i * 16 / r2Asks.length); // 30-45 crosses bids
+      const price = 30 + Math.floor(i * 16 / r2Asks.length);
       const w = r2Asks[i];
-      r2Tasks.push(() => placeOrder(connection, configPda, w, m, usdcMint, SIDE_YES_ASK, price, qty, ORDER_TYPE_LIMIT, 5, stats));
+      const obData = await connection.getAccountInfo(m.orderBook);
+      const orders = obData ? parseOrderBook(Buffer.from(obData.data)) : [];
+      const makerAccounts = getMatchingMakerAccounts(orders, SIDE_YES_ASK, price, 5, usdcMint, m.yesMint);
+      await placeOrder(connection, configPda, w, m, usdcMint, SIDE_YES_ASK, price, qty, ORDER_TYPE_LIMIT, 5, stats, makerAccounts);
+      totalOrders++;
     }
-    await runBatched(r2Tasks, concurrency);
-    totalOrders += r2Tasks.length;
 
-    // ── Round 3: No-backed bids ──
-    const noBidWallets = bidWallets.slice(35, 45);
-    const r3Tasks: DeferredOrder[] = [];
-    for (let i = 0; i < noBidWallets.length; i++) {
-      const price = 50 + Math.floor(i * 11 / noBidWallets.length); // 50-60
-      const w = noBidWallets[i];
-      r3Tasks.push(() => placeOrder(connection, configPda, w, m, usdcMint, SIDE_NO_BID, price, qty, ORDER_TYPE_LIMIT, 5, stats));
+    // ── Round 3: Pause/unpause ──
+    // Exercise pause and unpause instructions on the first market only (once per run).
+    if (mi === 0) {
+      // Pause market
+      stats.attempted++;
+      try {
+        const pauseIx = buildPauseIx({ admin: admin.publicKey, config: configPda, market: m.market });
+        await sendTx(connection, new Transaction().add(pauseIx), [admin]);
+        stats.succeeded++;
+      } catch (e: any) {
+        stats.failed++;
+        stats.errors.push(`pause: ${e.message?.slice(0, 100)}`);
+      }
+      // Unpause market (so trading can continue)
+      stats.attempted++;
+      try {
+        const unpauseIx = buildUnpauseIx({ admin: admin.publicKey, config: configPda, market: m.market });
+        await sendTx(connection, new Transaction().add(unpauseIx), [admin]);
+        stats.succeeded++;
+      } catch (e: any) {
+        stats.failed++;
+        stats.errors.push(`unpause: ${e.message?.slice(0, 100)}`);
+      }
+      totalOrders += 2;
     }
-    await runBatched(r3Tasks, concurrency);
-    totalOrders += r3Tasks.length;
 
     // ── Round 4: Cancels ──
     // Read the order book to find actual order IDs to cancel
@@ -224,15 +301,19 @@ export async function phase4Trading(
     }
 
     // ── Round 5: Market orders ──
-    // Market sell orders sweep resting bids
+    // Market sell orders (Yes ASK at price=1) sweep all resting USDC bids.
+    // Each order gets a fresh orderbook read; skip if no resting bids remain.
     const marketOrderWallets = askWallets.slice(35, 45);
-    const r5Tasks: DeferredOrder[] = [];
     for (let i = 0; i < marketOrderWallets.length; i++) {
       const w = marketOrderWallets[i];
-      r5Tasks.push(() => placeOrder(connection, configPda, w, m, usdcMint, SIDE_YES_ASK, 1, qty, ORDER_TYPE_MARKET, 10, stats));
+      const obData = await connection.getAccountInfo(m.orderBook);
+      const orders = obData ? parseOrderBook(Buffer.from(obData.data)) : [];
+      const restingBids = orders.filter((o) => o.side === SIDE_USDC_BID);
+      if (restingBids.length === 0) break; // Book is empty — no point submitting more market sells
+      const makerAccounts = getMatchingMakerAccounts(orders, SIDE_YES_ASK, 1, 10, usdcMint, m.yesMint);
+      await placeOrder(connection, configPda, w, m, usdcMint, SIDE_YES_ASK, 1, qty, ORDER_TYPE_MARKET, 10, stats, makerAccounts);
+      totalOrders++;
     }
-    await runBatched(r5Tasks, concurrency);
-    totalOrders += r5Tasks.length;
   }
 
   console.log(`  Total orders: ${totalOrders}, succeeded: ${stats.succeeded}, failed: ${stats.failed}`);

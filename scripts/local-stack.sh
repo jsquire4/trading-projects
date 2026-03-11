@@ -110,6 +110,23 @@ export RPC_URL="$LOCAL_RPC"
 
 info "[1/4] Creating mock USDC mint..."
 (cd "$REPO_ROOT" && npx ts-node scripts/create-mock-usdc.ts)
+
+# Fund the faucet keypair so it can pay tx fees when minting USDC to users
+if grep -q "FAUCET_KEYPAIR" "$ENV_FILE" 2>/dev/null; then
+  FAUCET_PUB=$(cd "$REPO_ROOT" && node -e "
+    const fs = require('fs');
+    const raw = fs.readFileSync('.env','utf8');
+    const m = raw.match(/FAUCET_KEYPAIR=(.+)/);
+    if (!m) process.exit(0);
+    const { Keypair } = require('@solana/web3.js');
+    const kp = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(m[1])));
+    console.log(kp.publicKey.toBase58());
+  ")
+  if [ -n "$FAUCET_PUB" ]; then
+    info "Airdropping 10 SOL to faucet ($FAUCET_PUB)..."
+    solana airdrop 10 --url "$LOCAL_RPC" "$FAUCET_PUB" > /dev/null 2>&1
+  fi
+fi
 echo ""
 
 info "[2/4] Initializing GlobalConfig..."
@@ -160,6 +177,33 @@ fi
 
 (cd "$REPO_ROOT" && make services)
 echo ""
+
+# Sync FAUCET_KEYPAIR + USDC_MINT into frontend .env.local
+WEB_ENV="$REPO_ROOT/app/meridian-web/.env.local"
+if [ -f "$ENV_FILE" ]; then
+  USDC_MINT_VAL=$(grep '^USDC_MINT=' "$ENV_FILE" | cut -d= -f2)
+  FAUCET_KP_VAL=$(grep '^FAUCET_KEYPAIR=' "$ENV_FILE" | cut -d= -f2)
+
+  # Update or append NEXT_PUBLIC_USDC_MINT
+  if [ -n "$USDC_MINT_VAL" ] && [ -f "$WEB_ENV" ]; then
+    if grep -q '^NEXT_PUBLIC_USDC_MINT=' "$WEB_ENV"; then
+      sed -i.bak "s|^NEXT_PUBLIC_USDC_MINT=.*|NEXT_PUBLIC_USDC_MINT=${USDC_MINT_VAL}|" "$WEB_ENV"
+    else
+      echo "NEXT_PUBLIC_USDC_MINT=${USDC_MINT_VAL}" >> "$WEB_ENV"
+    fi
+  fi
+
+  # Update or append FAUCET_KEYPAIR
+  if [ -n "$FAUCET_KP_VAL" ] && [ -f "$WEB_ENV" ]; then
+    if grep -q '^FAUCET_KEYPAIR=' "$WEB_ENV"; then
+      sed -i.bak "s|^FAUCET_KEYPAIR=.*|FAUCET_KEYPAIR=${FAUCET_KP_VAL}|" "$WEB_ENV"
+    else
+      echo "FAUCET_KEYPAIR=${FAUCET_KP_VAL}" >> "$WEB_ENV"
+    fi
+  fi
+
+  rm -f "${WEB_ENV}.bak"
+fi
 
 info "Starting frontend..."
 (cd "$REPO_ROOT" && make web)

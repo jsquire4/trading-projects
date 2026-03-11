@@ -9,11 +9,9 @@ const RPC_URL = process.env.RPC_URL ?? process.env.NEXT_PUBLIC_RPC_URL ?? "https
 const USDC_MINT = new PublicKey(process.env.NEXT_PUBLIC_USDC_MINT ?? PublicKey.default.toBase58());
 const FAUCET_AMOUNT = 1_000 * 1_000_000; // 1000 USDC (6 decimals)
 
-function getAdminKeypair(): Keypair | null {
-  const raw = process.env.ADMIN_KEYPAIR;
+function parseKeypair(raw: string | undefined): Keypair | null {
   if (!raw) return null;
   try {
-    // Support both base58 (matching settlement service) and JSON array formats
     if (raw.startsWith("[")) {
       const parsed = JSON.parse(raw);
       return Keypair.fromSecretKey(Uint8Array.from(parsed));
@@ -22,6 +20,12 @@ function getAdminKeypair(): Keypair | null {
   } catch {
     return null;
   }
+}
+
+function getFaucetKeypair(): Keypair | null {
+  // FAUCET_KEYPAIR is the USDC mint authority (created by local-stack.sh)
+  // Fall back to ADMIN_KEYPAIR for devnet where admin is also the mint authority
+  return parseKeypair(process.env.FAUCET_KEYPAIR) ?? parseKeypair(process.env.ADMIN_KEYPAIR);
 }
 
 export async function POST(request: Request) {
@@ -33,10 +37,10 @@ export async function POST(request: Request) {
     );
   }
 
-  const admin = getAdminKeypair();
-  if (!admin) {
+  const faucet = getFaucetKeypair();
+  if (!faucet) {
     return NextResponse.json(
-      { error: "Faucet not configured: ADMIN_KEYPAIR missing" },
+      { error: "Faucet not configured: FAUCET_KEYPAIR or ADMIN_KEYPAIR missing" },
       { status: 500 },
     );
   }
@@ -65,22 +69,22 @@ export async function POST(request: Request) {
     const userAta = await getAssociatedTokenAddress(USDC_MINT, wallet);
     const tx = new Transaction().add(
       createAssociatedTokenAccountIdempotentInstruction(
-        admin.publicKey,
+        faucet.publicKey,
         userAta,
         wallet,
         USDC_MINT,
       ),
     );
 
-    await sendAndConfirmTransaction(connection, tx, [admin]);
+    await sendAndConfirmTransaction(connection, tx, [faucet]);
 
     // Mint test USDC
     const signature = await mintTo(
       connection,
-      admin,
+      faucet,
       USDC_MINT,
       userAta,
-      admin, // mint authority
+      faucet, // mint authority
       FAUCET_AMOUNT,
     );
 

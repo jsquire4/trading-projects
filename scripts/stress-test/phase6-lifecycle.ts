@@ -154,7 +154,9 @@ export async function phase6Lifecycle(
 
   if (closedMarkets.length > 0) {
     console.log(`  Treasury redeem on ${closedMarkets.length} closed markets...`);
-    const redeemWallets = wallets.slice(0, 5);
+    // Use ask wallets who minted on lifecycle markets in Phase 3
+    const halfWallets = Math.floor(wallets.length / 2);
+    const redeemWallets = wallets.slice(halfWallets, halfWallets + 5);
     for (const m of closedMarkets) {
       for (const wallet of redeemWallets) {
         stats.attempted++;

@@ -92,13 +92,17 @@ async function main(): Promise<void> {
   const runId = runState?.runId ?? Math.floor(Date.now() / 1000);
   const now = Math.floor(Date.now() / 1000);
 
-  // Lifecycle markets: close was 2 hours ago (allows admin_settle immediately)
+  // Lifecycle markets: close 180s from now — enough time for Phase 1 to create them
+  // and Phase 3 to mint a few pairs before close. Expired by Phase 5 (~4 min later).
+  // admin_settle requires +1h so needs --resume.
   // Trading markets: close is tomorrow (allows minting + trading)
-  const marketCloseUnixLifecycle = runState?.marketCloseUnixLifecycle ?? (now - 7200);
+  const marketCloseUnixLifecycle = runState?.marketCloseUnixLifecycle ?? (now + 180);
   const marketCloseUnixTrading = runState?.marketCloseUnixTrading ?? (now + 86400);
 
   console.log(`Run ID:  ${runId}`);
-  console.log(`Lifecycle close: ${new Date(marketCloseUnixLifecycle * 1000).toISOString()} (${Math.floor((now - marketCloseUnixLifecycle) / 3600)}h ago)`);
+  const lifecycleDelta = marketCloseUnixLifecycle - now;
+  const lifecycleLabel = lifecycleDelta > 0 ? `in ${lifecycleDelta}s` : `${Math.abs(lifecycleDelta)}s ago`;
+  console.log(`Lifecycle close: ${new Date(marketCloseUnixLifecycle * 1000).toISOString()} (${lifecycleLabel})`);
   console.log(`Trading close:   ${new Date(marketCloseUnixTrading * 1000).toISOString()} (tomorrow)`);
   console.log("");
 
@@ -162,17 +166,18 @@ async function main(): Promise<void> {
 
   // ── Phase 4: Trading ──
   if (!completedPhases.has(4)) {
-    const result = await phase4Trading(connection, wallets, usdcMint, markets);
+    const result = await phase4Trading(connection, admin, wallets, usdcMint, markets);
     allPhaseStats.push(result.stats);
     completedPhases.add(4);
     if (result.stats.succeeded > 0) {
-      exercisedTypes.add("place_order");
-      exercisedTypes.add("cancel_order");
+      exercisedTypes.add("place_order").add("cancel_order")
+        .add("pause").add("unpause");
     }
     saveRunState(runId, wallets, allPhaseStats, marketCloseUnixLifecycle, marketCloseUnixTrading, completedPhases);
   } else {
     console.log("[Phase 4] Already completed — skipping.");
-    exercisedTypes.add("place_order").add("cancel_order");
+    exercisedTypes.add("place_order").add("cancel_order")
+      .add("pause").add("unpause");
   }
 
   // ── Phase 5: Settlement + Redemption ──
@@ -183,12 +188,13 @@ async function main(): Promise<void> {
     completedPhases.add(5);
     if (result.stats.succeeded > 0) {
       exercisedTypes.add("settle_market").add("admin_settle")
-        .add("redeem").add("update_price");
+        .add("admin_override_settlement").add("redeem").add("update_price");
     }
     saveRunState(runId, wallets, allPhaseStats, marketCloseUnixLifecycle, marketCloseUnixTrading, completedPhases);
   } else {
     console.log("[Phase 5] Already completed — skipping.");
-    exercisedTypes.add("settle_market").add("admin_settle").add("redeem").add("update_price");
+    exercisedTypes.add("settle_market").add("admin_settle")
+      .add("admin_override_settlement").add("redeem").add("update_price");
   }
 
   // ── Phase 6: Lifecycle ──
@@ -249,7 +255,7 @@ async function main(): Promise<void> {
     marketsClosed,
     vaultViolations,
     instructionTypesExercised: exercisedTypes.size,
-    totalInstructionTypes: 15,
+    totalInstructionTypes: 18,
     overrideWindowActive,
   };
 

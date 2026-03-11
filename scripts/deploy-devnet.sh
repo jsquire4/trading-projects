@@ -15,34 +15,26 @@ echo "=== Meridian Devnet Deploy ==="
 echo "    Repo root: ${REPO_ROOT}"
 echo ""
 
-# ── Step 1: Check SOL balance and airdrop if needed ──────────────────────────
+# ── Step 1: Check SOL balance ─────────────────────────────────────────────────
 echo "[1/8] Checking SOL balance..."
 BALANCE_RAW=$(solana balance --url "$CLUSTER" | awk '{print $1}')
-# Strip decimals for integer comparison (bash can't do floats)
 BALANCE_INT=${BALANCE_RAW%%.*}
 
 echo "       Current balance: ${BALANCE_RAW} SOL"
 
-if [ "$BALANCE_INT" -lt 2 ]; then
-    echo "       Balance below 2 SOL — requesting airdrop..."
-    MAX_RETRIES=5
-    for i in $(seq 1 $MAX_RETRIES); do
-        if solana airdrop 2 --url "$CLUSTER" 2>/dev/null; then
-            break
-        fi
-        echo "       Airdrop attempt $i/$MAX_RETRIES failed (rate limited). Waiting 15s..."
-        sleep 15
-    done
-    NEW_BALANCE=$(solana balance --url "$CLUSTER" | awk '{print $1}')
-    echo "       New balance: ${NEW_BALANCE} SOL"
-    NEW_INT=${NEW_BALANCE%%.*}
-    if [ "$NEW_INT" -lt 1 ]; then
-        echo "       ERROR: Could not airdrop SOL. Visit https://faucet.solana.com manually."
-        echo "       Wallet: $(solana address)"
+if [ "$BALANCE_INT" -lt 4 ]; then
+    echo ""
+    echo "       WARNING: Balance is below 4 SOL. Deploy requires ~3-4 SOL."
+    echo "       Fund your wallet manually at: https://faucet.solana.com"
+    echo "       Wallet: $(solana address)"
+    echo ""
+    read -rp "       Continue anyway? [y/N] " answer
+    if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+        echo "       Aborting. Fund your wallet and re-run."
         exit 1
     fi
 else
-    echo "       Balance sufficient, skipping airdrop."
+    echo "       Balance sufficient."
 fi
 
 echo ""

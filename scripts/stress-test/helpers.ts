@@ -277,15 +277,32 @@ export function parseOrderBook(data: Buffer): ParsedOrder[] {
 // Transaction helpers
 // ---------------------------------------------------------------------------
 
-/** Send a transaction. Returns signature or throws. */
+/** Send a transaction with retry on transient failures. */
 export async function sendTx(
   connection: Connection,
   tx: Transaction,
   signers: Keypair[],
+  opts?: { skipPreflight?: boolean; maxRetries?: number },
 ): Promise<string> {
-  return sendAndConfirmTransaction(connection, tx, signers, {
-    commitment: "confirmed",
-  });
+  const maxRetries = opts?.maxRetries ?? 2;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await sendAndConfirmTransaction(connection, tx, signers, {
+        commitment: "confirmed",
+        skipPreflight: opts?.skipPreflight ?? false,
+      });
+    } catch (e: any) {
+      const msg = e.message ?? "";
+      // Retry on blockhash / duplicate tx errors, not on program errors
+      const isTransient = msg.includes("blockhash") || msg.includes("was already processed");
+      if (attempt < maxRetries && isTransient) {
+        tx.recentBlockhash = (await connection.getLatestBlockhash("confirmed")).blockhash;
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error("unreachable");
 }
 
 /** Batch items into groups of batchSize. */

@@ -19,7 +19,10 @@ import {
   findNoMint,
 } from "@/lib/pda";
 
-// Side encoding: 0 = Buy Yes, 1 = Sell Yes (ask yes tokens), 2 = Buy No
+// Side encoding (on-chain has only 3 sides):
+//   0 = Buy Yes (bid on yes tokens)
+//   1 = Sell Yes (ask yes tokens)
+//   2 = Buy No / Sell No (no-backed bid — both map to side 2 on-chain)
 // Order type: 0 = Limit, 1 = Market
 type OrderSide = "buy-yes" | "sell-yes" | "buy-no" | "sell-no";
 
@@ -41,8 +44,8 @@ function sideToU8(side: OrderSide): number {
       // Sell No = No-backed bid (side 2) — user offers No tokens at stated price
       return 2;
     case "buy-no":
-      // No native "buy no" — approximate as Buy Yes (side 0)
-      return 0;
+      // No-backed bid (side 2)
+      return 2;
   }
 }
 

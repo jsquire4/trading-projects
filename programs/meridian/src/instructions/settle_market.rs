@@ -111,8 +111,18 @@ pub fn handle_settle_market(ctx: Context<SettleMarket>) -> Result<()> {
         MeridianError::SettlementTooEarly
     );
 
-    // ── Parse oracle price feed ──
+    // ── Verify oracle discriminator (sha256("account:PriceFeed")[..8]) ──
     let oracle_data = ctx.accounts.oracle_feed.try_borrow_data()?;
+    {
+        use anchor_lang::solana_program::hash::hash;
+        let expected = hash(b"account:PriceFeed");
+        require!(
+            oracle_data.len() >= 8 && oracle_data[..8] == expected.to_bytes()[..8],
+            MeridianError::InvalidOracleDiscriminator
+        );
+    }
+
+    // ── Parse oracle price feed ──
     let feed = OraclePriceFeed::parse(&oracle_data)?;
 
     // ── Oracle validation ──

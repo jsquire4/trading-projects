@@ -56,7 +56,7 @@ export function MyOrders({ marketKey }: MyOrdersProps) {
         <div className="space-y-1.5">
           {orders.map((order) => {
             const idStr = order.orderId.toString();
-            const qty = (Number(order.quantity) / 1_000_000).toFixed(0);
+            const qty = (Number(order.quantity) / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 0 });
             const isCancelling = cancellingId === idStr;
 
             return (

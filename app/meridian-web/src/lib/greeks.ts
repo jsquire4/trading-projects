@@ -32,7 +32,7 @@ export function d2(
 /**
  * Binary (cash-or-nothing) call delta.
  *
- * Δ = N'(d2) / (S · σ · √T)
+ * Δ = e^(-rT) · N'(d2) / (S · σ · √T)
  *
  * Measures the sensitivity of the binary call price to a change in spot.
  */
@@ -46,7 +46,7 @@ export function binaryDelta(
   if (T <= 0 || sigma <= 0 || S <= 0) return 0;
   const sqrtT = Math.sqrt(T);
   const d2Val = d2(S, K, sigma, T, r);
-  return normalPdf(d2Val) / (S * sigma * sqrtT);
+  return Math.exp(-r * T) * normalPdf(d2Val) / (S * sigma * sqrtT);
 }
 
 /**
@@ -54,8 +54,8 @@ export function binaryDelta(
  *
  * Γ = dΔ/dS  (analytical derivative of binaryDelta with respect to S)
  *
- * Derived by differentiating Δ = N'(d2) / (S σ √T) where d2 is a function of S:
- *   Γ = -N'(d2) / (S² σ √T) · [1 + d2 / (σ √T)]
+ * Derived by differentiating Δ = e^(-rT) · N'(d2) / (S σ √T) where d2 is a function of S:
+ *   Γ = -e^(-rT) · N'(d2) / (S² σ √T) · [1 + d2 / (σ √T)]
  */
 export function binaryGamma(
   S: number,
@@ -68,5 +68,5 @@ export function binaryGamma(
   const sqrtT = Math.sqrt(T);
   const d2Val = d2(S, K, sigma, T, r);
   const pdf = normalPdf(d2Val);
-  return (-pdf / (S * S * sigma * sqrtT)) * (1 + d2Val / (sigma * sqrtT));
+  return Math.exp(-r * T) * (-pdf / (S * S * sigma * sqrtT)) * (1 + d2Val / (sigma * sqrtT));
 }

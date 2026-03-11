@@ -138,23 +138,24 @@ function buildCalibration(
 
 interface AccuracyStats {
   totalSettled: number;
-  correctPredictions: number;
-  accuracy: number;
+  yesWins: number;
+  noWins: number;
+  yesRate: number;
 }
 
 function computeAccuracy(settlements: SettlementData[]): AccuracyStats {
-  let correct = 0;
+  let yesWins = 0;
+  let noWins = 0;
   for (const s of settlements) {
-    if (s.strikePrice <= 0) continue;
-    // Yes wins when settlementPrice >= strikePrice
-    const impliedYesFavorite = s.settlementPrice >= s.strikePrice;
-    const yesWon = s.outcome === 1;
-    if (impliedYesFavorite === yesWon) correct += 1;
+    if (s.outcome === 1) yesWins += 1;
+    else if (s.outcome === 2) noWins += 1;
   }
+  const total = settlements.length;
   return {
-    totalSettled: settlements.length,
-    correctPredictions: correct,
-    accuracy: settlements.length > 0 ? correct / settlements.length : 0,
+    totalSettled: total,
+    yesWins,
+    noWins,
+    yesRate: total > 0 ? yesWins / total : 0,
   };
 }
 
@@ -379,20 +380,15 @@ export function SettlementAnalytics() {
       {/* ----------------------------------------------------------------- */}
       <section>
         <h3 className="text-sm font-medium text-white/70 mb-3">Accuracy Summary</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <StatCard
             label="Total Markets Settled"
             value={String(accuracy.totalSettled)}
           />
           <StatCard
-            label="Correct Predictions"
-            value={String(accuracy.correctPredictions)}
-            sub={`Outcome matched implied favorite`}
-          />
-          <StatCard
-            label="Overall Accuracy"
-            value={formatPercent(accuracy.accuracy)}
-            sub="Favorite = settlement price on same side as strike"
+            label="Yes Win Rate"
+            value={formatPercent(accuracy.yesRate)}
+            sub={`${accuracy.yesWins} Yes / ${accuracy.noWins} No`}
           />
         </div>
       </section>

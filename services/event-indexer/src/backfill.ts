@@ -121,6 +121,7 @@ export async function runBackfill(
   let totalSignatures = 0;
   let before: string | undefined;
   let done = false;
+  let backfillComplete = false;
   let newestSignature: ConfirmedSignatureInfo | null = null;
 
   while (!done) {
@@ -141,8 +142,8 @@ export async function runBackfill(
     }
 
     if (signatures.length === 0) {
+      backfillComplete = true;
       done = true;
-      break;
     }
 
     totalSignatures += signatures.length;
@@ -159,11 +160,6 @@ export async function runBackfill(
       newestSignature = signatures[0];
     }
 
-    // Checkpoint after each batch so a crash doesn't require full re-scan
-    if (newestSignature) {
-      upsertCheckpoint(newestSignature.signature, newestSignature.slot);
-    }
-
     // Move cursor backward
     const oldest = signatures[signatures.length - 1];
     before = oldest.signature;
@@ -171,6 +167,7 @@ export async function runBackfill(
     // If fewer than BATCH_SIZE returned, we've reached the end (or the until point)
     if (signatures.length < BATCH_SIZE) {
       done = true;
+      backfillComplete = true;
     }
 
     log.info(`Backfill batch: ${signatures.length} sigs, ${batchEvents} events`, {
@@ -180,4 +177,9 @@ export async function runBackfill(
   }
 
   log.info("Backfill complete", { totalSignatures, totalEvents });
+
+  // Checkpoint only after ALL batches succeed to avoid data gaps on crash
+  if (backfillComplete && newestSignature) {
+    upsertCheckpoint(newestSignature.signature, newestSignature.slot);
+  }
 }

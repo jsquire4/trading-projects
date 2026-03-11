@@ -116,7 +116,7 @@ async function settleOneMarket(
     } catch (err) {
       if (isRetryableOracleError(err)) {
         const elapsed = Date.now() - startTime;
-        if (elapsed + SETTLE_RETRY_INTERVAL_MS > SETTLE_MAX_RETRY_DURATION_MS) {
+        if (elapsed >= SETTLE_MAX_RETRY_DURATION_MS) {
           throw new Error(
             `Oracle validation failed for ${ticker} after ${attempt} attempts over ${Math.round(elapsed / 1000)}s: ${err}`,
           );

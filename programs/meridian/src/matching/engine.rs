@@ -267,7 +267,11 @@ fn match_at_level_for_side(
         let fill_qty = result.remaining_quantity.min(order.quantity);
         if fill_qty < MIN_ORDER_SIZE && fill_qty < order.quantity {
             // Don't create dust fills — skip if the remaining amount is below min
-            // and wouldn't fully fill the resting order
+            // and wouldn't fully fill the resting order.
+            // Note: this continue is effectively unreachable because the loop breaks
+            // when remaining_quantity < MIN_ORDER_SIZE (checked above), meaning
+            // fill_qty = min(remaining, order.qty) < MIN_ORDER_SIZE only when
+            // remaining < MIN_ORDER_SIZE, which already triggered the break.
             continue;
         }
 
@@ -336,7 +340,7 @@ pub fn place_resting_order(
     };
 
     let order_id = book.next_order_id;
-    book.next_order_id += 1;
+    book.next_order_id = book.next_order_id.checked_add(1).ok_or(())?;
 
     let order = &mut book.levels[level_idx].orders[slot_idx];
     order.owner = owner;

@@ -87,7 +87,7 @@ export function binaryCallPrice(
  * Convert a probability [0, 1] to a price in cents [0, 100].
  */
 export function probToCents(prob: number): number {
-  return Math.max(0, Math.min(100, Math.round(prob * 100)));
+  return Math.max(1, Math.min(99, Math.round(prob * 100)));
 }
 
 // ---------------------------------------------------------------------------

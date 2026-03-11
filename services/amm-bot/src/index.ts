@@ -14,6 +14,8 @@ import {
 } from "@solana/spl-token";
 import bs58 from "bs58";
 import { createLogger } from "../../shared/src/alerting.js";
+import { historicalVolatility } from "../../shared/src/volatility.js";
+import { TradierClient } from "../../shared/src/tradier-client.js";
 import {
   MERIDIAN_PROGRAM_ID,
   findGlobalConfig,
@@ -102,6 +104,7 @@ async function main(): Promise<void> {
   const quantity = parseInt(process.env.BOT_QUANTITY ?? "1000000", 10);
   const spreadBps = parseInt(process.env.BOT_SPREAD_BPS ?? "500", 10);
   const vol = parseFloat(process.env.BOT_VOL ?? "0.30");
+  const tradierClient = process.env.TRADIER_API_KEY ? new TradierClient() : null;
   const riskFreeRate = parseFloat(process.env.BOT_RISK_FREE_RATE ?? "0.05");
 
   const quoteConfig: QuoteConfig = {
@@ -229,8 +232,22 @@ async function main(): Promise<void> {
           : Number(market.strikePrice);
         const strikePrice = strikeLamports / 1_000_000;
 
+        // Per-ticker historical volatility lookup (falls back to env/default)
+        let tickerVol = vol; // fallback
+        if (tradierClient) {
+          try {
+            const end = new Date().toISOString().slice(0, 10);
+            const start = new Date(Date.now() - 40 * 86_400_000).toISOString().slice(0, 10);
+            const bars = await tradierClient.getHistory(ticker, "daily", start, end);
+            const hv = historicalVolatility(bars, 30);
+            if (hv > 0) tickerVol = hv;
+          } catch (err) {
+            log.warn("Tradier HV lookup failed, using fallback vol", { ticker, error: String(err) });
+          }
+        }
+
         // Price the binary option
-        const fairProb = binaryCallPrice(spotPrice, strikePrice, vol, T, riskFreeRate);
+        const fairProb = binaryCallPrice(spotPrice, strikePrice, tickerVol, T, riskFreeRate);
         const fairCents = probToCents(fairProb);
 
         // Get current inventory (default 0)

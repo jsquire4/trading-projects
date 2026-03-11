@@ -22,6 +22,7 @@ function toMarketData(m: ParsedMarket): MarketData {
     outcome: m.outcome,
     bestBid: null,
     bestAsk: null,
+    marketCloseUnix: Number(m.marketCloseUnix),
   };
 }
 

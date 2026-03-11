@@ -13,7 +13,7 @@ interface MyPositionsProps {
   marketKey: string;
 }
 
-function PositionRow({ position, totalCost }: { position: Position; totalCost: number }) {
+function PositionRow({ position, totalCost }: { position: Position; totalCost: number | null }) {
   const { data: book } = useOrderBook(position.market.publicKey.toBase58());
 
   const yesBal = Number(position.yesBal) / 1_000_000;
@@ -35,15 +35,21 @@ function PositionRow({ position, totalCost }: { position: Position; totalCost: n
   const now = Math.floor(Date.now() / 1000);
   const minutesLeft = Math.max(0, (closeUnix - now) / 60);
   const side = yesBal >= noBal ? "yes" : "no";
-  const pnl = totalValue - totalCost;
-  const positionInsight = interpretPosition(side, pnl, minutesLeft);
+  const pnl = totalCost != null ? totalValue - totalCost : null;
+  const positionInsight = pnl != null
+    ? interpretPosition(side, pnl, minutesLeft)
+    : undefined;
 
   return (
     <div className="flex items-center justify-between text-xs bg-white/5 rounded-md px-3 py-2.5">
       <div className="flex items-center gap-3">
-        <InsightTooltip insight={positionInsight}>
+        {positionInsight ? (
+          <InsightTooltip insight={positionInsight}>
+            <span className="text-white font-medium">{position.market.ticker}</span>
+          </InsightTooltip>
+        ) : (
           <span className="text-white font-medium">{position.market.ticker}</span>
-        </InsightTooltip>
+        )}
         <span className="text-white/40 font-mono">${strikeDollars.toFixed(0)}</span>
       </div>
       <div className="flex items-center gap-4">
@@ -109,7 +115,7 @@ export function MyPositions({ marketKey }: MyPositionsProps) {
               <PositionRow
                 key={pos.market.publicKey.toBase58()}
                 position={pos}
-                totalCost={cb?.totalCostUsdc ?? 0}
+                totalCost={cb?.totalCostUsdc ?? null}
               />
             );
           })}

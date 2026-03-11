@@ -14,7 +14,7 @@ import {
 import { BorshCoder, type Idl } from "@coral-xyz/anchor";
 import { createLogger } from "../../shared/src/alerting.ts";
 import {
-  insertEvent,
+  insertEventsBatch,
   upsertCheckpoint,
   signatureExists,
 } from "./db.js";
@@ -190,11 +190,11 @@ export function createLiveListener(
 
             // Assign sequence numbers per type+market combo within this tx
             const seqCounters = new Map<string, number>();
-            for (const event of events) {
+            const rows = events.map((event) => {
               const key = `${event.type}:${event.market}`;
               const seq = seqCounters.get(key) ?? 0;
               seqCounters.set(key, seq + 1);
-              insertEvent({
+              return {
                 type: event.type,
                 market: event.market,
                 data: JSON.stringify(event.data),
@@ -202,8 +202,9 @@ export function createLiveListener(
                 slot,
                 timestamp: event.timestamp,
                 seq,
-              });
-            }
+              };
+            });
+            insertEventsBatch(rows);
 
             upsertCheckpoint(signature, slot);
 

@@ -61,7 +61,7 @@ const NYSE_HOLIDAYS: Set<string> = new Set([
 
 const maxHolidayYear = 2028; // Update when adding new years
 if (new Date().getFullYear() > maxHolidayYear) {
-  console.warn(`[timezone] NYSE holiday list may be stale — last updated for ${maxHolidayYear}`);
+  log.warn(`NYSE holiday list may be stale — last updated for ${maxHolidayYear}`);
 }
 
 /**

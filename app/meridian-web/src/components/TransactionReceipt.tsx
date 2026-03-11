@@ -25,7 +25,11 @@ export function TransactionReceipt({
   cost,
   onClose,
 }: TransactionReceiptProps) {
-  const potentialWin = ((quantity * (100 - price)) / 100).toFixed(2);
+  const isSell = side.toLowerCase().startsWith("sell");
+  const isNo = side.toLowerCase().includes("no");
+  // Buy Yes & Sell No use (100-price); Sell Yes & Buy No use price
+  const effectivePrice = isSell !== isNo ? price : 100 - price;
+  const potentialWin = ((quantity * effectivePrice) / 100).toFixed(2);
   const xUrl = buildXShareUrl(ticker, side, parseFloat(potentialWin));
   const liUrl = buildLinkedInShareUrl(
     `Just placed a ${side} trade on ${ticker} on Meridian!`,
@@ -52,7 +56,7 @@ export function TransactionReceipt({
       <div className="grid grid-cols-2 gap-3 text-xs">
         <div>
           <span className="text-white/40">Side</span>
-          <div className={`font-medium ${side === "YES" ? "text-green-400" : "text-red-400"}`}>
+          <div className={`font-medium ${side.toLowerCase().includes("yes") ? "text-green-400" : "text-red-400"}`}>
             {side}
           </div>
         </div>

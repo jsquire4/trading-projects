@@ -96,7 +96,7 @@ describe("Mint Pair — Position Constraints", () => {
     }
   });
 
-  it("allows mint when user holds only No tokens", async () => {
+  it("rejects mint when user holds No tokens", async () => {
     const { user, userUsdcAta } = await fundUser(100_000_000);
     const provider = new BankrunProvider(ctx.context);
 
@@ -139,14 +139,14 @@ describe("Mint Pair — Position Constraints", () => {
     const decoded = AccountLayout.decode(Buffer.from(acct!.data));
     expect(Number(decoded.amount)).to.equal(0, "Yes ATA should be empty after transfer");
 
-    // Second mint should succeed — user holds only No tokens, Yes ATA is 0
-    await mintPair(user, userUsdcAta, 1_000_000);
-
-    // Verify the mint succeeded
-    const yesBalanceAfter = AccountLayout.decode(
-      Buffer.from((await ctx.context.banksClient.getAccount(userYesAta))!.data),
-    ).amount;
-    expect(Number(yesBalanceAfter)).to.equal(1_000_000);
+    // Second mint should fail — user holds No tokens (ConflictingPosition)
+    try {
+      await mintPair(user, userUsdcAta, 1_000_000);
+      expect.fail("Expected transaction to fail with ConflictingPosition");
+    } catch (err: any) {
+      const errStr = err.toString();
+      expect(errStr).to.match(/0x17ab|ConflictingPosition|6059|custom program error/i);
+    }
   });
 
   it("allows first mint for fresh user", async () => {

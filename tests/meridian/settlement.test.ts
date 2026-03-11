@@ -216,7 +216,7 @@ describe("Settlement Lifecycle", () => {
         expect.fail("Expected MarketAlreadySettled error");
       } catch (err: any) {
         // 6020 = 6000 + 20
-        expect(String(err)).to.match(/0x17a4|MarketAlreadySettled|6020/i);
+        expect(String(err)).to.match(/0x1784|MarketAlreadySettled|6020/i);
       }
     });
   });
@@ -758,7 +758,7 @@ describe("Settlement Lifecycle", () => {
         expect.fail("Expected MarketNotSettled error");
       } catch (err: any) {
         // 6021 = 6000 + 21
-        expect(String(err)).to.match(/0x17a5|MarketNotSettled|6021/i);
+        expect(String(err)).to.match(/0x1785|MarketNotSettled|6021/i);
       }
     });
 
@@ -907,7 +907,7 @@ describe("Settlement Lifecycle", () => {
         expect.fail("Expected OracleStale error");
       } catch (err: any) {
         // 6040 = 6000 + 40
-        expect(String(err)).to.match(/0x17a8|OracleStale|6040/i);
+        expect(String(err)).to.match(/0x1798|OracleStale|6040/i);
       }
     });
 
@@ -944,7 +944,7 @@ describe("Settlement Lifecycle", () => {
         expect.fail("Expected OracleConfidenceTooWide error");
       } catch (err: any) {
         // 6041 = 6000 + 41
-        expect(String(err)).to.match(/0x17a9|OracleConfidenceTooWide|6041/i);
+        expect(String(err)).to.match(/0x1799|OracleConfidenceTooWide|6041/i);
       }
     });
 
@@ -1300,8 +1300,8 @@ describe("Settlement Lifecycle", () => {
         );
         expect.fail("Expected MarketAlreadySettled error");
       } catch (err: any) {
-        // MarketAlreadySettled = 20, on-chain = 6020 = 0x1794
-        expect(String(err)).to.match(/0x1794|MarketAlreadySettled|6020/i);
+        // MarketAlreadySettled = 20, on-chain = 6020 = 0x1784
+        expect(String(err)).to.match(/0x1784|MarketAlreadySettled|6020/i);
       }
     });
 
@@ -1338,8 +1338,8 @@ describe("Settlement Lifecycle", () => {
         );
         expect.fail("Expected MarketNotSettled error");
       } catch (err: any) {
-        // MarketNotSettled = 21, on-chain = 6021 = 0x1795
-        expect(String(err)).to.match(/0x1795|MarketNotSettled|6021/i);
+        // MarketNotSettled = 21, on-chain = 6021 = 0x1785
+        expect(String(err)).to.match(/0x1785|MarketNotSettled|6021/i);
       }
     });
 
@@ -1454,7 +1454,7 @@ describe("Settlement Lifecycle", () => {
 
       // Verify the escrow was refunded (bid of 5 tokens at price 50 = 2.5 USDC = 2_500_000)
       const usdcAfter = await getTokenBalance(ctx, crankUserUsdcAta);
-      expect(usdcAfter).to.be.greaterThan(usdcBefore);
+      expect(usdcAfter - usdcBefore).to.equal(2_500_000);
     });
 
     // ---------------------------------------------------------------------------
@@ -1689,8 +1689,8 @@ describe("Settlement Lifecycle", () => {
         );
         expect.fail("Expected InsufficientBalance error");
       } catch (err: any) {
-        // InsufficientBalance = 50, on-chain = 6050 = 0x17B2
-        expect(String(err)).to.match(/0x17b2|InsufficientBalance|6050/i);
+        // InsufficientBalance = 50, on-chain = 6050 = 0x17A2
+        expect(String(err)).to.match(/0x17a2|InsufficientBalance|6050/i);
       }
     });
 
@@ -1916,8 +1916,8 @@ describe("Settlement Lifecycle", () => {
         );
         expect.fail("Expected OraclePriceInvalid error");
       } catch (err: any) {
-        // OraclePriceInvalid = 43, on-chain = 6043 = 0x17AB
-        expect(String(err)).to.match(/0x17ab|OraclePriceInvalid|6043/i);
+        // OraclePriceInvalid = 43, on-chain = 6043 = 0x179B
+        expect(String(err)).to.match(/0x179b|OraclePriceInvalid|6043/i);
       }
     });
 
@@ -2029,8 +2029,8 @@ describe("Settlement Lifecycle", () => {
         );
         expect.fail("Expected MarketPaused error");
       } catch (err: any) {
-        // MarketPaused = 22, on-chain = 6022 = 0x1796
-        expect(String(err)).to.match(/0x1796|MarketPaused|6022/i);
+        // MarketPaused = 22, on-chain = 6022 = 0x1786
+        expect(String(err)).to.match(/0x1786|MarketPaused|6022/i);
       }
 
       // Unpause so subsequent tests aren't affected
@@ -2146,8 +2146,8 @@ describe("Settlement Lifecycle", () => {
         );
         expect.fail("Expected MarketPaused error");
       } catch (err: any) {
-        // MarketPaused = 22, on-chain = 6022 = 0x1796
-        expect(String(err)).to.match(/0x1796|MarketPaused|6022/i);
+        // MarketPaused = 22, on-chain = 6022 = 0x1786
+        expect(String(err)).to.match(/0x1786|MarketPaused|6022/i);
       }
 
       // Unpause for cleanup
@@ -2213,8 +2213,8 @@ describe("Settlement Lifecycle", () => {
         );
         expect.fail("Expected OraclePriceInvalid error");
       } catch (err: any) {
-        // OraclePriceInvalid = 43, on-chain = 6043 = 0x17AB
-        expect(String(err)).to.match(/0x17ab|OraclePriceInvalid|6043/i);
+        // OraclePriceInvalid = 43, on-chain = 6043 = 0x179B
+        expect(String(err)).to.match(/0x179b|OraclePriceInvalid|6043/i);
       }
     });
 
@@ -2797,7 +2797,7 @@ describe("Settlement Lifecycle", () => {
       // Both users redeem their Yes tokens
       // Maker has remaining Yes from mint (100 - 30 sold = 70 Yes still held)
       const makerYesBal = await getTokenBalance(ctx, makerYesAta);
-      expect(makerYesBal).to.be.greaterThan(0);
+      expect(makerYesBal).to.equal(70 * ONE_TOKEN);
 
       const makerRedeemIx = buildRedeemIx({
         user: ctx.admin.publicKey,

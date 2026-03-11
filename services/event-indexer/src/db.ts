@@ -215,6 +215,7 @@ export function queryCostBasis(wallet: string): CostBasisRow[] {
         (json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 1)
       )
     GROUP BY market, side
+    HAVING side IS NOT NULL
   `);
 
   const rows = stmt.all({ wallet }) as { market: string; side: 'yes' | 'no'; totalQuantity: number; totalCost: number; fillCount: number }[];

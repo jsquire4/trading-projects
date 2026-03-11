@@ -55,7 +55,7 @@ async function readTickersFromChain(
   );
 
   const tickerCount = (globalConfig.tickerCount as number) ?? 0;
-  if (tickerCount === 0 || tickerCount > 7) {
+  if (tickerCount === 0 || tickerCount > 8) {
     throw new Error(`Unexpected ticker_count: ${tickerCount}`);
   }
 

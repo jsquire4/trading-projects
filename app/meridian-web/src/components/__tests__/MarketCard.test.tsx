@@ -45,10 +45,25 @@ describe("MarketCard", () => {
     expect(prices).toHaveLength(2);
   });
 
-  it('shows "Active" badge for unsettled market', () => {
-    render(<MarketCard market={baseMarket} />);
+  it('shows "Active" badge for unsettled market with future close time', () => {
+    const activeMarket: MarketData = {
+      ...baseMarket,
+      marketCloseUnix: Math.floor(Date.now() / 1000) + 3600,
+    };
+    render(<MarketCard market={activeMarket} />);
 
     expect(screen.getByText("Active")).toBeInTheDocument();
+  });
+
+  it('shows "Awaiting Settlement" badge for expired but unsettled market', () => {
+    const expiredMarket: MarketData = {
+      ...baseMarket,
+      isSettled: false,
+      marketCloseUnix: Math.floor(Date.now() / 1000) - 3600,
+    };
+    render(<MarketCard market={expiredMarket} />);
+
+    expect(screen.getByText("Awaiting Settlement")).toBeInTheDocument();
   });
 
   it('shows "Settled - Yes Wins" badge for settled market with outcome 1', () => {

@@ -59,6 +59,8 @@ pub enum MeridianError {
     InvalidProgramId = 36,
     #[msg("Not enough remaining_accounts for fill settlement")]
     InsufficientAccounts = 37,
+    #[msg("Maker token account owner does not match fill maker")]
+    InvalidMakerAccount = 38,
 
     // === Oracle (on-chain: 6040-6044) ===
     #[msg("Oracle price is stale — exceeds staleness threshold")]
@@ -71,6 +73,8 @@ pub enum MeridianError {
     OraclePriceInvalid = 43,
     #[msg("Oracle program ID doesn't match GlobalConfig")]
     OracleProgramMismatch = 44,
+    #[msg("Oracle account discriminator does not match PriceFeed")]
+    InvalidOracleDiscriminator = 45,
 
     // === Trading & Order Book (on-chain: 6050-6059) ===
     #[msg("Insufficient balance to cover order or mint deposit")]
@@ -117,6 +121,7 @@ pub enum MeridianError {
     AdminSettleTooEarly = 71,
     #[msg("Override window has expired — outcome is final")]
     OverrideWindowExpired = 72,
+    // 73 reserved (removed)
     #[msg("Invalid outcome value")]
     InvalidOutcome = 74,
     #[msg("Maximum override count (3) exceeded — outcome is final")]

@@ -154,13 +154,17 @@ export function PnlTab() {
     const yesBal = Number(pos.yesBal) / 1_000_000;
     const noBal = Number(pos.noBal) / 1_000_000;
 
-    // Use actual mid price from order book, fallback to 0.5 when no book data
-    const mid = midPriceMap.get(marketKey) ?? 0.5;
+    let mid: number;
+    if (pos.market.isSettled) {
+      mid = pos.market.outcome === 1 ? 1.0 : 0.0;
+    } else {
+      mid = midPriceMap.get(marketKey) ?? 0.5;
+    }
     const currentVal = yesBal * mid + noBal * (1 - mid);
 
-    const totalCost = cb ? cb.totalCostUsdc : 0;
-    const pnl = currentVal - totalCost;
-    const pnlPct = totalCost > 0 ? (pnl / totalCost) * 100 : 0;
+    const totalCost = cb ? cb.totalCostUsdc : null;
+    const pnl = totalCost != null ? currentVal - totalCost : null;
+    const pnlPct = totalCost != null && totalCost > 0 && pnl != null ? (pnl / totalCost) * 100 : null;
     const avgCost = cb ? cb.avgPrice : null; // in cents
 
     const side = yesBal > 0 && noBal > 0 ? "Yes + No" : yesBal > 0 ? "Yes" : "No";
@@ -173,8 +177,8 @@ export function PnlTab() {
       qty,
       avgCost,
       currentVal,
-      pnl,
-      pnlPct,
+      pnl: pnl as number | null,
+      pnlPct: pnlPct as number | null,
     };
   });
 
@@ -362,9 +366,9 @@ export function PnlTab() {
               <tbody className="divide-y divide-white/5">
                 {positionRows.map((row) => {
                   const pnlColor =
-                    row.pnl > 0
+                    row.pnl != null && row.pnl > 0
                       ? COLORS.yes
-                      : row.pnl < 0
+                      : row.pnl != null && row.pnl < 0
                       ? COLORS.no
                       : "white";
                   return (
@@ -393,14 +397,15 @@ export function PnlTab() {
                         className="px-4 py-3 text-right font-mono font-medium"
                         style={{ color: pnlColor }}
                       >
-                        {fmtPnl(row.pnl)}
+                        {row.pnl != null ? fmtPnl(row.pnl) : "—"}
                       </td>
                       <td
                         className="px-4 py-3 text-right font-mono font-medium"
                         style={{ color: pnlColor }}
                       >
-                        {row.pnlPct >= 0 ? "+" : ""}
-                        {row.pnlPct.toFixed(1)}%
+                        {row.pnlPct != null
+                          ? `${row.pnlPct >= 0 ? "+" : ""}${row.pnlPct.toFixed(1)}%`
+                          : "—"}
                       </td>
                     </tr>
                   );

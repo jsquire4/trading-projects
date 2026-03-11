@@ -88,20 +88,20 @@ describe("probToCents", () => {
     expect(probToCents(0.65)).toBe(65);
   });
 
-  it("converts 0 to 0", () => {
-    expect(probToCents(0)).toBe(0);
+  it("converts 0 to 1", () => {
+    expect(probToCents(0)).toBe(1);
   });
 
-  it("converts 1 to 100", () => {
-    expect(probToCents(1)).toBe(100);
+  it("converts 1 to 99", () => {
+    expect(probToCents(1)).toBe(99);
   });
 
-  it("clamps negative to 0", () => {
-    expect(probToCents(-0.1)).toBe(0);
+  it("clamps negative to 1", () => {
+    expect(probToCents(-0.1)).toBe(1);
   });
 
-  it("clamps above 1 to 100", () => {
-    expect(probToCents(1.5)).toBe(100);
+  it("clamps above 1 to 99", () => {
+    expect(probToCents(1.5)).toBe(99);
   });
 });
 

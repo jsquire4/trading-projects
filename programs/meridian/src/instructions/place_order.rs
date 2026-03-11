@@ -101,6 +101,22 @@ pub fn handle_place_order<'info>(
     let clock = Clock::get()?;
     validate_order(&ctx, side, price, quantity, order_type, &clock)?;
 
+    // Position constraints with reload() to get fresh balances in composable txs
+    if side == SIDE_USDC_BID {
+        ctx.accounts.user_no_ata.reload()?;
+        require!(
+            ctx.accounts.user_no_ata.amount == 0,
+            MeridianError::ConflictingPosition
+        );
+    }
+    if side == SIDE_NO_BID {
+        ctx.accounts.user_yes_ata.reload()?;
+        require!(
+            ctx.accounts.user_yes_ata.amount == 0,
+            MeridianError::ConflictingPosition
+        );
+    }
+
     // --- Build signer seeds ---
     let market = &ctx.accounts.market;
     let market_key = market.key();
@@ -173,6 +189,10 @@ pub fn handle_place_order<'info>(
     }
 
     // --- Handle resting order failure: refund remaining quantity ---
+    // Note: For USDC bids, the refund uses floor division (quantity * price / 100),
+    // which may leave up to (price-1) lamports in escrow due to rounding. This is
+    // acceptable because the ceiling-division escrow ensures the protocol never
+    // under-collateralizes, and the dust amount is negligible (<1 cent).
     if match_result.resting_failed && match_result.remaining_quantity > 0 {
         msg!(
             "Resting order failed (level full): refunding {} remaining to user={}",
@@ -269,21 +289,8 @@ fn validate_order(
         MeridianError::MarketClosed
     );
 
-    // Position constraint: side=0 (Buy Yes) requires No balance == 0
-    if side == SIDE_USDC_BID {
-        require!(
-            ctx.accounts.user_no_ata.amount == 0,
-            MeridianError::ConflictingPosition
-        );
-    }
-
-    // Position constraint: side=2 (Sell No / No-backed bid) requires Yes balance == 0
-    if side == SIDE_NO_BID {
-        require!(
-            ctx.accounts.user_yes_ata.amount == 0,
-            MeridianError::ConflictingPosition
-        );
-    }
+    // Position constraints checked in handler via reload() for composable tx safety
+    // (see handle_place_order after validate_order call)
 
     Ok(())
 }
@@ -297,9 +304,11 @@ fn escrow_taker_assets(
 ) -> Result<()> {
     match side {
         SIDE_USDC_BID => {
-            // Escrow USDC: cost = quantity * price / 100
+            // Escrow USDC: cost = ceil(quantity * price / 100)
             let escrow_amount = quantity
                 .checked_mul(price as u64)
+                .ok_or(MeridianError::ArithmeticOverflow)?
+                .checked_add(99)
                 .ok_or(MeridianError::ArithmeticOverflow)?
                 .checked_div(100)
                 .ok_or(MeridianError::DivisionByZero)?;
@@ -469,7 +478,7 @@ fn process_merge_fill<'info>(
         .checked_sub(yes_payout_per_unit)
         .ok_or(MeridianError::ArithmeticOverflow)?;
 
-    let yes_payout = (fill.quantity as u128)
+    let mut yes_payout = (fill.quantity as u128)
         .checked_mul(yes_payout_per_unit as u128)
         .ok_or(MeridianError::ArithmeticOverflow)?
         .checked_div(USDC_LAMPORTS_PER_DOLLAR as u128)
@@ -479,6 +488,13 @@ fn process_merge_fill<'info>(
         .ok_or(MeridianError::ArithmeticOverflow)?
         .checked_div(USDC_LAMPORTS_PER_DOLLAR as u128)
         .ok_or(MeridianError::DivisionByZero)? as u64;
+
+    // Assign any truncation dust to yes_payout so no USDC is trapped in vault
+    let total_payout = yes_payout.checked_add(no_payout).ok_or(MeridianError::ArithmeticOverflow)?;
+    let dust = fill.quantity.checked_sub(total_payout).unwrap_or(0);
+    if dust > 0 {
+        yes_payout = yes_payout.checked_add(dust).ok_or(MeridianError::ArithmeticOverflow)?;
+    }
 
     // Burn Yes from yes_escrow
     token::burn(
@@ -530,6 +546,14 @@ fn process_merge_fill<'info>(
         );
         let maker_usdc = &remaining_accounts[*rem_idx];
         *rem_idx += 1;
+        // Validate maker account ownership: SPL token account authority (bytes 32-64) must match fill.maker
+        require!(
+            maker_usdc.owner == &token::ID && {
+                let data = maker_usdc.try_borrow_data()?;
+                data.len() >= 64 && Pubkey::new_from_array(data[32..64].try_into().unwrap()) == fill.maker
+            },
+            MeridianError::InvalidMakerAccount
+        );
         token::transfer(
             CpiContext::new_with_signer(
                 tp.clone(),
@@ -566,6 +590,14 @@ fn process_merge_fill<'info>(
         );
         let maker_usdc = &remaining_accounts[*rem_idx];
         *rem_idx += 1;
+        // Validate maker account ownership: SPL token account authority (bytes 32-64) must match fill.maker
+        require!(
+            maker_usdc.owner == &token::ID && {
+                let data = maker_usdc.try_borrow_data()?;
+                data.len() >= 64 && Pubkey::new_from_array(data[32..64].try_into().unwrap()) == fill.maker
+            },
+            MeridianError::InvalidMakerAccount
+        );
         token::transfer(
             CpiContext::new_with_signer(
                 tp.clone(),
@@ -633,6 +665,14 @@ fn process_swap_fill<'info>(
         );
         let maker_usdc = &remaining_accounts[*rem_idx];
         *rem_idx += 1;
+        // Validate maker account ownership: SPL token account authority (bytes 32-64) must match fill.maker
+        require!(
+            maker_usdc.owner == &token::ID && {
+                let data = maker_usdc.try_borrow_data()?;
+                data.len() >= 64 && Pubkey::new_from_array(data[32..64].try_into().unwrap()) == fill.maker
+            },
+            MeridianError::InvalidMakerAccount
+        );
         token::transfer(
             CpiContext::new_with_signer(
                 tp.clone(),
@@ -679,6 +719,14 @@ fn process_swap_fill<'info>(
         );
         let maker_yes = &remaining_accounts[*rem_idx];
         *rem_idx += 1;
+        // Validate maker account ownership: SPL token account authority (bytes 32-64) must match fill.maker
+        require!(
+            maker_yes.owner == &token::ID && {
+                let data = maker_yes.try_borrow_data()?;
+                data.len() >= 64 && Pubkey::new_from_array(data[32..64].try_into().unwrap()) == fill.maker
+            },
+            MeridianError::InvalidMakerAccount
+        );
         token::transfer(
             CpiContext::new_with_signer(
                 tp.clone(),

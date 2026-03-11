@@ -10,14 +10,23 @@ export interface MarketData {
   bestBid: number | null; // cents (1-99)
   bestAsk: number | null; // cents (1-99)
   activeOrders?: number;
+  marketCloseUnix?: number;
 }
 
 interface MarketCardProps {
   market: MarketData;
 }
 
-function statusBadge(isSettled: boolean, outcome: number) {
+function statusBadge(isSettled: boolean, outcome: number, marketCloseUnix?: number) {
   if (!isSettled) {
+    const now = Math.floor(Date.now() / 1000);
+    if (marketCloseUnix != null && now >= marketCloseUnix) {
+      return (
+        <span className="rounded-full bg-yellow-500/20 px-2 py-0.5 text-[10px] font-medium text-yellow-400">
+          Awaiting Settlement
+        </span>
+      );
+    }
     return (
       <span className="rounded-full bg-accent/20 px-2 py-0.5 text-[10px] font-medium text-accent">
         Active
@@ -47,6 +56,7 @@ export function MarketCard({ market }: MarketCardProps) {
     bestBid,
     bestAsk,
     activeOrders,
+    marketCloseUnix,
   } = market;
 
   // Midpoint price for Yes, or best bid/ask
@@ -68,7 +78,7 @@ export function MarketCard({ market }: MarketCardProps) {
           <h3 className="text-lg font-bold text-white">{ticker}</h3>
           <p className="text-xs text-white/50">Strike: ${strikeDollars}</p>
         </div>
-        {statusBadge(isSettled, outcome)}
+        {statusBadge(isSettled, outcome, marketCloseUnix)}
       </div>
 
       <div className="grid grid-cols-2 gap-3 mb-3">

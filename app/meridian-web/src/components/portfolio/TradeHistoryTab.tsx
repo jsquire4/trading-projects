@@ -6,6 +6,17 @@ import { useIndexedEvents } from "@/hooks/useAnalyticsData";
 import { parseFillEvent } from "@/lib/eventParsers";
 import { buildCsv, downloadCsv } from "@/lib/csv";
 
+const TAKER_SIDE_LABELS: Record<number, string> = {
+  0: "Buy Yes",
+  1: "Sell Yes",
+  2: "Buy No",
+};
+const TAKER_SIDE_COLORS: Record<number, string> = {
+  0: "text-green-400",
+  1: "text-amber-400",
+  2: "text-red-400",
+};
+
 export function TradeHistoryTab() {
   const { publicKey } = useWallet();
   const { data: events = [], isLoading } = useIndexedEvents({ type: "fill", limit: 500 });
@@ -30,7 +41,7 @@ export function TradeHistoryTab() {
     const headers = ["Date", "Side", "Price (c)", "Quantity", "Role", "Tx Signature"];
     const rows = fills.map((f) => [
       new Date(f.timestamp * 1000).toISOString(),
-      f.takerSide === 0 ? "Buy Yes" : f.takerSide === 2 ? "Buy No" : "Sell Yes",
+      TAKER_SIDE_LABELS[f.takerSide] ?? "Unknown",
       String(f.price),
       String(f.quantity / 1_000_000),
       f.maker === publicKey?.toBase58() ? "Maker" : "Taker",
@@ -78,8 +89,8 @@ export function TradeHistoryTab() {
           </thead>
           <tbody>
             {fills.map((f, i) => {
-              const sideLabel = f.takerSide === 0 ? "Buy Yes" : f.takerSide === 2 ? "Buy No" : "Sell Yes";
-              const sideColor = f.takerSide === 0 ? "text-green-400" : f.takerSide === 2 ? "text-red-400" : "text-amber-400";
+              const sideLabel = TAKER_SIDE_LABELS[f.takerSide] ?? "Unknown";
+              const sideColor = TAKER_SIDE_COLORS[f.takerSide] ?? "text-white/50";
               const role = f.maker === publicKey?.toBase58() ? "Maker" : "Taker";
               const qty = (f.quantity / 1_000_000).toFixed(0);
 

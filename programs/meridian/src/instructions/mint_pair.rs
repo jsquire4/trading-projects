@@ -49,7 +49,7 @@ pub struct MintPair<'info> {
     )]
     pub user_yes_ata: Box<Account<'info, TokenAccount>>,
 
-    /// User's No token account — created if needed. NOT checked for balance (Buy No flow needs this).
+    /// User's No token account — created if needed. Must have zero balance (checked in handler).
     #[account(
         init_if_needed,
         payer = user,
@@ -81,8 +81,16 @@ pub fn handle_mint_pair(ctx: Context<MintPair>, quantity: u64) -> Result<()> {
     // Position constraint: user must not hold Yes tokens (checked after ATA init)
     // The Yes ATA may have just been created (balance 0) — that's fine.
     // If user already held Yes tokens, this rejects.
+    // reload() ensures fresh balances in composable transactions (matches place_order.rs pattern).
+    ctx.accounts.user_yes_ata.reload()?;
     require!(
         ctx.accounts.user_yes_ata.amount == 0,
+        MeridianError::ConflictingPosition
+    );
+
+    ctx.accounts.user_no_ata.reload()?;
+    require!(
+        ctx.accounts.user_no_ata.amount == 0,
         MeridianError::ConflictingPosition
     );
 

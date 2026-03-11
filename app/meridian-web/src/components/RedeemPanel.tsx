@@ -38,12 +38,12 @@ export function RedeemPanel({ market, yesBal, noBal, onSuccess }: RedeemPanelPro
 
   // Pair burn: min(yesBal, noBal) available anytime
   const maxPairBurn = yesBal < noBal ? yesBal : noBal;
-  const maxPairBurnNum = Number(maxPairBurn) / 1_000_000;
+  const maxPairBurnNum = Number(maxPairBurn / BigInt(1_000_000));
 
   // Winner redemption: post-settlement, after override window
   const isYesWinner = market.outcome === 1;
   const winnerBal = isYesWinner ? yesBal : noBal;
-  const maxWinnerNum = Number(winnerBal) / 1_000_000;
+  const maxWinnerNum = Number(winnerBal / BigInt(1_000_000));
 
   const canPairBurn = maxPairBurn > BigInt(0) && !market.isPaused;
   const hasValidOutcome = market.outcome === 1 || market.outcome === 2;

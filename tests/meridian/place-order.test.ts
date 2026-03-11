@@ -232,7 +232,7 @@ describe("Place Order", () => {
       await provider.sendAndConfirm!(new Transaction().add(ix), [ctx.admin]);
       expect.fail("Expected InvalidPrice error");
     } catch (err: any) {
-      expect(String(err)).to.match(/0x1794|InvalidPrice|6052/i);
+      expect(String(err)).to.match(/0x17a4|InvalidPrice|6052/i);
     }
   });
 
@@ -244,7 +244,7 @@ describe("Place Order", () => {
       await provider.sendAndConfirm!(new Transaction().add(ix), [ctx.admin]);
       expect.fail("Expected InvalidQuantity error");
     } catch (err: any) {
-      expect(String(err)).to.match(/0x1795|InvalidQuantity|6053/i);
+      expect(String(err)).to.match(/0x17a5|InvalidQuantity|6053/i);
     }
   });
 
@@ -258,7 +258,7 @@ describe("Place Order", () => {
       await provider.sendAndConfirm!(new Transaction().add(ix), [ctx.admin]);
       expect.fail("Expected ConflictingPosition error");
     } catch (err: any) {
-      expect(String(err)).to.match(/0x179b|ConflictingPosition|6059/i);
+      expect(String(err)).to.match(/0x17ab|ConflictingPosition|6059/i);
     }
   });
 
@@ -285,6 +285,7 @@ describe("Place Order", () => {
 
     // Maker (admin) needs a USDC ATA to receive payment
     // Admin already has userUsdcAta
+    const makerUsdcBefore = await getTokenBalance(ctx, userUsdcAta);
 
     const ix = buildPlaceOrderIx({
       user: taker.publicKey,
@@ -315,7 +316,8 @@ describe("Place Order", () => {
     expect(takerYesBal).to.equal(5 * ONE_TOKEN);
 
     // Maker (admin) should have received USDC: 5 tokens * 60/100 = 3 USDC = 3_000_000
-    // (their existing balance + 3_000_000)
+    const makerUsdcAfter = await getTokenBalance(ctx, userUsdcAta);
+    expect(makerUsdcAfter - makerUsdcBefore).to.equal(3_000_000);
   });
 
   it("cancels a resting USDC bid order and refunds escrow", async () => {
@@ -453,7 +455,7 @@ describe("Place Order", () => {
       await provider.sendAndConfirm!(new Transaction().add(cancelIx), [attacker]);
       expect.fail("Expected OrderNotOwned error");
     } catch (err: any) {
-      expect(String(err)).to.match(/0x1797|OrderNotOwned|6055/i);
+      expect(String(err)).to.match(/0x17a7|OrderNotOwned|6055/i);
     }
   });
 

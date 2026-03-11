@@ -26,7 +26,7 @@ const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS ?? "http://localhost:3000,http
 function getAllowedOrigin(req: http.IncomingMessage): string {
   const origin = req.headers.origin ?? "";
   if (ALLOWED_ORIGINS.includes(origin)) return origin;
-  return ALLOWED_ORIGINS[0];
+  return "";
 }
 
 function corsHeaders(req: http.IncomingMessage): Record<string, string> {

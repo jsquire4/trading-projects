@@ -12,6 +12,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
+import { useQuery } from "@tanstack/react-query";
 import { useSettlementEvents, type IndexedEvent } from "@/hooks/useAnalyticsData";
 import {
   COLORS,
@@ -20,6 +21,8 @@ import {
   TOOLTIP_STYLE,
   formatPercent,
 } from "@/lib/chartConfig";
+
+const EVENT_INDEXER_URL = process.env.NEXT_PUBLIC_EVENT_INDEXER_URL ?? "http://localhost:4800";
 
 // ---------------------------------------------------------------------------
 // Parsed settlement data shape
@@ -91,7 +94,10 @@ interface CalibrationBucket {
   realizedRate: number;
 }
 
-function buildCalibration(settlements: SettlementData[]): CalibrationBucket[] {
+function buildCalibration(
+  settlements: SettlementData[],
+  vwapMap?: Map<string, number>,
+): CalibrationBucket[] {
   const buckets: { total: number; yesWins: number }[] = Array.from(
     { length: 10 },
     () => ({ total: 0, yesWins: 0 }),
@@ -99,14 +105,19 @@ function buildCalibration(settlements: SettlementData[]): CalibrationBucket[] {
 
   for (const s of settlements) {
     if (s.strikePrice <= 0) continue;
-    // NOTE: True implied probability requires pre-settlement Yes token prices,
-    // which are not yet collected. As a proxy, we bucket by the distance of
-    // settlement price from strike, mapped to [0, 1]. This measures "how
-    // decisive the outcome was", NOT the market's ex-ante belief. The chart
-    // axis is labeled "Distance from Strike (%)" to avoid misleading users.
-    const aboveStrike = s.settlementPrice >= s.strikePrice;
-    const distFrac = Math.min(1, Math.abs(s.settlementPrice - s.strikePrice) / s.strikePrice);
-    const ratio = aboveStrike ? 0.5 + 0.5 * distFrac : 0.5 - 0.5 * distFrac;
+
+    let ratio: number;
+    const vwap = vwapMap?.get(s.market);
+    if (vwap != null && vwap > 0 && vwap <= 100) {
+      // Use fill-price-derived implied probability: VWAP in cents → 0-1
+      ratio = vwap / 100;
+    } else {
+      // Fallback: distance-from-strike proxy (measures outcome decisiveness)
+      const aboveStrike = s.settlementPrice >= s.strikePrice;
+      const distFrac = Math.min(1, Math.abs(s.settlementPrice - s.strikePrice) / s.strikePrice);
+      ratio = aboveStrike ? 0.5 + 0.5 * distFrac : 0.5 - 0.5 * distFrac;
+    }
+
     const idx = toBucket(ratio);
     buckets[idx].total += 1;
     if (s.outcome === 1) buckets[idx].yesWins += 1;
@@ -194,12 +205,27 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
 export function SettlementAnalytics() {
   const { data: events, isLoading, isError, error } = useSettlementEvents();
 
+  const { data: vwapData } = useQuery<Map<string, number>>({
+    queryKey: ["market-vwaps"],
+    queryFn: async () => {
+      const res = await fetch(`${EVENT_INDEXER_URL}/api/events/market-vwaps`);
+      if (!res.ok) return new Map();
+      const json = await res.json();
+      const map = new Map<string, number>();
+      for (const v of json.vwaps ?? []) {
+        map.set(v.market, v.vwap); // vwap in cents
+      }
+      return map;
+    },
+    staleTime: 60_000,
+  });
+
   const settlements = useMemo(() => {
     if (!events) return [];
     return events.map(parseSettlement).filter((s): s is SettlementData => s !== null);
   }, [events]);
 
-  const calibration = useMemo(() => buildCalibration(settlements), [settlements]);
+  const calibration = useMemo(() => buildCalibration(settlements, vwapData), [settlements, vwapData]);
   const accuracy = useMemo(() => computeAccuracy(settlements), [settlements]);
   const leaderboard = useMemo(() => buildLeaderboard(settlements), [settlements]);
 
@@ -265,10 +291,10 @@ export function SettlementAnalytics() {
       <section>
         <h3 className="text-sm font-medium text-white/70 mb-3">Calibration Chart</h3>
         <p className="text-xs text-white/40 mb-4">
-          Buckets by distance from strike (settlement/strike ratio). Diagonal line = perfect calibration.
+          Buckets by implied probability. Diagonal line = perfect calibration.
           <br />
-          <em>Note: Uses settlement-to-strike distance as a proxy, not true implied probability.
-          True calibration requires pre-settlement Yes token fill prices, which are not yet collected.</em>
+          <em>Uses volume-weighted average fill prices when available. Falls back to
+          settlement-to-strike distance proxy for markets without fill data.</em>
         </p>
         <div className="rounded-lg border border-white/10 bg-white/5 p-4">
           <ResponsiveContainer width="100%" height={300}>

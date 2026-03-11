@@ -12,6 +12,8 @@ import {
   getLatestEvents,
   getEventCount,
   getCheckpoint,
+  queryCostBasis,
+  queryMarketVwaps,
 } from "./db.js";
 
 const log = createLogger("event-indexer:api");
@@ -97,6 +99,29 @@ function handleLatest(
   jsonResponse(res, 200, { events }, req);
 }
 
+function handleCostBasis(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL,
+): void {
+  const params = parseQuery(url);
+  const wallet = params.wallet;
+  if (!wallet || !/^[A-HJ-NP-Za-km-z1-9]{1,44}$/.test(wallet)) {
+    jsonResponse(res, 400, { error: "Invalid or missing wallet address" }, req);
+    return;
+  }
+  const costBasis = queryCostBasis(wallet);
+  jsonResponse(res, 200, { costBasis }, req);
+}
+
+function handleMarketVwaps(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): void {
+  const vwaps = queryMarketVwaps();
+  jsonResponse(res, 200, { vwaps }, req);
+}
+
 function handleHealth(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -136,7 +161,11 @@ export function startApiServer(port: number): http.Server {
     const pathname = url.pathname;
 
     try {
-      if (pathname === "/api/events/latest") {
+      if (pathname === "/api/events/cost-basis") {
+        handleCostBasis(req, res, url);
+      } else if (pathname === "/api/events/market-vwaps") {
+        handleMarketVwaps(req, res);
+      } else if (pathname === "/api/events/latest") {
         handleLatest(req, res);
       } else if (pathname === "/api/events") {
         handleEvents(req, res, url);

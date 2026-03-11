@@ -168,6 +168,73 @@ export function upsertCheckpoint(sig: string, slot: number): void {
     .run({ sig, slot });
 }
 
+// --------------- Cost basis aggregation ---------------
+
+export interface CostBasisRow {
+  market: string;
+  avgPrice: number;       // weighted average fill price in cents
+  totalQuantity: number;  // total tokens acquired (micro-tokens)
+  totalCostUsdc: number;  // total USDC spent (in micro-USDC × cents)
+  fillCount: number;
+}
+
+export function queryCostBasis(wallet: string): CostBasisRow[] {
+  // Fill events have JSON data with: maker, taker, price, quantity, takerSide, makerSide
+  // Buy-side fills:
+  //   - Taker buys: taker = wallet AND takerSide IN (0, 2)
+  //   - Maker bought when taker sold: maker = wallet AND takerSide = 1
+  const stmt = getDb().prepare(`
+    SELECT
+      market,
+      SUM(CAST(json_extract(data, '$.quantity') AS REAL)) as totalQuantity,
+      SUM(CAST(json_extract(data, '$.quantity') AS REAL) * CAST(json_extract(data, '$.price') AS REAL)) as totalCost,
+      COUNT(*) as fillCount
+    FROM events
+    WHERE type = 'fill'
+      AND (
+        (json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) IN (0, 2))
+        OR
+        (json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 1)
+      )
+    GROUP BY market
+  `);
+
+  const rows = stmt.all({ wallet }) as { market: string; totalQuantity: number; totalCost: number; fillCount: number }[];
+
+  return rows.map(r => ({
+    market: r.market,
+    totalQuantity: r.totalQuantity,
+    totalCostUsdc: r.totalCost,
+    avgPrice: r.totalQuantity > 0 ? r.totalCost / r.totalQuantity : 0,
+    fillCount: r.fillCount,
+  }));
+}
+
+// --------------- Market VWAP aggregation ---------------
+
+export interface MarketVwap {
+  market: string;
+  vwap: number;         // volume-weighted average fill price in cents
+  totalVolume: number;  // total quantity filled (micro-tokens)
+  fillCount: number;
+}
+
+export function queryMarketVwaps(): MarketVwap[] {
+  // VWAP = sum(price * quantity) / sum(quantity) for all fills per market
+  const stmt = getDb().prepare(`
+    SELECT
+      market,
+      SUM(CAST(json_extract(data, '$.price') AS REAL) * CAST(json_extract(data, '$.quantity') AS REAL)) /
+        NULLIF(SUM(CAST(json_extract(data, '$.quantity') AS REAL)), 0) as vwap,
+      SUM(CAST(json_extract(data, '$.quantity') AS REAL)) as totalVolume,
+      COUNT(*) as fillCount
+    FROM events
+    WHERE type = 'fill'
+    GROUP BY market
+  `);
+  return stmt.all() as MarketVwap[];
+}
+
 export function signatureExists(signature: string): boolean {
   const row = getDb()
     .prepare("SELECT 1 FROM events WHERE signature = ? LIMIT 1")

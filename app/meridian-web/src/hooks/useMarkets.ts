@@ -168,6 +168,62 @@ export function useMarket(marketKey: PublicKey | string | null) {
  *
  * Polls every 5 seconds for near-real-time order book updates.
  */
+/**
+ * Batch-fetch orderbooks for multiple markets in a single RPC call.
+ * Uses getMultipleAccountsInfo instead of N individual getAccountInfo calls.
+ */
+export function useOrderBooks(marketKeys: (PublicKey | string)[]) {
+  const { connection } = useConnection();
+
+  const addresses = useMemo(() => {
+    return marketKeys.map((k) => {
+      const pk = typeof k === "string" ? new PublicKey(k) : k;
+      const [addr] = findOrderBook(pk);
+      return addr;
+    });
+  }, [marketKeys]);
+
+  return useQuery<Map<string, OrderBookData>>({
+    queryKey: [
+      "orderbooks-batch",
+      addresses.map((a) => a.toBase58()).sort().join(","),
+    ],
+    queryFn: async () => {
+      if (addresses.length === 0) return new Map();
+
+      const accounts = await connection.getMultipleAccountsInfo(
+        addresses,
+        "confirmed",
+      );
+      const result = new Map<string, OrderBookData>();
+
+      for (let i = 0; i < marketKeys.length; i++) {
+        const acct = accounts[i];
+        if (!acct) continue;
+        const key =
+          typeof marketKeys[i] === "string"
+            ? (marketKeys[i] as string)
+            : (marketKeys[i] as PublicKey).toBase58();
+        const raw = deserializeOrderBook(Buffer.from(acct.data));
+        result.set(key, {
+          raw,
+          yesView: buildYesView(raw.orders),
+          noView: buildNoView(raw.orders),
+        });
+      }
+
+      return result;
+    },
+    enabled: addresses.length > 0,
+    refetchInterval: 5_000,
+    staleTime: 2_500,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// useOrderBook — raw + deserialized order book for a single market
+// ---------------------------------------------------------------------------
+
 export function useOrderBook(marketKey: PublicKey | string | null) {
   const { connection } = useConnection();
 

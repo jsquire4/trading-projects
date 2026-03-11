@@ -1,9 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { useIndexedEvents } from "@/hooks/useAnalyticsData";
-import { parseFillEvent } from "@/lib/eventParsers";
+import { useQuery } from "@tanstack/react-query";
 
 export interface CostBasisEntry {
   market: string;         // market pubkey
@@ -12,73 +10,45 @@ export interface CostBasisEntry {
   totalCostUsdc: number;  // total USDC spent
 }
 
+const EVENT_INDEXER_URL = process.env.NEXT_PUBLIC_EVENT_INDEXER_URL ?? "http://localhost:4800";
+
 /**
  * Derives cost basis per market from fill events for the connected wallet.
  * Returns a Map<marketKey, CostBasisEntry>.
  *
- * Only buy-side fills are counted:
- *   - When this wallet is the taker: takerSide 0 (Buy Yes) or 2 (Buy No)
- *   - When this wallet is the maker: takerSide 1 (Sell Yes), meaning the maker
- *     was on the buy side of the opposite leg
- *
- * Prices are stored in cents; quantities are stored in micro-tokens (1e6 = 1 token).
+ * Uses the server-side /api/events/cost-basis endpoint which aggregates
+ * all fill events via SQL — no client-side cap or truncation.
  */
 export function useCostBasis() {
   const { publicKey } = useWallet();
-  // useIndexedEvents caps limit at 1000 internally
-  const { data: events = [], isLoading } = useIndexedEvents({ type: "fill", limit: 1000 });
 
-  const costBasis = useMemo(() => {
-    const map = new Map<string, CostBasisEntry>();
-    if (!publicKey) return map;
-    const walletStr = publicKey.toBase58();
-
-    for (const event of events) {
-      const fill = parseFillEvent(event);
-      if (!fill || !fill.market) continue;
-
-      // Only count fills where this wallet participated
-      const isMaker = fill.maker === walletStr;
-      const isTaker = fill.taker === walletStr;
-      if (!isMaker && !isTaker) continue;
-
-      // Determine if this was a buy for this wallet.
-      // takerSide: 0 = Buy Yes, 1 = Sell Yes, 2 = Buy No
-      // If we're the taker, our side is takerSide directly.
-      // If we're the maker, we're on the opposite side of takerSide.
-      const isBuy = isTaker
-        ? fill.takerSide === 0 || fill.takerSide === 2
-        : fill.takerSide === 1; // taker sold → maker bought
-
-      if (!isBuy) continue; // Only track purchases for cost basis
-
-      const qty = fill.quantity / 1_000_000;   // micro-tokens → tokens
-      const priceUsdc = fill.price / 100;       // cents → USDC per contract
-
-      const existing = map.get(fill.market);
-      if (existing) {
-        const newTotalQty = existing.totalQuantity + qty;
-        const newTotalCost = existing.totalCostUsdc + qty * priceUsdc;
-        map.set(fill.market, {
-          market: fill.market,
-          totalQuantity: newTotalQty,
-          totalCostUsdc: newTotalCost,
-          avgPrice: newTotalQty > 0 ? (newTotalCost / newTotalQty) * 100 : 0, // back to cents
-        });
-      } else {
-        map.set(fill.market, {
-          market: fill.market,
+  const { data: costBasis = new Map(), isLoading } = useQuery<Map<string, CostBasisEntry>>({
+    queryKey: ["cost-basis", publicKey?.toBase58() ?? null],
+    queryFn: async () => {
+      if (!publicKey) return new Map();
+      const wallet = publicKey.toBase58();
+      const res = await fetch(
+        `${EVENT_INDEXER_URL}/api/events/cost-basis?wallet=${encodeURIComponent(wallet)}`,
+      );
+      if (!res.ok) throw new Error(`Cost basis fetch failed: ${res.status}`);
+      const json = await res.json();
+      const map = new Map<string, CostBasisEntry>();
+      for (const row of json.costBasis ?? []) {
+        const qty = row.totalQuantity / 1_000_000;  // micro → tokens
+        const costUsdc = row.totalCostUsdc / (1_000_000 * 100); // micro-tokens × cents → USDC
+        map.set(row.market, {
+          market: row.market,
           totalQuantity: qty,
-          totalCostUsdc: qty * priceUsdc,
-          avgPrice: fill.price,
+          totalCostUsdc: costUsdc,
+          avgPrice: row.avgPrice, // already in cents
         });
       }
-    }
+      return map;
+    },
+    enabled: !!publicKey,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
 
-    return map;
-  }, [events, publicKey]);
-
-  const isComplete = (events?.length ?? 0) < 1000;
-
-  return { costBasis, isLoading, isComplete };
+  return { costBasis, isLoading };
 }

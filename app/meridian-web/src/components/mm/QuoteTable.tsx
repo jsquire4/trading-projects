@@ -1,15 +1,20 @@
 "use client";
 
-import { useMemo, useEffect } from "react";
-import type { ParsedMarket } from "@/hooks/useMarkets";
-import { useOrderBook } from "@/hooks/useMarkets";
+import { useMemo } from "react";
+import type { ParsedMarket, OrderBookData } from "@/hooks/useMarkets";
+import { useOrderBooks } from "@/hooks/useMarkets";
 
 interface QuoteTableProps {
   markets: ParsedMarket[];
 }
 
-function MarketRow({ market }: { market: ParsedMarket }) {
-  const { data: book } = useOrderBook(market.publicKey.toBase58());
+function MarketRow({
+  market,
+  book,
+}: {
+  market: ParsedMarket;
+  book: OrderBookData | null;
+}) {
   const strikeDollars = Number(market.strikePrice) / 1_000_000;
   const totalMinted = Number(market.totalMinted) / 1_000_000;
 
@@ -62,17 +67,9 @@ function MarketRow({ market }: { market: ParsedMarket }) {
   );
 }
 
-// TODO: For >20 markets, virtualize rows or batch orderbook subscriptions.
-// Each MarketRow independently polls useOrderBook -- scales linearly with market count.
 export function QuoteTable({ markets }: QuoteTableProps) {
-  useEffect(() => {
-    if (markets.length > 10) {
-      console.warn(
-        `[QuoteTable] ${markets.length} markets each polling useOrderBook independently. ` +
-        `Consider virtualizing rows or batching subscriptions for >20 markets.`,
-      );
-    }
-  }, [markets.length]);
+  const marketKeys = useMemo(() => markets.map((m) => m.publicKey), [markets]);
+  const { data: books } = useOrderBooks(marketKeys);
 
   if (markets.length === 0) {
     return (
@@ -99,7 +96,11 @@ export function QuoteTable({ markets }: QuoteTableProps) {
         </thead>
         <tbody>
           {markets.map((m) => (
-            <MarketRow key={m.publicKey.toBase58()} market={m} />
+            <MarketRow
+              key={m.publicKey.toBase58()}
+              market={m}
+              book={books?.get(m.publicKey.toBase58()) ?? null}
+            />
           ))}
         </tbody>
       </table>

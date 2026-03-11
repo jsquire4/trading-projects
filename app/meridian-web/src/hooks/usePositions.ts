@@ -20,7 +20,7 @@ export function usePositions() {
   const { data: markets = [] } = useMarkets();
 
   return useQuery<Position[]>({
-    queryKey: ["positions", publicKey?.toBase58() ?? null],
+    queryKey: ["positions", publicKey?.toBase58() ?? null, markets.map((m) => m.publicKey.toBase58()).join(",")],
     queryFn: async () => {
       if (!publicKey || !connected || markets.length === 0) return [];
 

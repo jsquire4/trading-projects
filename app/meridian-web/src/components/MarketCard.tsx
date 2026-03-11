@@ -1,6 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
+import { TradeModal } from "@/components/TradeModal";
 
 export interface MarketData {
   ticker: string;
@@ -59,20 +61,21 @@ export function MarketCard({ market }: MarketCardProps) {
     marketCloseUnix,
   } = market;
 
+  const [tradeModalOpen, setTradeModalOpen] = useState(false);
+
   // Midpoint price for Yes, or best bid/ask
   const yesPrice = bestBid !== null && bestAsk !== null
     ? Math.round((bestBid + bestAsk) / 2)
     : bestBid ?? bestAsk ?? null;
 
+  // Complementary pricing: Yes + No = 100c ($1.00). This is a fundamental
+  // property of binary outcomes — one of Yes/No always wins, paying $1.
   const noPrice = yesPrice !== null ? 100 - yesPrice : null;
   const impliedProb = yesPrice !== null ? yesPrice : null;
   const strikeDollars = (strikePrice / 1_000_000).toFixed(2);
 
-  return (
-    <Link
-      href={`/trade/${ticker}`}
-      className="block rounded-lg border border-white/10 bg-white/5 p-4 transition-colors hover:border-white/20 hover:bg-white/[0.07]"
-    >
+  const cardContent = (
+    <>
       <div className="flex items-start justify-between mb-3">
         <div>
           <h3 className="text-lg font-bold text-white">{ticker}</h3>
@@ -116,6 +119,37 @@ export function MarketCard({ market }: MarketCardProps) {
           )}
         </div>
       </div>
-    </Link>
+    </>
+  );
+
+  // Settled markets go directly to trade page; active markets open TradeModal
+  if (isSettled) {
+    return (
+      <Link
+        href={`/trade/${ticker}`}
+        className="block rounded-lg border border-white/10 bg-white/5 p-4 transition-colors hover:border-white/20 hover:bg-white/[0.07]"
+      >
+        {cardContent}
+      </Link>
+    );
+  }
+
+  return (
+    <>
+      <div
+        onClick={() => setTradeModalOpen(true)}
+        className="block rounded-lg border border-white/10 bg-white/5 p-4 transition-colors hover:border-white/20 hover:bg-white/[0.07] cursor-pointer"
+      >
+        {cardContent}
+      </div>
+      <TradeModal
+        open={tradeModalOpen}
+        onClose={() => setTradeModalOpen(false)}
+        ticker={ticker}
+        strike={strikePrice / 1_000_000}
+        currentPrice={yesPrice !== null ? yesPrice / 100 : undefined}
+        price={yesPrice ?? undefined}
+      />
+    </>
   );
 }

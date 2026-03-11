@@ -236,9 +236,7 @@ export default function TradePage() {
     }));
     const allTickers = grouped.map((g) => g.ticker);
 
-    const counts = new Map(perTicker.map((p) => [p.ticker, p.count]));
-
-    return { grouped, totalActive, perTicker, allTickers, counts: counts };
+    return { grouped, totalActive, perTicker, allTickers };
   }, [markets]);
 
   // Filtered groups

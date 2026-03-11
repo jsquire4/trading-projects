@@ -49,7 +49,7 @@ Simple price feed oracle for devnet. Stores price feeds that can be updated by a
 
 ### Core State Accounts
 
-#### GlobalConfig (192 bytes)
+#### GlobalConfig (184 bytes)
 **PDA**: `[b"config"]`
 
 Stores global protocol configuration:
@@ -61,7 +61,7 @@ Stores global protocol configuration:
 - Global pause flag
 - Oracle type (Mock vs Pyth)
 
-#### StrikeMarket (408 bytes)
+#### StrikeMarket (400 bytes)
 **PDA**: `[b"market", ticker_bytes_8, strike_price_le_u64, expiry_day_le_u32]`
 
 Per-market state account containing:
@@ -86,7 +86,7 @@ Massive ZeroCopy account storing the entire order book:
 - `PriceLevel`: 1,288 bytes (16 slots + count + padding)
 - `OrderBook`: 127,560 bytes total
 
-### Instructions (15 total)
+### Instructions (17 total)
 
 #### Initialization Phase
 1. **`initialize_config`**: Creates GlobalConfig with tickers and oracle settings
@@ -96,7 +96,12 @@ Massive ZeroCopy account storing the entire order book:
 
 #### Trading Phase
 5. **`mint_pair`**: Mints 1 Yes + 1 No token for $1 USDC (always available)
+   - **Position constraint**: Enforces user has no existing Yes or No tokens (on-chain check)
 6. **`place_order`**: Core trading instruction — matches and places orders
+   - **Position constraints**: 
+     - USDC bids require no No token position
+     - No bids require no Yes token position
+     - Enforced on-chain via `reload()` for composable transaction safety
 7. **`cancel_order`**: Cancels a resting order by (price, order_id)
 
 #### Admin Phase
@@ -139,9 +144,11 @@ OrderBook (127,560 bytes)
 ### Order Placement Flow (`place_order.rs`)
 
 1. **Validation**: Checks side (0/1/2), price (1-99), quantity (≥1 token), order type (market/limit)
-2. **Position Constraints**: 
-   - USDC bids require no No token position
-   - No bids require no Yes token position
+2. **Position Constraints** (On-chain enforcement):
+   - **USDC bids** (Buy Yes): Requires `user_no_ata.amount == 0` → `ConflictingPosition` error
+   - **No bids** (Sell No): Requires `user_yes_ata.amount == 0` → `ConflictingPosition` error
+   - Uses `reload()` to get fresh balances for composable transaction safety
+   - Prevents users from holding conflicting positions (e.g., buying Yes while holding No)
 3. **Escrow Assets**:
    - USDC bid: escrows `ceil(quantity * price / 100)` USDC
    - Yes ask: escrows Yes tokens
@@ -366,7 +373,7 @@ Common utilities:
 - **`/history`**: Trade history (from event indexer API)
 - **`/market-maker`**: AMM bot dashboard
 
-### Key Hooks
+### Key Hooks (`hooks/`)
 
 - **`useMarkets`**: Fetches all StrikeMarket accounts (10s polling)
 - **`useMarket`**: Single market by pubkey
@@ -374,14 +381,93 @@ Common utilities:
 - **`useAnchorProgram`**: Typed Anchor program instance
 - **`usePositions`**: User's Yes/No token balances
 - **`useMyOrders`**: User's resting orders from order book
+- **`useCancelOrder`**: Cancel order hook
+- **`useCostBasis`**: Cost basis tracking
+- **`useKeyboardShortcuts`**: Keyboard shortcuts
+- **`useMarketSummaries`**: Market summary data
+- **`useNetwork`**: Network detection
+- **`usePortfolioSnapshot`**: Portfolio snapshot
+- **`useTransaction`**: Transaction handling
+- **`useWalletState`**: Wallet state management
+- **`useWatchlist`**: Watchlist management
+- **`useAnalyticsData`**: Analytics data fetching
 
 ### Key Components
 
+#### Trading Components
 - **`OrderForm`**: Place orders (Buy Yes, Sell Yes, Buy/Sell No)
 - **`OrderBook`**: Visual order book display
+- **`DepthChart`**: Order book depth visualization
 - **`MarketCard`**: Market summary card
+- **`MarketInfo`**: Detailed market information
 - **`PayoffDisplay`**: Payoff diagram
 - **`TradeConfirmationModal`**: Transaction confirmation
+- **`TradeModal`**: Trade interface modal
+- **`FillFeed`**: Live fill feed display
+- **`LiveFillTicker`**: Real-time fill ticker
+
+#### Portfolio Components (`components/portfolio/`)
+- **`PositionsTab`**: User's Yes/No token positions
+- **`OpenOrdersTab`**: Resting orders
+- **`TradeHistoryTab`**: Historical trades
+- **`PnlTab`**: Profit & loss calculations
+- **`MyPositions`**: Position summary
+- **`MyOrders`**: Order management
+
+#### Analytics Components (`components/analytics/`)
+- **`OptionsComparison`**: Compare Meridian vs Tradier options
+- **`GreeksDisplay`**: Binary option Greeks (delta, gamma, theta, vega)
+- **`HistoricalOverlay`**: Historical return distribution overlay
+- **`SettlementAnalytics`**: Settlement accuracy and calibration
+- **`OptionsChainTable`**: Options chain comparison
+- **`PriceHistory`**: Price history charts
+
+#### Market Maker Components (`components/mm/`)
+- **`QuoteTable`**: AMM bot quote display
+- **`AggregateStats`**: Aggregate market maker statistics
+- **`MintAndQuote`**: Mint pairs and place quotes
+
+#### Admin Components (`components/admin/`)
+- **`CreateMarketForm`**: Admin market creation
+- **`MarketActions`**: Market management actions
+
+#### Utility Components
+- **`RedeemPanel`**: Token redemption interface
+- **`SettlementStatus`**: Settlement status display
+- **`SettleButton`**: Permissionless settlement trigger
+- **`OraclePrice`**: Oracle price display
+- **`WalletButton`**: Wallet connection button
+- **`WatchlistStrip`**: Watchlist management
+- **`ShareButtons`**: Social sharing
+- **`InsightTooltip`**: Trading insights tooltips
+- **`TransactionReceipt`**: Transaction receipt display
+- **`TxToast`**: Transaction toast notifications
+- **`FaucetButton`**: Devnet USDC faucet
+- **`NetworkBadge`**: Network indicator
+- **`NavBalance`**: Navigation balance display
+- **`NavPnl`**: Navigation PnL display
+- **`EventIndexerBanner`**: Event indexer status banner
+
+### Frontend Libraries (`lib/`)
+
+- **`pricer.ts`**: Black-Scholes pricing (ported from AMM bot)
+- **`greeks.ts`**: Binary option Greeks calculations
+- **`volatility.ts`**: Historical volatility calculations
+- **`insights.ts`**: Trading insights and recommendations
+- **`orderbook.ts`**: Order book parsing and utilities
+- **`portfolioDb.ts`**: Portfolio database (IndexedDB) for local storage
+- **`csv.ts`**: CSV export functionality
+- **`share.ts`**: Social sharing utilities
+- **`tradier-proxy.ts`**: Tradier API proxy client
+- **`distribution-math.ts`**: Return distribution calculations
+- **`eventParsers.ts`**: Event parsing utilities
+- **`odds.ts`**: Odds calculation utilities
+- **`social-proof.ts`**: Social proof features
+- **`chartConfig.ts`**: Chart configuration
+- **`strikes.ts`**: Strike calculation utilities
+- **`tickers.ts`**: Ticker utilities
+- **`pda.ts`**: PDA derivation helpers
+- **`network.ts`**: Network utilities
 
 ### API Routes (`app/api/`)
 
@@ -489,7 +575,39 @@ Component renders
 
 ---
 
-## 7. Key Data Structures
+## 7. Position Constraints (On-Chain Enforcement)
+
+### Implementation
+
+Position constraints are **enforced on-chain** to prevent users from holding conflicting positions:
+
+#### `mint_pair` Constraint
+- Checks both Yes and No token balances must be zero
+- Prevents minting pairs if user already holds tokens
+- Error: `MeridianError::ConflictingPosition` (6059)
+
+#### `place_order` Constraints
+- **USDC Bid (side=0)**: User must have no No tokens
+- **No Bid (side=2)**: User must have no Yes tokens
+- Uses `reload()` to ensure fresh balances in composable transactions
+- Error: `MeridianError::ConflictingPosition` (6059)
+
+### Rationale
+
+Prevents users from:
+- Holding both Yes and No positions simultaneously (arbitrage risk)
+- Creating synthetic positions that could complicate settlement
+- Exploiting pricing inefficiencies through conflicting positions
+
+### Technical Details
+
+- Position checks happen **after** ATA initialization (if needed)
+- Uses `reload()` pattern for composable transaction safety
+- Checks are performed on-chain, not just frontend validation
+
+---
+
+## 8. Key Data Structures
 
 ### PDA Derivation Seeds
 
@@ -529,7 +647,7 @@ Component renders
 
 ---
 
-## 8. Key Design Decisions
+## 9. Key Design Decisions
 
 ### ZeroCopy Order Book
 - **Why**: Avoids deserialization overhead on every access
@@ -557,7 +675,7 @@ Component renders
 
 ---
 
-## 9. Service Dependencies
+## 10. Service Dependencies
 
 ```
 automation

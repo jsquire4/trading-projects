@@ -11,6 +11,11 @@ vi.mock("next/link", () => ({
   ),
 }));
 
+// Mock TradeModal (imported by MarketCard for H3 wiring)
+vi.mock("@/components/TradeModal", () => ({
+  TradeModal: () => null,
+}));
+
 const baseMarket: MarketData = {
   ticker: "AAPL",
   strikePrice: 180_000_000,
@@ -91,14 +96,14 @@ describe("MarketCard", () => {
   it("shows active order count", () => {
     render(<MarketCard market={baseMarket} />);
 
-    expect(screen.getByText("12 active orders")).toBeInTheDocument();
+    expect(screen.getByText("12 orders")).toBeInTheDocument();
   });
 
   it("shows singular 'order' for count of 1", () => {
     const market: MarketData = { ...baseMarket, activeOrders: 1 };
     render(<MarketCard market={market} />);
 
-    expect(screen.getByText("1 active order")).toBeInTheDocument();
+    expect(screen.getByText("1 order")).toBeInTheDocument();
   });
 
   it('shows "--" when no bid/ask available', () => {
@@ -114,10 +119,21 @@ describe("MarketCard", () => {
     expect(dashes.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("links to the correct trade page", () => {
-    render(<MarketCard market={baseMarket} />);
+  it("links to the correct trade page for settled markets", () => {
+    const settled: MarketData = {
+      ...baseMarket,
+      isSettled: true,
+      outcome: 1,
+    };
+    render(<MarketCard market={settled} />);
 
     const link = screen.getByRole("link");
     expect(link).toHaveAttribute("href", "/trade/AAPL");
+  });
+
+  it("renders as clickable card for active (unsettled) markets", () => {
+    render(<MarketCard market={baseMarket} />);
+    // Active markets use TradeModal instead of Link
+    expect(screen.queryByRole("link")).toBeNull();
   });
 });

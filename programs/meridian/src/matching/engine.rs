@@ -213,7 +213,8 @@ fn match_against_bids(
         // For No-backed bids: fill when (100 - no_bid_price) >= min_price
         //   i.e., no_bid_price <= 100 - min_price
 
-        // Check USDC bids first at this level
+        // Priority: At each price level, USDC bids are matched before No-backed bids.
+        // This is deterministic and by design — taker's Yes asks fill standard swaps first.
         if bid_price >= min_price {
             match_at_level_for_side(
                 book, taker_side, SIDE_USDC_BID, bid_price, level_idx, result, max_fills, false,

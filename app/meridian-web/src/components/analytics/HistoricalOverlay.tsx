@@ -45,9 +45,6 @@ import {
 interface HistoricalOverlayProps {
   ticker: string;
   currentPrice?: number;
-  // Keep old props in signature for backwards compat but they're unused now
-  markets?: unknown[];
-  yesPrices?: unknown;
 }
 
 type Period = "daily" | "weekly";

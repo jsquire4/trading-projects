@@ -101,7 +101,9 @@ pub fn handle_place_order<'info>(
     let clock = Clock::get()?;
     validate_order(&ctx, side, price, quantity, order_type, &clock)?;
 
-    // Position constraints with reload() to get fresh balances in composable txs
+    // Position constraints with reload() to get fresh balances in composable txs.
+    // Note: No constraint for SIDE_YES_ASK (Sell Yes). Selling Yes must work while
+    // holding No tokens — this is part of the atomic "Buy No" flow (mint pair → sell Yes).
     if side == SIDE_USDC_BID {
         ctx.accounts.user_no_ata.reload()?;
         require!(

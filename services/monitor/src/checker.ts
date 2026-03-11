@@ -112,7 +112,7 @@ export async function runChecks(): Promise<void> {
 
         const age = now - timestamp;
         if (age > ORACLE_STALE_THRESHOLD_S) {
-          log.warn(`Oracle stale for ${ticker}: last update ${age}s ago (threshold ${ORACLE_STALE_THRESHOLD_S}s)`, {
+          log.error(`Oracle stale for ${ticker}: last update ${age}s ago (threshold ${ORACLE_STALE_THRESHOLD_S}s)`, {
             ticker,
             lastUpdate: timestamp,
             ageSeconds: age,

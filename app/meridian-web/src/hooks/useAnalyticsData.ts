@@ -34,7 +34,7 @@ export interface IndexedEvent {
  */
 export function useTradierQuotes(symbols: string[]) {
   return useQuery<Quote[]>({
-    queryKey: ["tradier-quotes", symbols.sort().join(",")],
+    queryKey: ["tradier-quotes", [...symbols].sort().join(",")],
     queryFn: async () => {
       if (symbols.length === 0) return [];
       const res = await fetch(`/api/tradier/quotes?symbols=${encodeURIComponent(symbols.join(","))}`);

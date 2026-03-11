@@ -230,27 +230,31 @@ export function buildYesView(orders: ActiveOrder[]): OrderBookView {
 /**
  * Build the No-token perspective of the order book.
  *
- * - No-backed bids (side=2) at price X appear as No depth at price X
- *   (already No-native, no inversion needed)
- * - Yes asks (side=1) at price P appear as No asks at price (100-P)
- * - USDC bids (side=0) at price P appear as No bids at price (100-P)
+ * - Yes asks (side=1) at price P appear as No bids at price (100-P)
+ *   A Yes seller at P is effectively a No buyer at (100-P).
+ * - No-backed bids (side=2) at price P appear as No asks at price P
+ *   These are No holders selling at their stated price.
+ * - USDC bids (side=0) at price P appear as No asks at price (100-P)
+ *   A Yes buyer at P is effectively a No seller at (100-P).
  */
 export function buildNoView(orders: ActiveOrder[]): OrderBookView {
   const invert = (p: number) => 100 - p;
 
-  // No-backed bids are native No depth (bids in the No view)
-  const noNativeBids = aggregateDepth(orders, Side.NoBackedBid);
+  // Yes asks at price P → No bids at (100-P)
+  // A Yes seller is effectively a No buyer at the complement price
+  const noBids = aggregateDepth(orders, Side.YesAsk, invert);
 
-  // USDC bids at price P → No bids at (100-P)
-  const invertedUsdcBids = aggregateDepth(orders, Side.UsdcBid, invert);
+  // No-backed bids are native No asks (No holders selling)
+  const noNativeAsks = aggregateDepth(orders, Side.NoBackedBid);
 
-  // Merge the two bid sources
-  const allBids = mergeDepthLevels([...noNativeBids, ...invertedUsdcBids]);
+  // USDC bids at price P → No asks at (100-P)
+  // A Yes buyer is effectively a No seller at the complement price
+  const invertedUsdcAsks = aggregateDepth(orders, Side.UsdcBid, invert);
 
-  // Yes asks at price P → No asks at (100-P)
-  const noAsks = aggregateDepth(orders, Side.YesAsk, invert);
+  // Merge the two ask sources
+  const allAsks = mergeDepthLevels([...noNativeAsks, ...invertedUsdcAsks]);
 
-  return buildView(allBids, noAsks);
+  return buildView(noBids, allAsks);
 }
 
 /**

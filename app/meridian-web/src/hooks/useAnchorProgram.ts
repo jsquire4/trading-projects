@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { AnchorProvider, Program } from "@coral-xyz/anchor";
+import { PublicKey } from "@solana/web3.js";
 import { useConnection, useAnchorWallet } from "@solana/wallet-adapter-react";
 import idl from "@/idl/meridian.json";
 import type { Meridian } from "@/idl/meridian";
@@ -34,7 +35,7 @@ export function useAnchorProgram(): {
           connection,
           // Dummy wallet for read-only — signTransaction will throw if called
           {
-            publicKey: null as never,
+            publicKey: PublicKey.default,
             signTransaction: () => {
               throw new Error("Wallet not connected");
             },

@@ -31,23 +31,33 @@ interface ChartPoint {
 
 export function DepthChart({ bids, asks }: DepthChartProps) {
   const chartData = useMemo<ChartPoint[]>(() => {
-    // Bids: worst (lowest price) to best (highest price)
-    const bidPoints: ChartPoint[] = [...bids]
-      .sort((a, b) => a.price - b.price)
-      .map((l) => ({
-        price: l.price,
-        bidCum: l.cumulative / 1_000_000,
-        askCum: null,
-      }));
+    // Bids: sort low-to-high by price, then accumulate right-to-left
+    // (highest price has its own qty, next lower has its qty + above, etc.)
+    // This way each point shows "total quantity available at this price or better"
+    const sortedBids = [...bids].sort((a, b) => a.price - b.price);
+    let bidRunning = 0;
+    const bidCumulatives: number[] = new Array(sortedBids.length);
+    for (let i = sortedBids.length - 1; i >= 0; i--) {
+      bidRunning += sortedBids[i].quantity;
+      bidCumulatives[i] = bidRunning;
+    }
+    const bidPoints: ChartPoint[] = sortedBids.map((l, i) => ({
+      price: l.price,
+      bidCum: bidCumulatives[i] / 1_000_000,
+      askCum: null,
+    }));
 
-    // Asks: best (lowest price) to worst (highest price)
-    const askPoints: ChartPoint[] = [...asks]
-      .sort((a, b) => a.price - b.price)
-      .map((l) => ({
+    // Asks: sort low-to-high, accumulate left-to-right
+    const sortedAsks = [...asks].sort((a, b) => a.price - b.price);
+    let askRunning = 0;
+    const askPoints: ChartPoint[] = sortedAsks.map((l) => {
+      askRunning += l.quantity;
+      return {
         price: l.price,
         bidCum: null,
-        askCum: l.cumulative / 1_000_000,
-      }));
+        askCum: askRunning / 1_000_000,
+      };
+    });
 
     if (bidPoints.length === 0 && askPoints.length === 0) return [];
 

@@ -2,6 +2,12 @@
  * settlement.test.ts — Comprehensive bankrun test suite for the Phase 3
  * settlement lifecycle: settle_market, admin_settle, admin_override,
  * redeem (pair burn + winner), and crank_cancel.
+ *
+ * NOTE: Sequential coupling — Tests share a single bankrun context (BankrunContext)
+ * and its clock advances monotonically across suites. Tests within each describe
+ * block depend on state left by prior tests (minted tokens, settled markets, etc.).
+ * This is by design to avoid re-initializing the full on-chain state for each test,
+ * but means tests cannot be run in isolation or reordered.
  */
 
 import { expect } from "chai";
@@ -1661,13 +1667,16 @@ describe("Settlement Lifecycle", () => {
         [ctx.admin],
       );
 
+      // Verify balances after pair-burn: user should have 0 of both token types
+      const yesBal = await getTokenBalance(ctx, userYesAta);
+      const noBal = await getTokenBalance(ctx, userNoAta);
+      expect(yesBal, "Yes balance should be 0 after pair burn").to.equal(0);
+      expect(noBal, "No balance should be 0 after pair burn").to.equal(0);
+
       // Now user has 0 Yes and 0 No (all burned via pair burn).
-      // There are no No tokens left to try to redeem. Instead, let's test
-      // the actual case: try redeeming No tokens on a Yes-wins market.
-      // We need to re-mint to get tokens back, but the market is settled so
-      // mint_pair is blocked. The key insight: outcome=Yes means winner_redeem
-      // burns Yes. If user has no Yes tokens, InsufficientBalance is returned.
-      // User already pair-burned everything, so Yes balance = 0.
+      // Outcome=Yes means winner_redeem burns Yes tokens. User has 0 Yes,
+      // so InsufficientBalance is expected. This proves that a user without
+      // winning-side tokens cannot redeem regardless of losing-side holdings.
       const redeemIx = buildRedeemIx({
         user: ctx.admin.publicKey,
         config,

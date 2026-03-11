@@ -192,10 +192,11 @@ export interface CostBasisRow {
 export function queryCostBasis(wallet: string): CostBasisRow[] {
   // Fill events have JSON data with: maker, taker, price, quantity, takerSide, makerSide
   // Buy-side fills:
+  // Acquisition fills (cost basis = tokens obtained):
   //   - Taker buys Yes: taker = wallet AND takerSide = 0 (USDC_BID)
   //   - Taker buys No:  taker = wallet AND takerSide = 2 (NO_BID)
-  //   - Maker bought when taker sold: maker = wallet AND takerSide = 1 (YES_ASK)
-  // Discriminate by side: takerSide 0 → 'yes', takerSide 2 → 'no', takerSide 1 (maker fill) → 'yes'
+  //   - Maker bought Yes when taker sold: maker = wallet AND takerSide = 1 (YES_ASK) → maker is USDC bid side
+  // Note: maker=wallet AND takerSide=2 is EXCLUDED — wallet is the resting YES_ASK (selling, not buying)
   const stmt = getDb().prepare(`
     SELECT
       market,
@@ -203,6 +204,7 @@ export function queryCostBasis(wallet: string): CostBasisRow[] {
         WHEN json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 0 THEN 'yes'
         WHEN json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 2 THEN 'no'
         WHEN json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 1 THEN 'yes'
+        /* takerSide=2 maker=wallet: wallet is the resting YES_ASK (selling Yes, not buying) — excluded from cost basis */
       END as side,
       SUM(CAST(json_extract(data, '$.quantity') AS REAL)) as totalQuantity,
       SUM(CAST(json_extract(data, '$.quantity') AS REAL) * CAST(json_extract(data, '$.price') AS REAL)) as totalCost,

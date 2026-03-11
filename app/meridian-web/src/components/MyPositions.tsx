@@ -7,6 +7,7 @@ import { usePositions, type Position } from "@/hooks/usePositions";
 import { useOrderBook } from "@/hooks/useMarkets";
 import { useCostBasis } from "@/hooks/useCostBasis";
 import { InsightTooltip } from "@/components/InsightTooltip";
+import { ShareButtons } from "@/components/ShareButtons";
 import { interpretPosition } from "@/lib/insights";
 
 interface MyPositionsProps {
@@ -25,17 +26,19 @@ function PositionRow({ position, totalCost }: { position: Position; totalCost: n
     return (book.yesView.bestBid + book.yesView.bestAsk) / 2;
   }, [book]);
 
-  const yesValue = midPrice ? (yesBal * midPrice) / 100 : null;
-  const noValue = midPrice ? (noBal * (100 - midPrice)) / 100 : null;
-  const totalValue = (yesValue ?? 0) + (noValue ?? 0);
+  const yesValue = midPrice !== null ? (yesBal * midPrice) / 100 : null;
+  const noValue = midPrice !== null ? (noBal * (100 - midPrice)) / 100 : null;
+  const totalValue = yesValue !== null || noValue !== null
+    ? (yesValue ?? 0) + (noValue ?? 0)
+    : null;
 
   const strikeDollars = Number(position.market.strikePrice) / 1_000_000;
 
   const closeUnix = Number(position.market.marketCloseUnix);
   const now = Math.floor(Date.now() / 1000);
   const minutesLeft = Math.max(0, (closeUnix - now) / 60);
-  const side = yesBal >= noBal ? "yes" : "no";
-  const pnl = totalCost != null ? totalValue - totalCost : null;
+  const side = yesBal > noBal ? "yes" : noBal > yesBal ? "no" : "balanced";
+  const pnl = totalCost != null && totalValue !== null ? totalValue - totalCost : null;
   const positionInsight = pnl != null
     ? interpretPosition(side, pnl, minutesLeft)
     : undefined;
@@ -59,9 +62,18 @@ function PositionRow({ position, totalCost }: { position: Position; totalCost: n
         {noBal > 0 && (
           <span className="text-red-400 tabular-nums">{noBal.toFixed(0)} No</span>
         )}
-        {totalValue > 0 && (
-          <span className="text-white/50 tabular-nums">${totalValue.toFixed(2)}</span>
+        {yesBal > 0 && noBal > 0 && yesBal === noBal && (
+          <span className="text-blue-400/60 text-[10px]">Balanced</span>
         )}
+        <span className="text-white/50 tabular-nums">
+          {totalValue !== null ? `$${totalValue.toFixed(2)}` : "--"}
+        </span>
+        <ShareButtons
+          ticker={position.market.ticker}
+          side={side}
+          payout={totalValue ?? undefined}
+          marketUrl={`/trade/${position.market.ticker}?market=${position.market.publicKey.toBase58()}`}
+        />
         <Link
           href={`/trade/${position.market.ticker}?market=${position.market.publicKey.toBase58()}`}
           className="text-accent hover:text-accent/80 transition-colors text-[11px] font-medium"

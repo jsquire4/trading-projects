@@ -105,18 +105,8 @@ describe("Config Initialization", () => {
     expect(tickerCount).to.equal(7);
   });
 
-  it("stores thresholds correctly", async () => {
-    const data = await readConfigData();
-    const disc = 8;
-
-    const stalenessThreshold = data.readBigUInt64LE(disc + 96);
-    const settlementStaleness = data.readBigUInt64LE(disc + 104);
-    const confidenceBps = data.readBigUInt64LE(disc + 112);
-
-    expect(Number(stalenessThreshold)).to.equal(60);
-    expect(Number(settlementStaleness)).to.equal(120);
-    expect(Number(confidenceBps)).to.equal(50);
-  });
+  // Thresholds (staleness, settlement_staleness, confidence_bps) are already
+  // verified in "initializes with correct admin, usdc_mint, oracle_program" above.
 
   it("creates treasury PDA", async () => {
     const acct = await ctx.context.banksClient.getAccount(treasuryPda);

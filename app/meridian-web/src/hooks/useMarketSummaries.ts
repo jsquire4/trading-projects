@@ -34,44 +34,44 @@ export function useMarketSummaries() {
 
       const summaries: MarketSummary[] = [];
 
-      // Fetch order books in parallel (max 10 at a time to avoid rate limits)
-      const batchSize = 10;
+      // Batch fetch order books using getMultipleAccountsInfo (single RPC call per batch)
+      const batchSize = 100; // getMultipleAccountsInfo supports up to 100
       for (let i = 0; i < activeMarkets.length; i += batchSize) {
         const batch = activeMarkets.slice(i, i + batchSize);
-        const results = await Promise.allSettled(
-          batch.map(async (market) => {
-            const [orderBookAddr] = findOrderBook(market.publicKey);
-            const accountInfo = await connection.getAccountInfo(orderBookAddr, "confirmed");
+        const orderBookAddrs = batch.map((m) => findOrderBook(m.publicKey)[0]);
 
-            let bestBid: number | null = null;
-            let bestAsk: number | null = null;
-            let spread: number | null = null;
+        const accountInfos = await connection.getMultipleAccountsInfo(orderBookAddrs, "confirmed");
 
-            if (accountInfo) {
+        for (let j = 0; j < batch.length; j++) {
+          const market = batch[j];
+          const accountInfo = accountInfos[j];
+
+          let bestBid: number | null = null;
+          let bestAsk: number | null = null;
+          let spread: number | null = null;
+
+          if (accountInfo) {
+            try {
               const raw = deserializeOrderBook(Buffer.from(accountInfo.data));
               const yesView = buildYesView(raw.orders);
               bestBid = yesView.bestBid;
               bestAsk = yesView.bestAsk;
               spread = yesView.spread;
+            } catch {
+              // Malformed order book data — leave bid/ask/spread as null
             }
-
-            return {
-              marketKey: market.publicKey.toBase58(),
-              ticker: market.ticker,
-              strike: Number(market.strikePrice) / 1_000_000,
-              bestBid,
-              bestAsk,
-              spread,
-              totalMinted: Number(market.totalMinted) / 1_000_000,
-              openInterest: Math.max(0, (Number(market.totalMinted) - Number(market.totalRedeemed)) / 1_000_000),
-            };
-          }),
-        );
-
-        for (const result of results) {
-          if (result.status === "fulfilled") {
-            summaries.push(result.value);
           }
+
+          summaries.push({
+            marketKey: market.publicKey.toBase58(),
+            ticker: market.ticker,
+            strike: Number(market.strikePrice) / 1_000_000,
+            bestBid,
+            bestAsk,
+            spread,
+            totalMinted: Number(market.totalMinted) / 1_000_000,
+            openInterest: Math.max(0, (Number(market.totalMinted) - Number(market.totalRedeemed)) / 1_000_000),
+          });
         }
       }
 

@@ -6,8 +6,15 @@ import bs58 from "bs58";
 
 // Use server-only env var for RPC (fallback to public var for backwards compat)
 const RPC_URL = process.env.RPC_URL ?? process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com";
-const USDC_MINT = new PublicKey(process.env.NEXT_PUBLIC_USDC_MINT ?? PublicKey.default.toBase58());
+if (!process.env.NEXT_PUBLIC_USDC_MINT) {
+  throw new Error("NEXT_PUBLIC_USDC_MINT environment variable is required");
+}
+const USDC_MINT = new PublicKey(process.env.NEXT_PUBLIC_USDC_MINT);
 const FAUCET_AMOUNT = 1_000 * 1_000_000; // 1000 USDC (6 decimals)
+
+// In-memory rate limit: wallet address -> last served timestamp
+const rateLimitMap = new Map<string, number>();
+const RATE_LIMIT_MS = 60_000; // 60 seconds
 
 function parseKeypair(raw: string | undefined): Keypair | null {
   if (!raw) return null;
@@ -61,6 +68,18 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+
+  // Rate limit: one request per wallet per 60 seconds
+  const walletStr = wallet.toBase58();
+  const lastServed = rateLimitMap.get(walletStr);
+  if (lastServed && Date.now() - lastServed < RATE_LIMIT_MS) {
+    const retryAfter = Math.ceil((RATE_LIMIT_MS - (Date.now() - lastServed)) / 1000);
+    return NextResponse.json(
+      { error: `Rate limited. Try again in ${retryAfter}s.` },
+      { status: 429 },
+    );
+  }
+  rateLimitMap.set(walletStr, Date.now());
 
   try {
     const connection = new Connection(RPC_URL, "confirmed");

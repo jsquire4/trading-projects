@@ -40,7 +40,7 @@ export function stddev(arr: number[], mu: number): number {
   return Math.sqrt(variance);
 }
 
-/** Normal PDF (not normalized to integrate to 1 -- scaled to match histogram). */
+/** Standard normal PDF (Gaussian) with mean mu and standard deviation sigma. */
 export function normalPdf(x: number, mu: number, sigma: number): number {
   if (sigma <= 0) return 0;
   return (

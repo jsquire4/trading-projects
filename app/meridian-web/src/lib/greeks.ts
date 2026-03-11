@@ -9,13 +9,14 @@
  *   r     continuous risk-free rate (default 0.05)
  */
 
+// normalCdf: use the ±10 clamp version from pricer.ts (more accurate at tails)
+import { normalCdf } from './pricer';
+export { normalCdf };
+
 /** Standard normal probability density function. */
 export function normalPdf(x: number): number {
   return Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
 }
-
-// normalCdf: use the ±10 clamp version from pricer.ts (more accurate at tails)
-export { normalCdf } from './pricer';
 
 /** Black-Scholes d2: d2 = [ln(S/K) + (r - σ²/2) · T] / (σ · √T) */
 export function d2(
@@ -69,4 +70,63 @@ export function binaryGamma(
   const d2Val = d2(S, K, sigma, T, r);
   const pdf = normalPdf(d2Val);
   return Math.exp(-r * T) * (-pdf / (S * S * sigma * sqrtT)) * (1 + d2Val / (sigma * sqrtT));
+}
+
+/**
+ * Binary (cash-or-nothing) call theta.
+ *
+ * Theta = dC/dT where C = e^(-rT) N(d2)
+ *
+ * Theta = -r e^(-rT) N(d2) + e^(-rT) n(d2) dd2/dT
+ *
+ * where dd2/dT = -d2/(2T) + (r - sigma^2/2) / (sigma sqrt(T))
+ *             = [-ln(S/K)/(2T) - (r - sigma^2/2)/(2)] / (sigma sqrt(T))
+ *             = -(d2/(2T)) + (r - sigma^2/2)/(sigma sqrt(T))
+ *
+ * Simplified: dd2/dT = -d2/(2T) + (r - 0.5 sigma^2)/(sigma sqrt(T))
+ */
+export function binaryTheta(
+  S: number,
+  K: number,
+  sigma: number,
+  T: number,
+  r: number = 0.05,
+): number {
+  if (T <= 0 || sigma <= 0 || S <= 0) return 0;
+  const sqrtT = Math.sqrt(T);
+  const d2Val = d2(S, K, sigma, T, r);
+  const pdf = normalPdf(d2Val);
+  const cdf = normalCdf(d2Val);
+  const disc = Math.exp(-r * T);
+  const dd2dT = -d2Val / (2 * T) + (r - 0.5 * sigma * sigma) / (sigma * sqrtT);
+  return -r * disc * cdf + disc * pdf * dd2dT;
+}
+
+/**
+ * Binary (cash-or-nothing) call vega.
+ *
+ * Vega = dC/dsigma where C = e^(-rT) N(d2)
+ *
+ * Vega = e^(-rT) n(d2) dd2/dsigma
+ *
+ * where dd2/dsigma = -d2/sigma - sqrt(T)
+ *                  = -(d2 + sigma sqrt(T)) / sigma
+ *                  = -d1/sigma   (since d1 = d2 + sigma sqrt(T))
+ *
+ * Simplified: Vega = -e^(-rT) n(d2) d2/sigma - e^(-rT) n(d2) sqrt(T)
+ */
+export function binaryVega(
+  S: number,
+  K: number,
+  sigma: number,
+  T: number,
+  r: number = 0.05,
+): number {
+  if (T <= 0 || sigma <= 0 || S <= 0) return 0;
+  const sqrtT = Math.sqrt(T);
+  const d2Val = d2(S, K, sigma, T, r);
+  const pdf = normalPdf(d2Val);
+  const disc = Math.exp(-r * T);
+  const dd2dSigma = -d2Val / sigma - sqrtT;
+  return disc * pdf * dd2dSigma;
 }

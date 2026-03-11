@@ -24,9 +24,9 @@ import {
   findNoMint,
 } from "../../shared/src/pda.js";
 import type { Meridian } from "../../shared/src/idl/meridian.js";
-import MeridianIDL from "../../shared/src/idl/meridian.json" assert { type: "json" };
+import MeridianIDL from "../../shared/src/idl/meridian.json" with { type: "json" };
 import type { MockOracle } from "../../shared/src/idl/mock_oracle.js";
-import MockOracleIDL from "../../shared/src/idl/mock_oracle.json" assert { type: "json" };
+import MockOracleIDL from "../../shared/src/idl/mock_oracle.json" with { type: "json" };
 import { binaryCallPrice, probToCents } from "./pricer.js";
 import {
   generateQuotes,

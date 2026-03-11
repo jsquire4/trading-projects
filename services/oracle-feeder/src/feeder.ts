@@ -13,7 +13,7 @@ import { TradierClient } from "../../shared/src/tradier-client.js";
 import { createLogger } from "../../shared/src/alerting.js";
 import { findPriceFeed } from "../../shared/src/pda.js";
 import type { MockOracle } from "../../shared/src/idl/mock_oracle.js";
-import MockOracleIDL from "../../shared/src/idl/mock_oracle.json" assert { type: "json" };
+import MockOracleIDL from "../../shared/src/idl/mock_oracle.json" with { type: "json" };
 
 const log = createLogger("oracle-feeder");
 
@@ -86,6 +86,7 @@ export async function startFeeder(
   let stopped = false;
   let connecting = false;
   let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  let reconnectDelay = 1_000; // exponential backoff: 1s, 2s, 4s, ... max 60s
   let pollInterval: ReturnType<typeof setInterval> | null = null;
 
   // ------ On-chain update with retry ------
@@ -187,6 +188,7 @@ export async function startFeeder(
       ws = new WebSocket(TRADIER_WS_URL);
 
       ws.on("open", () => {
+        reconnectDelay = 1_000; // reset backoff on successful connection
         log.info(`WebSocket connected, subscribing to: ${tickers.join(", ")}`);
         ws!.send(
           JSON.stringify({
@@ -223,8 +225,9 @@ export async function startFeeder(
 
       ws.on("close", (code: number) => {
         if (stopped) return;
-        log.warn(`WebSocket closed (code ${code}), reconnecting in 5s`);
-        reconnectTimeout = setTimeout(() => connect(), 5_000);
+        log.warn(`WebSocket closed (code ${code}), reconnecting in ${reconnectDelay / 1000}s`);
+        reconnectTimeout = setTimeout(() => connect(), reconnectDelay);
+        reconnectDelay = Math.min(reconnectDelay * 2, 60_000); // exponential backoff, cap 60s
       });
 
       ws.on("error", (err: Error) => {

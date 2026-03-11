@@ -772,7 +772,10 @@ describe("Market Closure", () => {
         // or by usdc_vault being closed (account deserialization failure).
         // Either way the call is rejected.
         const errStr = err.toString();
-        // is_closed constraint → 0x1789 (MarketClosed), or vault/market closed → account errors
+        // Primary expected error: 0x1789 (MarketClosed).
+        // However, if the market/vault accounts are already closed by close_market,
+        // bankrun may return account deserialization errors instead. The broad matcher
+        // handles both paths — the key assertion is that the call is rejected.
         const matched =
           errStr.includes("0x1789") ||
           errStr.includes("0xbc4") || // AccountNotInitialized (Anchor deserialization)

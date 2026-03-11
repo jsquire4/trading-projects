@@ -31,7 +31,7 @@ import { interpretDelta, interpretGamma } from "@/lib/insights";
 
 interface GreeksDisplayProps {
   ticker: string;
-  markets?: unknown[]; // kept for backwards compat, unused
+  selectedExpiration?: string | null;
 }
 
 interface GreeksRow {
@@ -44,8 +44,8 @@ interface GreeksRow {
   iv: number;
 }
 
-export function GreeksDisplay({ ticker }: GreeksDisplayProps) {
-  const { data: optionsResult, isLoading } = useTradierOptions(ticker);
+export function GreeksDisplay({ ticker, selectedExpiration }: GreeksDisplayProps) {
+  const { data: optionsResult, isLoading } = useTradierOptions(ticker, selectedExpiration);
   const { data: quotes } = useTradierQuotes([ticker]);
 
   const optionsChain = optionsResult?.chain ?? null;
@@ -153,7 +153,6 @@ export function GreeksDisplay({ ticker }: GreeksDisplayProps) {
           <tbody>
             {rows.map((row) => {
               const isATM = row.strikeLabel === atmStrike;
-              const isITM = spotPrice ? row.strike < spotPrice : false;
               // Delta heat: green intensity proportional to delta
               const deltaIntensity = Math.min(Math.abs(row.delta) * 300, 1);
               const deltaBg = `rgba(34, 197, 94, ${deltaIntensity * 0.2})`;

@@ -259,7 +259,7 @@ export default function HomePage() {
             value={isLoading ? "--" : String(settledCount)}
           />
           <StatCard
-            label="Total Volume"
+            label="Total Minted"
             value={
               isLoading
                 ? "--"
@@ -267,7 +267,7 @@ export default function HomePage() {
                 ? `$${Number(totalVolume).toLocaleString()}`
                 : "--"
             }
-            sub="USDC minted"
+            sub="USDC minted into pairs"
           />
         </div>
       </section>

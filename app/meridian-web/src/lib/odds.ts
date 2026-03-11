@@ -9,6 +9,11 @@ function gcd(a: number, b: number): number {
   return a;
 }
 
+/**
+ * Convert cents to percentage. This is an identity function by design:
+ * in binary markets, the price in cents (1-99) directly represents the
+ * implied probability percentage (1%-99%), so no transformation is needed.
+ */
 export function centsToPercentage(cents: number): number {
   return cents;
 }

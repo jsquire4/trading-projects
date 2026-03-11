@@ -18,7 +18,7 @@ const navLinks = [
   { href: "/portfolio", label: "Portfolio" },
   { href: "/history", label: "History" },
   { href: "/analytics", label: "Analytics" },
-  { href: "/market-maker", label: "Market Maker" },
+  // Market Maker is rendered separately with a wallet-required note
 ];
 
 export default function RootLayout({
@@ -46,6 +46,13 @@ export default function RootLayout({
                     {link.label}
                   </Link>
                 ))}
+                <Link
+                  href="/market-maker"
+                  className="text-xs sm:text-sm text-white/40 hover:text-white transition-colors whitespace-nowrap shrink-0"
+                  title="Requires wallet connection"
+                >
+                  Market Maker
+                </Link>
               </nav>
             </div>
             <div className="flex items-center gap-2 shrink-0">

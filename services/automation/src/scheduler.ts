@@ -294,7 +294,9 @@ export class Scheduler {
       const stderrChunks: string[] = [];
       let settled = false;
 
-      const child: ChildProcess = spawn("npx", ["tsx", scriptPath], {
+      // Use resolved tsx path to avoid PATH lookup issues in production
+      const tsxPath = resolve(__dirname, "../../node_modules/.bin/tsx");
+      const child: ChildProcess = spawn(tsxPath, [scriptPath], {
         env: {
           ...process.env,
         },

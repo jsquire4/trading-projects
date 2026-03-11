@@ -11,7 +11,7 @@ interface MyOrdersProps {
 const SIDE_LABELS: Record<number, string> = {
   0: "Buy Yes",
   1: "Sell Yes",
-  2: "Buy No",
+  2: "Sell No",
 };
 
 const SIDE_COLORS: Record<number, string> = {

@@ -196,11 +196,18 @@ export function getTodayET(): string {
  * First tries the Tradier market calendar API. If that fails (no key, network
  * error), falls back to the hardcoded NYSE holiday list.
  */
+let _cachedDayKey: string | null = null;
+let _cachedResult: boolean | null = null;
+
 export async function isMarketDay(date: Date = new Date()): Promise<boolean> {
   const et = getETComponents(date);
+  const dayKey = `${et.year}-${String(et.month).padStart(2, "0")}-${String(et.day).padStart(2, "0")}`;
+  if (dayKey === _cachedDayKey && _cachedResult !== null) return _cachedResult;
 
   // Weekend check
   if (et.weekday === 0 || et.weekday === 6) {
+    _cachedDayKey = dayKey;
+    _cachedResult = false;
     return false;
   }
 
@@ -230,7 +237,10 @@ export async function isMarketDay(date: Date = new Date()): Promise<boolean> {
         if (Array.isArray(days)) {
           const today = days.find((d) => d.date === dateStr);
           if (today) {
-            return today.status === "open";
+            const apiResult = today.status === "open";
+            _cachedDayKey = dayKey;
+            _cachedResult = apiResult;
+            return apiResult;
           }
         }
       }
@@ -242,5 +252,8 @@ export async function isMarketDay(date: Date = new Date()): Promise<boolean> {
   }
 
   // Fallback: hardcoded holiday list
-  return !NYSE_HOLIDAYS.has(dateStr);
+  const result = !NYSE_HOLIDAYS.has(dateStr);
+  _cachedDayKey = dayKey;
+  _cachedResult = result;
+  return result;
 }

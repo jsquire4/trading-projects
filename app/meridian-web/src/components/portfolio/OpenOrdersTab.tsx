@@ -5,7 +5,7 @@ import { useMarkets } from "@/hooks/useMarkets";
 import { useMyOrders } from "@/hooks/useMyOrders";
 import { useCancelOrder } from "@/hooks/useCancelOrder";
 
-const SIDE_LABELS: Record<number, string> = { 0: "Buy Yes", 1: "Sell Yes", 2: "Buy No" };
+const SIDE_LABELS: Record<number, string> = { 0: "Buy Yes", 1: "Sell Yes", 2: "Sell No" };
 const SIDE_COLORS: Record<number, string> = { 0: "text-green-400", 1: "text-amber-400", 2: "text-red-400" };
 
 function MarketOrders({ marketKey, ticker, strike }: { marketKey: string; ticker: string; strike: number }) {
@@ -44,8 +44,9 @@ function MarketOrders({ marketKey, ticker, strike }: { marketKey: string; ticker
 
 export function OpenOrdersTab() {
   const { data: markets = [], isLoading } = useMarkets();
-  const activeMarkets = useMemo(
-    () => markets.filter((m) => !m.isSettled && !m.isClosed),
+  // Show all non-closed markets (including settled — user may need to cancel orders there)
+  const visibleMarkets = useMemo(
+    () => markets.filter((m) => !m.isClosed),
     [markets],
   );
 
@@ -53,17 +54,17 @@ export function OpenOrdersTab() {
     return <div className="h-32 rounded-lg bg-white/5 border border-white/10 animate-pulse" />;
   }
 
-  if (activeMarkets.length === 0) {
+  if (visibleMarkets.length === 0) {
     return (
       <div className="rounded-xl bg-white/5 border border-white/10 px-6 py-12 text-center">
-        <p className="text-white/50 text-sm">No active markets</p>
+        <p className="text-white/50 text-sm">No markets with open orders</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      {activeMarkets.map((m) => (
+      {visibleMarkets.map((m) => (
         <MarketOrders
           key={m.publicKey.toBase58()}
           marketKey={m.publicKey.toBase58()}

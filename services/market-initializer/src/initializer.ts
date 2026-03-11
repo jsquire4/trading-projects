@@ -446,9 +446,15 @@ export function computeMarketCloseUnix(date?: Date): number {
 
   const closeUnix = Math.floor(marketCloseUTC / 1000);
 
-  // If today's close has already passed, shift to tomorrow's close
+  // If today's close has already passed, recompute for tomorrow (handles DST transitions)
   if (closeUnix <= Math.floor(Date.now() / 1000)) {
-    return closeUnix + 86400;
+    // Advance by exactly 1 day in UTC (not local time) to avoid off-by-one on non-UTC servers
+    const tomorrowStartUTC = startOfDayUTC + 86_400_000;
+    // Compute ET offset at the candidate 4 PM time (not midnight) to handle DST spring-forward correctly
+    const candidate4pmUTC = tomorrowStartUTC + 16 * 60 * 60 * 1000; // rough 4PM UTC guess
+    const tomorrowETOffset = getETOffsetMinutes(new Date(candidate4pmUTC));
+    const tomorrowCloseUTC = tomorrowStartUTC + (16 * 60 - tomorrowETOffset) * 60 * 1000;
+    return Math.floor(tomorrowCloseUTC / 1000);
   }
 
   return closeUnix;

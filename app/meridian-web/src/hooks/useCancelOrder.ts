@@ -3,7 +3,7 @@
 import { useCallback, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountIdempotentInstruction } from "@solana/spl-token";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAnchorProgram } from "@/hooks/useAnchorProgram";
@@ -46,8 +46,14 @@ export function useCancelOrder(marketKey: string) {
         const userYesAta = await getAssociatedTokenAddress(yesMint, publicKey);
         const userNoAta = await getAssociatedTokenAddress(noMint, publicKey);
 
+        // Ensure all 3 ATAs exist before cancelling (user may not hold all token types)
         const tx = await program.methods
           .cancelOrder(priceLevel, new BN(orderId.toString()))
+          .preInstructions([
+            createAssociatedTokenAccountIdempotentInstruction(publicKey, userUsdcAta, publicKey, USDC_MINT),
+            createAssociatedTokenAccountIdempotentInstruction(publicKey, userYesAta, publicKey, yesMint),
+            createAssociatedTokenAccountIdempotentInstruction(publicKey, userNoAta, publicKey, noMint),
+          ])
           .accountsPartial({
             user: publicKey,
             config,

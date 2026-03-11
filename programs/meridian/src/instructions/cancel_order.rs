@@ -73,6 +73,8 @@ pub fn handle_cancel_order(
     price: u8,
     order_id: u64,
 ) -> Result<()> {
+    // Note: Cancellation is intentionally allowed on settled/closed markets.
+    // Users must be able to retrieve escrowed funds at any time.
     require!(price >= 1 && price <= 99, MeridianError::InvalidPrice);
 
     let mut ob = ctx.accounts.order_book.load_mut()?;

@@ -19,9 +19,10 @@ export interface OrderBookView {
 interface OrderBookProps {
   perspective: "yes" | "no";
   marketKey: string;
+  onPriceClick?: (price: number) => void;
 }
 
-export function OrderBook({ perspective: initialPerspective, marketKey }: OrderBookProps) {
+export function OrderBook({ perspective: initialPerspective, marketKey, onPriceClick }: OrderBookProps) {
   const [perspective, setPerspective] = useState<"yes" | "no">(initialPerspective);
   const [viewMode, setViewMode] = useState<"table" | "depth">("table");
   const { data: book, isLoading } = useOrderBook(marketKey);
@@ -49,12 +50,17 @@ export function OrderBook({ perspective: initialPerspective, marketKey }: OrderB
       quantity: Number(l.totalQuantity),
     }));
 
-    // Compute cumulative quantities
+    // Compute cumulative quantities (bids: accumulate from worst to best, then reverse)
+    // Bids arrive sorted descending (best first). Depth = quantity at this level + all worse levels.
     let cumBids = 0;
-    const bidsWithCum = displayBids.map((l) => {
-      cumBids += l.quantity;
-      return { ...l, cumulative: cumBids };
-    });
+    const bidsWithCum = displayBids
+      .slice()
+      .reverse()
+      .map((l) => {
+        cumBids += l.quantity;
+        return { ...l, cumulative: cumBids };
+      })
+      .reverse();
 
     let cumAsks = 0;
     const asksWithCum = displayAsks.map((l) => {
@@ -156,10 +162,16 @@ export function OrderBook({ perspective: initialPerspective, marketKey }: OrderB
 
           {/* Asks (reversed so lowest ask is at bottom, closest to spread) */}
           <div className="flex flex-col-reverse">
+            {asks.length > 8 && (
+              <div className="px-4 py-0.5 text-[10px] text-white/30 text-center">
+                {asks.length - 8} more level{asks.length - 8 > 1 ? "s" : ""}...
+              </div>
+            )}
             {asks.slice(0, 8).map((level) => (
               <div
                 key={level.price}
-                className="relative grid grid-cols-3 gap-1 px-4 py-0.5 text-xs"
+                className={`relative grid grid-cols-3 gap-1 px-4 py-0.5 text-xs ${onPriceClick ? "cursor-pointer hover:bg-white/5" : ""}`}
+                onClick={() => onPriceClick?.(level.price)}
               >
                 <div
                   className="absolute inset-y-0 right-0 bg-no/10"
@@ -192,7 +204,8 @@ export function OrderBook({ perspective: initialPerspective, marketKey }: OrderB
             {bids.slice(0, 8).map((level) => (
               <div
                 key={level.price}
-                className="relative grid grid-cols-3 gap-1 px-4 py-0.5 text-xs"
+                className={`relative grid grid-cols-3 gap-1 px-4 py-0.5 text-xs ${onPriceClick ? "cursor-pointer hover:bg-white/5" : ""}`}
+                onClick={() => onPriceClick?.(level.price)}
               >
                 <div
                   className="absolute inset-y-0 right-0 bg-yes/10"
@@ -207,6 +220,11 @@ export function OrderBook({ perspective: initialPerspective, marketKey }: OrderB
                 </span>
               </div>
             ))}
+            {bids.length > 8 && (
+              <div className="px-4 py-0.5 text-[10px] text-white/30 text-center">
+                {bids.length - 8} more level{bids.length - 8 > 1 ? "s" : ""}...
+              </div>
+            )}
           </div>
         </>
       ) : (

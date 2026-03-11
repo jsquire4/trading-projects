@@ -104,9 +104,14 @@ function TickerSearch({ onSelect, onCancel }: { onSelect: (ticker: string) => vo
 
     try {
       const res = await fetch(`/api/tradier/quotes?symbols=${encodeURIComponent(upper)}`);
-      const data = await res.json();
-      const quotes: unknown[] = Array.isArray(data) ? data : [];
-      const valid = quotes.length > 0 && (quotes[0] as any)?.last > 0;
+      if (!res.ok) {
+        setStatus("error");
+        setErrorMsg(`Lookup failed (${res.status})`);
+        return;
+      }
+      const data: unknown = await res.json();
+      const quotes = (Array.isArray(data) ? data : []) as Array<{ symbol?: string; last?: number }>;
+      const valid = quotes.length > 0 && typeof quotes[0]?.last === "number" && quotes[0].last > 0;
       if (valid) {
         onSelect(upper);
       } else {
@@ -397,7 +402,7 @@ export default function AnalyticsPage() {
         <div className="bg-white/5 rounded-xl p-4 sm:p-6 border border-white/10 card-accent-purple">
           <h2 className="text-lg font-semibold mb-4">Greeks</h2>
           <AnalyticsErrorBoundary title="Greeks">
-            <GreeksDisplay ticker={selectedTicker} />
+            <GreeksDisplay ticker={selectedTicker} selectedExpiration={selectedExpiration} />
           </AnalyticsErrorBoundary>
         </div>
       </div>

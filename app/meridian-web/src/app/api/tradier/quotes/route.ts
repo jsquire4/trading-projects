@@ -16,8 +16,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "1-20 symbols required" }, { status: 400 });
   }
 
-  // Validate symbols are alphanumeric
-  if (symbols.some((s) => !/^[A-Z]{1,10}$/.test(s))) {
+  // Validate symbols: alphanumeric with dots and hyphens (e.g. BRK.B, BF-B)
+  if (symbols.some((s) => !/^[A-Z][A-Z0-9.\-]{0,9}$/.test(s))) {
     return NextResponse.json({ error: "Invalid symbol format" }, { status: 400 });
   }
 

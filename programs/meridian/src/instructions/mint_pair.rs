@@ -78,19 +78,16 @@ pub fn handle_mint_pair(ctx: Context<MintPair>, quantity: u64) -> Result<()> {
         MeridianError::MarketClosed
     );
 
-    // Position constraint: user must not hold Yes tokens (checked after ATA init)
+    // Position constraint: user must not hold Yes tokens (checked after ATA init).
     // The Yes ATA may have just been created (balance 0) — that's fine.
     // If user already held Yes tokens, this rejects.
     // reload() ensures fresh balances in composable transactions (matches place_order.rs pattern).
+    //
+    // Note: No-token balance is NOT checked. The atomic "Buy No" flow requires
+    // mint pair → sell Yes, so users may already hold No tokens from a prior mint.
     ctx.accounts.user_yes_ata.reload()?;
     require!(
         ctx.accounts.user_yes_ata.amount == 0,
-        MeridianError::ConflictingPosition
-    );
-
-    ctx.accounts.user_no_ata.reload()?;
-    require!(
-        ctx.accounts.user_no_ata.amount == 0,
         MeridianError::ConflictingPosition
     );
 

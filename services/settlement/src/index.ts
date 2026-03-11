@@ -50,7 +50,7 @@ async function fetchClosingPrices(
   const prices = new Map<string, number>();
 
   for (const q of quotes) {
-    // Use `last` as the closing price (market just closed)
+    // Use last trade price (Tradier Quote type provides `last`, not `close`)
     prices.set(q.symbol, q.last);
     log.info(`${q.symbol}: $${q.last}`);
   }

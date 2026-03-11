@@ -256,51 +256,56 @@ describe("buildNoView", () => {
     };
   }
 
+  // Corrected No view logic (H-new1):
+  //   YesAsk at P  → No BID at (100-P) [Yes sellers = No buyers]
+  //   NoBackedBid at P → No ASK at P [No holders selling at native price]
+  //   UsdcBid at P → No ASK at (100-P) [Yes buyers = No sellers at complement]
+
   it("inverts USDC bid at price 60 to No ask at price 40", () => {
-    // USDC bid at price 60 → No bid at price 100-60=40
-    // Wait, re-read the code: USDC bids → inverted to No bids
     const orders: ActiveOrder[] = [makeOrder(60, Side.UsdcBid, 200n)];
     const view = buildNoView(orders);
-    // USDC bid at 60 → No bid at 40
-    expect(view.bids).toHaveLength(1);
-    expect(view.bids[0].price).toBe(40);
+    // USDC bid at 60 → No ASK at 100-60 = 40
+    expect(view.asks).toHaveLength(1);
+    expect(view.asks[0].price).toBe(40);
+    expect(view.asks[0].totalQuantity).toBe(200n);
   });
 
-  it("inverts Yes ask at price 70 to No ask at price 30", () => {
-    // Yes ask at price 70 → No ask at 100-70=30
+  it("inverts Yes ask at price 70 to No bid at price 30", () => {
     const orders: ActiveOrder[] = [makeOrder(70, Side.YesAsk, 150n)];
     const view = buildNoView(orders);
-    expect(view.asks).toHaveLength(1);
-    expect(view.asks[0].price).toBe(30);
-    expect(view.asks[0].totalQuantity).toBe(150n);
+    // Yes ask at 70 → No BID at 100-70 = 30
+    expect(view.bids).toHaveLength(1);
+    expect(view.bids[0].price).toBe(30);
+    expect(view.bids[0].totalQuantity).toBe(150n);
   });
 
-  it("No-backed bid at price 55 stays at price 55", () => {
+  it("No-backed bid at price 55 becomes No ask at price 55", () => {
     const orders: ActiveOrder[] = [makeOrder(55, Side.NoBackedBid, 100n)];
     const view = buildNoView(orders);
-    expect(view.bids).toHaveLength(1);
-    expect(view.bids[0].price).toBe(55);
+    // NoBackedBid → No ASK at native price
+    expect(view.asks).toHaveLength(1);
+    expect(view.asks[0].price).toBe(55);
   });
 
-  it("edge case: price 1 inverts to 99", () => {
+  it("edge case: YesAsk price 1 → No bid at 99", () => {
     const orders: ActiveOrder[] = [makeOrder(1, Side.YesAsk)];
     const view = buildNoView(orders);
-    expect(view.asks).toHaveLength(1);
-    expect(view.asks[0].price).toBe(99);
+    expect(view.bids).toHaveLength(1);
+    expect(view.bids[0].price).toBe(99);
   });
 
-  it("edge case: price 99 inverts to 1", () => {
+  it("edge case: YesAsk price 99 → No bid at 1", () => {
     const orders: ActiveOrder[] = [makeOrder(99, Side.YesAsk)];
     const view = buildNoView(orders);
-    expect(view.asks).toHaveLength(1);
-    expect(view.asks[0].price).toBe(1);
+    expect(view.bids).toHaveLength(1);
+    expect(view.bids[0].price).toBe(1);
   });
 
-  it("edge case: price 50 inverts to 50", () => {
+  it("edge case: YesAsk price 50 → No bid at 50", () => {
     const orders: ActiveOrder[] = [makeOrder(50, Side.YesAsk)];
     const view = buildNoView(orders);
-    expect(view.asks).toHaveLength(1);
-    expect(view.asks[0].price).toBe(50);
+    expect(view.bids).toHaveLength(1);
+    expect(view.bids[0].price).toBe(50);
   });
 
   it("returns empty views for empty orders", () => {
@@ -314,25 +319,25 @@ describe("buildNoView", () => {
 
   it("calculates spread correctly with inverted prices", () => {
     const orders: ActiveOrder[] = [
-      makeOrder(60, Side.UsdcBid),   // → No bid at 40
-      makeOrder(70, Side.YesAsk),    // → No ask at 30
+      makeOrder(60, Side.UsdcBid),   // → No ask at 40
+      makeOrder(70, Side.YesAsk),    // → No bid at 30
     ];
     const view = buildNoView(orders);
-    // bids at 40, asks at 30 → spread = 30 - 40 = -10
-    expect(view.bestBid).toBe(40);
-    expect(view.bestAsk).toBe(30);
-    expect(view.spread).toBe(-10);
+    // bids at 30, asks at 40 → spread = 40 - 30 = 10
+    expect(view.bestBid).toBe(30);
+    expect(view.bestAsk).toBe(40);
+    expect(view.spread).toBe(10);
   });
 
-  it("merges No-backed bids with inverted USDC bids at same price", () => {
+  it("merges No-backed bids with inverted USDC bids at same ask price", () => {
     const orders: ActiveOrder[] = [
-      makeOrder(55, Side.NoBackedBid, 100n), // No bid at 55
-      makeOrder(45, Side.UsdcBid, 200n),     // inverted: No bid at 55
+      makeOrder(55, Side.NoBackedBid, 100n), // No ask at 55 (native)
+      makeOrder(45, Side.UsdcBid, 200n),     // inverted: No ask at 100-45 = 55
     ];
     const view = buildNoView(orders);
-    expect(view.bids).toHaveLength(1);
-    expect(view.bids[0].price).toBe(55);
-    expect(view.bids[0].totalQuantity).toBe(300n);
-    expect(view.bids[0].orderCount).toBe(2);
+    expect(view.asks).toHaveLength(1);
+    expect(view.asks[0].price).toBe(55);
+    expect(view.asks[0].totalQuantity).toBe(300n);
+    expect(view.asks[0].orderCount).toBe(2);
   });
 });

@@ -486,4 +486,270 @@ describe("Place Order", () => {
     const noEscrowBal = await getTokenBalance(ctx, ma.noEscrow);
     expect(noEscrowBal).to.equal(5 * ONE_TOKEN);
   });
+
+  // ---------------------------------------------------------------------------
+  // H13: Market order tests for Sell Yes (SIDE_YES_ASK)
+  // ---------------------------------------------------------------------------
+  it("matches a Sell Yes market order against a resting USDC bid (swap fill)", async () => {
+    // Use fresh users — admin's Yes tokens were consumed by prior tests
+    const buyer = Keypair.generate();
+    const seller = Keypair.generate();
+    const provider = new BankrunProvider(ctx.context);
+
+    // Fund buyer (places resting USDC bid)
+    ctx.context.setAccount(buyer.publicKey, {
+      lamports: 10_000_000_000,
+      data: Buffer.alloc(0),
+      owner: new PublicKey("11111111111111111111111111111111"),
+      executable: false,
+    });
+    const buyerUsdcAta = await createAta(ctx.context, buyer, usdcMint, buyer.publicKey);
+    await mintTestUsdc(ctx.context, usdcMint, ctx.admin, buyerUsdcAta, 100_000_000);
+    const buyerYesAta = await createAta(ctx.context, buyer, ma.yesMint, buyer.publicKey);
+    const buyerNoAta = await createAta(ctx.context, buyer, ma.noMint, buyer.publicKey);
+
+    // Buyer places resting USDC bid at price 75 (limit, no fills)
+    // Use price 75 to avoid matching stale bids at 50 from earlier tests
+    const bidIx = buildPlaceOrderIx({
+      user: buyer.publicKey,
+      config,
+      market: ma.market,
+      orderBook: ma.orderBook,
+      usdcVault: ma.usdcVault,
+      escrowVault: ma.escrowVault,
+      yesEscrow: ma.yesEscrow,
+      noEscrow: ma.noEscrow,
+      yesMint: ma.yesMint,
+      noMint: ma.noMint,
+      userUsdcAta: buyerUsdcAta,
+      userYesAta: buyerYesAta,
+      userNoAta: buyerNoAta,
+      side: SIDE_USDC_BID,
+      price: 75,
+      quantity: new BN(3 * ONE_TOKEN),
+      orderType: ORDER_TYPE_LIMIT,
+      maxFills: 0,
+    });
+    await provider.sendAndConfirm!(new Transaction().add(bidIx), [buyer]);
+
+    // Fund seller — mint pairs to get Yes tokens
+    ctx.context.setAccount(seller.publicKey, {
+      lamports: 10_000_000_000,
+      data: Buffer.alloc(0),
+      owner: new PublicKey("11111111111111111111111111111111"),
+      executable: false,
+    });
+    const sellerUsdcAta = await createAta(ctx.context, seller, usdcMint, seller.publicKey);
+    await mintTestUsdc(ctx.context, usdcMint, ctx.admin, sellerUsdcAta, 100_000_000);
+    const sellerYesAta = await createAta(ctx.context, seller, ma.yesMint, seller.publicKey);
+    const sellerNoAta = await createAta(ctx.context, seller, ma.noMint, seller.publicKey);
+
+    const mintIx = buildMintPairIx({
+      user: seller.publicKey,
+      config,
+      market: ma.market,
+      yesMint: ma.yesMint,
+      noMint: ma.noMint,
+      userUsdcAta: sellerUsdcAta,
+      userYesAta: sellerYesAta,
+      userNoAta: sellerNoAta,
+      usdcVault: ma.usdcVault,
+      quantity: new BN(5 * ONE_TOKEN),
+    });
+    await provider.sendAndConfirm!(new Transaction().add(mintIx), [seller]);
+
+    // Seller sells Yes via market order at price=75 (min acceptable bid)
+    // This avoids sweeping stale bids at lower prices from earlier tests
+    // Maker (buyer) receives Yes tokens, so we pass buyer's Yes ATA
+    const sellerUsdcBefore = await getTokenBalance(ctx, sellerUsdcAta);
+    const sellIx = buildPlaceOrderIx({
+      user: seller.publicKey,
+      config,
+      market: ma.market,
+      orderBook: ma.orderBook,
+      usdcVault: ma.usdcVault,
+      escrowVault: ma.escrowVault,
+      yesEscrow: ma.yesEscrow,
+      noEscrow: ma.noEscrow,
+      yesMint: ma.yesMint,
+      noMint: ma.noMint,
+      userUsdcAta: sellerUsdcAta,
+      userYesAta: sellerYesAta,
+      userNoAta: sellerNoAta,
+      side: SIDE_YES_ASK,
+      price: 75,
+      quantity: new BN(3 * ONE_TOKEN),
+      orderType: ORDER_TYPE_MARKET,
+      maxFills: 10,
+      makerAccounts: [buyerYesAta],
+    });
+    await provider.sendAndConfirm!(new Transaction().add(sellIx), [seller]);
+
+    // Seller should have received USDC: 3 tokens * 75/100 = 2.25 USDC = 2_250_000
+    const sellerUsdcAfter = await getTokenBalance(ctx, sellerUsdcAta);
+    expect(sellerUsdcAfter - sellerUsdcBefore).to.equal(2_250_000);
+
+    // Buyer should have received 3 Yes tokens
+    const buyerYesBal = await getTokenBalance(ctx, buyerYesAta);
+    expect(buyerYesBal).to.equal(3 * ONE_TOKEN);
+  });
+
+  // ---------------------------------------------------------------------------
+  // H13: Market order tests for Sell No (SIDE_NO_BID) — merge fill
+  // ---------------------------------------------------------------------------
+  it("matches a Sell No market order against a resting Yes ask (merge fill)", async () => {
+    // Setup: fresh maker places a resting Yes ask, then a No holder sells into it
+    const maker = Keypair.generate();
+    const seller = Keypair.generate();
+    const provider = new BankrunProvider(ctx.context);
+
+    // Fund maker
+    ctx.context.setAccount(maker.publicKey, {
+      lamports: 10_000_000_000,
+      data: Buffer.alloc(0),
+      owner: new PublicKey("11111111111111111111111111111111"),
+      executable: false,
+    });
+    const makerUsdcAta = await createAta(ctx.context, maker, usdcMint, maker.publicKey);
+    await mintTestUsdc(ctx.context, usdcMint, ctx.admin, makerUsdcAta, 100_000_000);
+    const makerYesAta = await createAta(ctx.context, maker, ma.yesMint, maker.publicKey);
+    const makerNoAta = await createAta(ctx.context, maker, ma.noMint, maker.publicKey);
+
+    // Maker mints pairs and lists Yes ask at price 40
+    const mintIx = buildMintPairIx({
+      user: maker.publicKey,
+      config,
+      market: ma.market,
+      yesMint: ma.yesMint,
+      noMint: ma.noMint,
+      userUsdcAta: makerUsdcAta,
+      userYesAta: makerYesAta,
+      userNoAta: makerNoAta,
+      usdcVault: ma.usdcVault,
+      quantity: new BN(10 * ONE_TOKEN),
+    });
+    await provider.sendAndConfirm!(new Transaction().add(mintIx), [maker]);
+
+    const askIx = buildPlaceOrderIx({
+      user: maker.publicKey,
+      config,
+      market: ma.market,
+      orderBook: ma.orderBook,
+      usdcVault: ma.usdcVault,
+      escrowVault: ma.escrowVault,
+      yesEscrow: ma.yesEscrow,
+      noEscrow: ma.noEscrow,
+      yesMint: ma.yesMint,
+      noMint: ma.noMint,
+      userUsdcAta: makerUsdcAta,
+      userYesAta: makerYesAta,
+      userNoAta: makerNoAta,
+      side: SIDE_YES_ASK,
+      price: 40,
+      quantity: new BN(5 * ONE_TOKEN),
+      orderType: ORDER_TYPE_LIMIT,
+      maxFills: 0,
+    });
+    await provider.sendAndConfirm!(new Transaction().add(askIx), [maker]);
+
+    // Fund seller — needs No tokens but NOT Yes tokens (ConflictingPosition constraint)
+    ctx.context.setAccount(seller.publicKey, {
+      lamports: 10_000_000_000,
+      data: Buffer.alloc(0),
+      owner: new PublicKey("11111111111111111111111111111111"),
+      executable: false,
+    });
+    const sellerUsdcAta = await createAta(ctx.context, seller, usdcMint, seller.publicKey);
+    await mintTestUsdc(ctx.context, usdcMint, ctx.admin, sellerUsdcAta, 100_000_000);
+    const sellerYesAta = await createAta(ctx.context, seller, ma.yesMint, seller.publicKey);
+    const sellerNoAta = await createAta(ctx.context, seller, ma.noMint, seller.publicKey);
+
+    // Seller mints pairs then sells all Yes tokens via limit (to clear ConflictingPosition)
+    const sellerMintIx = buildMintPairIx({
+      user: seller.publicKey,
+      config,
+      market: ma.market,
+      yesMint: ma.yesMint,
+      noMint: ma.noMint,
+      userUsdcAta: sellerUsdcAta,
+      userYesAta: sellerYesAta,
+      userNoAta: sellerNoAta,
+      usdcVault: ma.usdcVault,
+      quantity: new BN(5 * ONE_TOKEN),
+    });
+    await provider.sendAndConfirm!(new Transaction().add(sellerMintIx), [seller]);
+
+    // Sell all Yes tokens first to clear the position constraint
+    const clearYesIx = buildPlaceOrderIx({
+      user: seller.publicKey,
+      config,
+      market: ma.market,
+      orderBook: ma.orderBook,
+      usdcVault: ma.usdcVault,
+      escrowVault: ma.escrowVault,
+      yesEscrow: ma.yesEscrow,
+      noEscrow: ma.noEscrow,
+      yesMint: ma.yesMint,
+      noMint: ma.noMint,
+      userUsdcAta: sellerUsdcAta,
+      userYesAta: sellerYesAta,
+      userNoAta: sellerNoAta,
+      side: SIDE_YES_ASK,
+      price: 99,
+      quantity: new BN(5 * ONE_TOKEN),
+      orderType: ORDER_TYPE_LIMIT,
+      maxFills: 0,
+    });
+    await provider.sendAndConfirm!(new Transaction().add(clearYesIx), [seller]);
+
+    // Verify seller has 0 Yes, 5 No
+    const sellerYesBal = await getTokenBalance(ctx, sellerYesAta);
+    expect(sellerYesBal).to.equal(0);
+    const sellerNoBefore = await getTokenBalance(ctx, sellerNoAta);
+    expect(sellerNoBefore).to.equal(5 * ONE_TOKEN);
+
+    // Sell No market order — price=1, meaning max_yes_ask = 99 (sweep all asks)
+    // This should match the maker's Yes ask at price 40 (merge fill)
+    // Maker's USDC ATA receives the USDC payout from merge/burn
+    const makerUsdcBefore = await getTokenBalance(ctx, makerUsdcAta);
+    const sellerUsdcBefore = await getTokenBalance(ctx, sellerUsdcAta);
+    const sellNoIx = buildPlaceOrderIx({
+      user: seller.publicKey,
+      config,
+      market: ma.market,
+      orderBook: ma.orderBook,
+      usdcVault: ma.usdcVault,
+      escrowVault: ma.escrowVault,
+      yesEscrow: ma.yesEscrow,
+      noEscrow: ma.noEscrow,
+      yesMint: ma.yesMint,
+      noMint: ma.noMint,
+      userUsdcAta: sellerUsdcAta,
+      userYesAta: sellerYesAta,
+      userNoAta: sellerNoAta,
+      side: SIDE_NO_BID,
+      price: 1,
+      quantity: new BN(5 * ONE_TOKEN),
+      orderType: ORDER_TYPE_MARKET,
+      maxFills: 10,
+      makerAccounts: [makerUsdcAta], // maker receives USDC from merge
+    });
+    await provider.sendAndConfirm!(new Transaction().add(sellNoIx), [seller]);
+
+    // Seller's No tokens should be consumed (burned in merge)
+    // Maker had 5 tokens at ask price 40, seller sells 5 No at market (all fill)
+    const sellerNoAfter = await getTokenBalance(ctx, sellerNoAta);
+    expect(sellerNoAfter).to.equal(0);
+
+    // Seller receives USDC: merge burn releases $1 per pair, seller gets (100-40)/100 = 60c per token
+    // 5 tokens × 0.60 = $3.00 = 3_000_000 lamports
+    const sellerUsdcAfter = await getTokenBalance(ctx, sellerUsdcAta);
+    const expectedSellerPayout = Math.ceil((5 * ONE_TOKEN * (100 - 40)) / 100);
+    expect(sellerUsdcAfter - sellerUsdcBefore).to.equal(expectedSellerPayout);
+
+    // Maker receives their portion: 40c per token × 5 tokens = 2_000_000 lamports
+    const makerUsdcAfter = await getTokenBalance(ctx, makerUsdcAta);
+    const expectedMakerPayout = Math.floor((5 * ONE_TOKEN * 40) / 100);
+    expect(makerUsdcAfter - makerUsdcBefore).to.equal(expectedMakerPayout);
+  });
 });

@@ -96,6 +96,24 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
         // ── Standard close: all tokens redeemed, close all 8 accounts ──
         market_signer_seeds!(market => strike_bytes, expiry_bytes, bump_byte, seeds, signer_seeds);
 
+        // Sweep any dust remaining in escrow_vault to treasury before closing.
+        // Dust accumulates from ceiling/floor rounding asymmetry between escrow and refund.
+        let escrow_dust = ctx.accounts.escrow_vault.amount;
+        if escrow_dust > 0 {
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    anchor_spl::token::Transfer {
+                        from: ctx.accounts.escrow_vault.to_account_info(),
+                        to: ctx.accounts.treasury.to_account_info(),
+                        authority: ctx.accounts.market.to_account_info(),
+                    },
+                    signer_seeds,
+                ),
+                escrow_dust,
+            )?;
+        }
+
         // Close token accounts (vault, escrow, yes_escrow, no_escrow)
         let token_accounts: Vec<(
             AccountInfo<'_>,
@@ -189,6 +207,23 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
             AuthorityType::MintTokens,
             None,
         )?;
+
+        // Sweep any dust remaining in escrow_vault to treasury before closing.
+        let escrow_dust = ctx.accounts.escrow_vault.amount;
+        if escrow_dust > 0 {
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    anchor_spl::token::Transfer {
+                        from: ctx.accounts.escrow_vault.to_account_info(),
+                        to: ctx.accounts.treasury.to_account_info(),
+                        authority: ctx.accounts.market.to_account_info(),
+                    },
+                    signer_seeds,
+                ),
+                escrow_dust,
+            )?;
+        }
 
         // Close 5 accounts: OrderBook, UsdcVault, EscrowVault, YesEscrow, NoEscrow
         let closeable_token_accounts: Vec<(

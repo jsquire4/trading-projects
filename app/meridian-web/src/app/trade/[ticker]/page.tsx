@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useMarkets, type ParsedMarket } from "@/hooks/useMarkets";
@@ -16,6 +16,7 @@ import { MyOrders } from "@/components/MyOrders";
 import { MyPositions } from "@/components/MyPositions";
 import { RedeemPanel } from "@/components/RedeemPanel";
 import { FillFeed } from "@/components/FillFeed";
+import { PayoffDisplay } from "@/components/PayoffDisplay";
 
 // ---------------------------------------------------------------------------
 // Strike selector
@@ -116,6 +117,18 @@ export default function TradingCockpit({
     () => positions.find((p) => p.market.publicKey.toBase58() === activeKey) ?? null,
     [positions, activeKey],
   );
+
+  // Price click from OrderBook fills the OrderForm price
+  const [clickedPrice, setClickedPrice] = useState<number | null>(null);
+  const handlePriceClick = useCallback((price: number) => {
+    setClickedPrice(price);
+  }, []);
+
+  // Transaction receipt state (H4)
+  const [lastTxSignature, setLastTxSignature] = useState<string | null>(null);
+  const handleTransactionSuccess = useCallback((sig: string) => {
+    setLastTxSignature(sig);
+  }, []);
 
   // Mobile section toggles
   const [showOrderBook, setShowOrderBook] = useState(true);
@@ -231,7 +244,11 @@ export default function TradingCockpit({
             <span>{showOrderBook ? "\u25BE" : "\u25B8"}</span>
           </button>
           {showOrderBook && (
-            <OrderBook perspective="yes" marketKey={activeKey} />
+            <OrderBook
+              perspective="yes"
+              marketKey={activeKey}
+              onPriceClick={handlePriceClick}
+            />
           )}
           <MarketInfo market={market} />
         </div>
@@ -242,10 +259,44 @@ export default function TradingCockpit({
             marketKey={activeKey}
             ticker={ticker}
             strikePrice={Number(market.strikePrice)}
+            initialPrice={clickedPrice}
+            onTransactionSuccess={handleTransactionSuccess}
           />
 
-          {/* Redeem panel — show when user has positions or market is settled */}
-          {(position || market.isSettled) && (
+          {/* Transaction receipt after successful order */}
+          {lastTxSignature && (
+            <div className="rounded-xl border border-green-500/30 bg-green-500/5 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded-full bg-green-500/20 flex items-center justify-center text-green-400 text-xs">✓</div>
+                  <span className="text-sm font-semibold text-green-400">Order Submitted</span>
+                </div>
+                <button onClick={() => setLastTxSignature(null)} className="text-white/30 hover:text-white/60 text-sm">✕</button>
+              </div>
+              <div className="flex items-center gap-2">
+                <a
+                  href={`https://explorer.solana.com/tx/${lastTxSignature}?cluster=devnet`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 text-center text-xs text-accent hover:text-accent/80 py-1.5 rounded-md border border-white/10 hover:border-white/20"
+                >
+                  View on Explorer
+                </a>
+              </div>
+              <p className="text-[10px] text-white/20 text-center font-mono truncate">{lastTxSignature}</p>
+            </div>
+          )}
+
+          {/* Payoff explainer */}
+          <PayoffDisplay
+            side={position && position.noBal > position.yesBal ? "no" : "yes"}
+            price={clickedPrice ?? 50}
+            ticker={ticker}
+            strikePrice={Number(market.strikePrice)}
+          />
+
+          {/* Redeem panel — show when user can pair-burn (holds both tokens) or market is settled */}
+          {(market.isSettled || (position && position.yesBal > BigInt(0) && position.noBal > BigInt(0))) && (
             <RedeemPanel
               market={market}
               yesBal={position?.yesBal ?? BigInt(0)}

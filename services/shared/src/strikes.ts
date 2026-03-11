@@ -1,5 +1,9 @@
 /**
  * Strike selection — pure math, no external dependencies.
+ *
+ * NOTE: A copy of this module also exists in the frontend at
+ * app/meridian-web/src/lib/strikes.ts. If you modify strike logic here,
+ * update the frontend copy as well (or consolidate into a shared package).
  */
 
 export interface StrikeSet {

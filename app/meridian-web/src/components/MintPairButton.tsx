@@ -32,10 +32,11 @@ export function MintPairButton({ market }: MintPairButtonProps) {
   const [showForm, setShowForm] = useState(false);
 
   const qtyNum = parseFloat(quantity) || 0;
+  const isValidInteger = quantity !== "" && /^\d+$/.test(quantity) && qtyNum > 0;
   const qtyLamports = Math.round(qtyNum * 1_000_000);
 
   const handleMint = useCallback(async () => {
-    if (!program || !publicKey || qtyLamports <= 0) return;
+    if (!program || !publicKey || qtyLamports <= 0 || !isValidInteger) return;
     setSubmitting(true);
     try {
       const [config] = findGlobalConfig();
@@ -71,7 +72,7 @@ export function MintPairButton({ market }: MintPairButtonProps) {
       setShowForm(false);
     } catch { /* handled by toast */ }
     finally { setSubmitting(false); }
-  }, [program, publicKey, market, qtyLamports, sendTransaction, queryClient]);
+  }, [program, publicKey, market, qtyLamports, isValidInteger, sendTransaction, queryClient]);
 
   if (!publicKey || market.isSettled || market.isPaused) return null;
 
@@ -86,30 +87,37 @@ export function MintPairButton({ market }: MintPairButtonProps) {
     );
   }
 
+  const showIntegerError = quantity !== "" && !isValidInteger;
+
   return (
-    <div className="flex items-center gap-2">
-      <input
-        type="number"
-        min={1}
-        step={1}
-        value={quantity}
-        onChange={(e) => setQuantity(e.target.value)}
-        placeholder="qty"
-        className="w-20 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-white focus:outline-none"
-      />
-      <button
-        onClick={handleMint}
-        disabled={submitting || qtyNum <= 0}
-        className="text-xs bg-accent/20 text-accent hover:bg-accent/30 rounded-md px-2 py-1.5 transition-colors disabled:opacity-50"
-      >
-        {submitting ? "..." : `Mint ${qtyNum || 0} pairs ($${qtyNum.toFixed(2)})`}
-      </button>
-      <button
-        onClick={() => setShowForm(false)}
-        className="text-xs text-white/30 hover:text-white/50"
-      >
-        ✕
-      </button>
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <input
+          type="number"
+          min={1}
+          step={1}
+          value={quantity}
+          onChange={(e) => setQuantity(e.target.value)}
+          placeholder="qty"
+          className={`w-20 rounded-md border bg-white/5 px-2 py-1 text-xs text-white focus:outline-none ${showIntegerError ? "border-red-500/50" : "border-white/10"}`}
+        />
+        <button
+          onClick={handleMint}
+          disabled={submitting || !isValidInteger}
+          className="text-xs bg-accent/20 text-accent hover:bg-accent/30 rounded-md px-2 py-1.5 transition-colors disabled:opacity-50"
+        >
+          {submitting ? "..." : `Mint ${qtyNum || 0} pairs ($${qtyNum.toFixed(2)})`}
+        </button>
+        <button
+          onClick={() => setShowForm(false)}
+          className="text-xs text-white/30 hover:text-white/50"
+        >
+          ✕
+        </button>
+      </div>
+      {showIntegerError && (
+        <span className="text-[10px] text-red-400">Quantity must be a positive whole number</span>
+      )}
     </div>
   );
 }

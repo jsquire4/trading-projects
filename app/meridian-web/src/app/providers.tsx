@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef } from "react";
+import { useMemo, useState } from "react";
 import {
   ConnectionProvider,
   WalletProvider,
@@ -25,11 +25,7 @@ function makeQueryClient() {
 const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com";
 
 export function Providers({ children }: { children: React.ReactNode }) {
-  const queryClientRef = useRef<QueryClient | null>(null);
-  if (!queryClientRef.current) {
-    queryClientRef.current = makeQueryClient();
-  }
-  const queryClient = queryClientRef.current;
+  const [queryClient] = useState(() => makeQueryClient());
 
   const wallets = useMemo(() => [], []);
 

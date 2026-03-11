@@ -8,7 +8,8 @@
 //   4. For each strike, idempotently create on-chain market + ALT
 // ---------------------------------------------------------------------------
 
-import { Program, AnchorProvider, BN, Wallet } from "@coral-xyz/anchor";
+import { Program, AnchorProvider, Wallet } from "@coral-xyz/anchor";
+import BN from "bn.js";
 import {
   Connection,
   Keypair,

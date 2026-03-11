@@ -2,7 +2,8 @@
 // Crank Cancel loop — clears resting orders from settled markets
 // ---------------------------------------------------------------------------
 
-import { Program, BN } from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
+import BN from "bn.js";
 import { PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { createLogger } from "../../shared/src/alerting.js";

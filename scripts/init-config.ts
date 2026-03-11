@@ -26,7 +26,7 @@ import BN from "bn.js";
 
 import { MERIDIAN_PROGRAM_ID, MOCK_ORACLE_PROGRAM_ID } from "./shared";
 
-const DEVNET_URL = "https://api.devnet.solana.com";
+const DEVNET_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
 const ENV_PATH = path.resolve(__dirname, "..", ".env");
 const ADMIN_KEYPAIR_PATH = path.resolve(
   process.env.HOME || "~",

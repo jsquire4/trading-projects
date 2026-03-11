@@ -5,7 +5,8 @@
 // Manages the bot's active orders: cancel stale quotes, then place fresh ones.
 // ---------------------------------------------------------------------------
 
-import { type Program, BN } from "@coral-xyz/anchor";
+import { type Program } from "@coral-xyz/anchor";
+import BN from "bn.js";
 import { PublicKey, Keypair, SystemProgram } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,

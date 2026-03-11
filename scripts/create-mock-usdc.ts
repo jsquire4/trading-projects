@@ -23,7 +23,7 @@ import {
 import * as fs from "fs";
 import * as path from "path";
 
-const DEVNET_URL = "https://api.devnet.solana.com";
+const DEVNET_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
 const ENV_PATH = path.resolve(__dirname, "..", ".env");
 const ADMIN_KEYPAIR_PATH = path.resolve(
   process.env.HOME || "~",

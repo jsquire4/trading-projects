@@ -2,7 +2,8 @@
 // Settlement logic — calls settle_market with oracle retry loop
 // ---------------------------------------------------------------------------
 
-import { Program, BN } from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
+import BN from "bn.js";
 import { PublicKey } from "@solana/web3.js";
 import { createLogger } from "../../shared/src/alerting.js";
 import { findGlobalConfig, findPriceFeed, padTicker } from "../../shared/src/pda.js";

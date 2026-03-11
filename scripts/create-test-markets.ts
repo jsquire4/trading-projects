@@ -33,7 +33,7 @@ import {
   MOCK_ORACLE_PROGRAM_ID,
 } from "./shared";
 
-const DEVNET_URL = "https://api.devnet.solana.com";
+const DEVNET_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
 const ENV_PATH = path.resolve(__dirname, "..", ".env");
 const ADMIN_KEYPAIR_PATH = path.resolve(
   process.env.HOME || "~",
@@ -308,7 +308,27 @@ async function createAndSetAlt(
   marketPda: PublicKey,
   addrs: MarketAddresses
 ): Promise<void> {
-  const slot = await connection.getSlot("confirmed");
+  // On local test validators, most slots don't have blocks (blocks are only
+  // produced when transactions arrive). We need a slot that actually has a block
+  // hash in the SlotHashes sysvar. Send a dummy transfer first to guarantee a
+  // recent block, then use that slot.
+  const warmupSig = await sendAndConfirmTransaction(
+    connection,
+    new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: admin.publicKey,
+        toPubkey: admin.publicKey,
+        lamports: 1,
+      }),
+    ),
+    [admin],
+    { commitment: "confirmed" },
+  );
+  const warmupTx = await connection.getTransaction(warmupSig, {
+    commitment: "confirmed",
+    maxSupportedTransactionVersion: 0,
+  });
+  const slot = warmupTx?.slot ?? (await connection.getSlot("confirmed"));
 
   // ── Step 1: Create ALT ─────────────────────────────────────────────────────
   const [createIx, altAddress] = AddressLookupTableProgram.createLookupTable({
@@ -317,11 +337,12 @@ async function createAndSetAlt(
     recentSlot: slot,
   });
 
-  console.log(`\nCreating ALT: ${altAddress.toBase58()}`);
+  console.log(`\nCreating ALT: ${altAddress.toBase58()} (using slot ${slot})`);
 
   const createTx = new Transaction().add(createIx);
   const createSig = await sendAndConfirmTransaction(connection, createTx, [admin], {
     commitment: "confirmed",
+    skipPreflight: true, // Skip preflight — SlotHashes lookup can fail in simulation on test validators
   });
   console.log(`ALT created. Signature: ${createSig}`);
 

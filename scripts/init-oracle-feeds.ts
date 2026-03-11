@@ -23,7 +23,7 @@ import * as path from "path";
 
 import { MOCK_ORACLE_PROGRAM_ID } from "./shared";
 
-const DEVNET_URL = "https://api.devnet.solana.com";
+const DEVNET_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
 const ADMIN_KEYPAIR_PATH = path.resolve(
   process.env.HOME || "~",
   ".config/solana/id.json"

@@ -8,7 +8,8 @@
 // 5. Log results + alert on failures
 // ---------------------------------------------------------------------------
 
-import { AnchorProvider, Program, BN, Wallet } from "@coral-xyz/anchor";
+import { AnchorProvider, Program, Wallet } from "@coral-xyz/anchor";
+import BN from "bn.js";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 

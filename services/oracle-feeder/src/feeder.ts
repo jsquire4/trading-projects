@@ -5,7 +5,8 @@
 // to the mock_oracle PriceFeed accounts.
 // ---------------------------------------------------------------------------
 
-import { Program, AnchorProvider, BN, Wallet } from "@coral-xyz/anchor";
+import { Program, AnchorProvider, Wallet } from "@coral-xyz/anchor";
+import BN from "bn.js";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import WebSocket from "ws";
 import { TradierClient } from "../../shared/src/tradier-client.js";

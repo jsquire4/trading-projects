@@ -5,9 +5,11 @@
 # make services   — Start all backend services
 # make web        — Start frontend only
 # make test       — Run all tests (on-chain + frontend + services)
+# make local      — Start full stack on local validator (no devnet)
+# make local-stop  — Stop local validator + all services
 # make clean      — Stop all background processes
 
-.PHONY: install dev services web test clean
+.PHONY: install dev services web test clean local local-stop
 
 # Install all dependencies
 install:
@@ -45,6 +47,13 @@ test:
 	cd services/amm-bot && yarn vitest run
 	cd services/market-initializer && yarn vitest run
 	cd services/event-indexer && yarn vitest run
+
+# Local validator stack (no devnet needed)
+local:
+	./scripts/local-stack.sh
+
+local-stop:
+	./scripts/local-stack.sh --stop
 
 # Kill background services
 clean:

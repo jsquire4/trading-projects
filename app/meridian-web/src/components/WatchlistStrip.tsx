@@ -109,34 +109,25 @@ function AddTickerInput({ onAdd, onCancel }: AddTickerInputProps) {
   const [errorMsg, setErrorMsg] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+  useEffect(() => { inputRef.current?.focus(); }, []);
 
-  const cancelledRef = useRef(false);
-  const validatingRef = useRef(false);
-
-  useEffect(() => {
-    return () => { cancelledRef.current = true; };
-  }, []);
-
-  const validate = useCallback(async (ticker: string) => {
-    const upper = ticker.trim().toUpperCase();
-    if (!upper || validatingRef.current) return;
-    validatingRef.current = true;
+  async function handleSubmit() {
+    const upper = value.trim().toUpperCase();
+    if (!upper || status === "loading") return;
 
     setStatus("loading");
     setErrorMsg("");
 
     try {
       const res = await fetch(`/api/tradier/quotes?symbols=${encodeURIComponent(upper)}`);
-      if (cancelledRef.current) return;
+      if (!res.ok) {
+        setStatus("error");
+        setErrorMsg(`Request failed (${res.status})`);
+        return;
+      }
       const data = await res.json();
-      if (cancelledRef.current) return;
-      const quote = data.quotes?.quote;
-      const valid =
-        quote &&
-        (Array.isArray(quote) ? quote[0]?.last > 0 : quote?.last > 0);
+      const quotes: unknown[] = Array.isArray(data) ? data : [];
+      const valid = quotes.length > 0 && (quotes[0] as any)?.last > 0;
 
       if (valid) {
         onAdd(upper);
@@ -144,25 +135,20 @@ function AddTickerInput({ onAdd, onCancel }: AddTickerInputProps) {
         setStatus("error");
         setErrorMsg(`"${upper}" not found or not tradeable`);
       }
-    } catch {
-      if (cancelledRef.current) return;
+    } catch (err) {
       setStatus("error");
       setErrorMsg("Validation failed — check connection");
-    } finally {
-      validatingRef.current = false;
+      console.error("Ticker validation error:", err);
     }
-  }, [onAdd]);
+  }
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === "Enter") {
-        void validate(value);
-      } else if (e.key === "Escape") {
-        onCancel();
-      }
-    },
-    [value, validate, onCancel],
-  );
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
+      void handleSubmit();
+    } else if (e.key === "Escape") {
+      onCancel();
+    }
+  }
 
   return (
     <div className="relative flex shrink-0 items-center gap-1">
@@ -193,6 +179,16 @@ function AddTickerInput({ onAdd, onCancel }: AddTickerInputProps) {
           <div className="absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 animate-spin rounded-full border border-white/20 border-t-white/60" />
         )}
       </div>
+
+      {/* Go */}
+      <button
+        onClick={() => void handleSubmit()}
+        disabled={status === "loading" || !value.trim()}
+        className="flex h-5 shrink-0 items-center justify-center rounded-full bg-green-500/20 text-green-400 hover:bg-green-500/30 disabled:opacity-30 disabled:cursor-default transition-colors text-[10px] font-semibold px-2 leading-none"
+        aria-label="Search ticker"
+      >
+        Go
+      </button>
 
       {/* Cancel */}
       <button

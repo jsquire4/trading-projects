@@ -1,6 +1,6 @@
 "use client";
 
-import { Component, type ReactNode, useState } from "react";
+import { Component, type ReactNode, useState, useRef, useCallback, useEffect } from "react";
 import Link from "next/link";
 import { useMarkets } from "@/hooks/useMarkets";
 import { OptionsComparison } from "@/components/analytics/OptionsComparison";
@@ -81,11 +81,85 @@ function CollapsibleSection({
 // Page
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Inline ticker search (validates against Tradier)
+// ---------------------------------------------------------------------------
+
+function TickerSearch({ onSelect, onCancel }: { onSelect: (ticker: string) => void; onCancel: () => void }) {
+  const [value, setValue] = useState("");
+  const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [errorMsg, setErrorMsg] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const validatingRef = useRef(false);
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const validate = useCallback(async (ticker: string) => {
+    const upper = ticker.trim().toUpperCase();
+    if (!upper || validatingRef.current) return;
+    validatingRef.current = true;
+    setStatus("loading");
+    setErrorMsg("");
+
+    try {
+      const res = await fetch(`/api/tradier/quotes?symbols=${encodeURIComponent(upper)}`);
+      const data = await res.json();
+      const quotes: unknown[] = Array.isArray(data) ? data : [];
+      const valid = quotes.length > 0 && (quotes[0] as any)?.last > 0;
+      if (valid) {
+        onSelect(upper);
+      } else {
+        setStatus("error");
+        setErrorMsg(`"${upper}" not found`);
+      }
+    } catch {
+      setStatus("error");
+      setErrorMsg("Validation failed");
+    } finally {
+      validatingRef.current = false;
+    }
+  }, [onSelect]);
+
+  return (
+    <div className="relative flex shrink-0 items-center gap-1">
+      <div className="relative">
+        <input
+          ref={inputRef}
+          type="text"
+          value={value}
+          onChange={(e) => { setValue(e.target.value.toUpperCase()); if (status === "error") { setStatus("idle"); setErrorMsg(""); } }}
+          onKeyDown={(e) => { if (e.key === "Enter") void validate(value); else if (e.key === "Escape") onCancel(); }}
+          placeholder="TICKER"
+          maxLength={10}
+          className={`w-24 rounded-full border px-3 py-1 text-xs font-mono uppercase bg-white/5 text-white outline-none transition-all placeholder:text-white/20 ${
+            status === "error" ? "border-red-500/50 focus:border-red-500/70" : "border-white/20 focus:border-blue-500/50"
+          }`}
+        />
+        {status === "loading" && (
+          <div className="absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 animate-spin rounded-full border border-white/20 border-t-white/60" />
+        )}
+      </div>
+      <button onClick={onCancel} className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-white/40 hover:bg-white/20 hover:text-white/70 transition-colors text-xs leading-none" aria-label="Cancel">×</button>
+      {status === "error" && errorMsg && (
+        <div className="absolute left-0 -bottom-6 z-10 whitespace-nowrap rounded bg-red-500/20 border border-red-500/30 px-2 py-0.5 text-[10px] text-red-400">{errorMsg}</div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
+
 export default function AnalyticsPage() {
   const [selectedTicker, setSelectedTicker] = useState<string>(MAG7[0]);
   const [selectedExpiration, setSelectedExpiration] = useState<string | null>(null);
+  const [extraTickers, setExtraTickers] = useState<string[]>([]);
+  const [searching, setSearching] = useState(false);
   const { data: markets } = useMarkets();
-  const { data: quotes, isLoading: quotesLoading } = useTradierQuotes([...MAG7]);
+
+  const allTickers = [...MAG7, ...extraTickers];
+  const { data: quotes, isLoading: quotesLoading } = useTradierQuotes(allTickers);
 
   const tickerMarkets = (markets ?? []).filter(
     (m) => m.ticker.toUpperCase() === selectedTicker.toUpperCase(),
@@ -103,36 +177,121 @@ export default function AnalyticsPage() {
   return (
     <div className="space-y-6">
       {/* ── Header + Ticker Selector ──────────────────────────────────── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold text-gradient">Analytics</h1>
-        <div className="flex gap-1.5 overflow-x-auto pb-1 -mb-1">
-          {MAG7.map((t) => {
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold text-gradient">Analytics</h1>
+        </div>
+        <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide py-1 pr-2">
+          {/* MAG7 section */}
+          <span className="shrink-0 text-[10px] uppercase tracking-widest text-white/20 px-1 select-none self-center">MAG7</span>
+          {(MAG7 as readonly string[]).map((t) => {
             const q = quotes?.find((q) => q.symbol === t);
             const tChange = q?.change ?? 0;
+            const tChangePct = q?.change_percentage ?? 0;
             const tIsPos = tChange >= 0;
+            const isSelected = t === selectedTicker;
             return (
               <button
                 key={t}
                 onClick={() => { setSelectedTicker(t); setSelectedExpiration(null); }}
-                className={`px-2.5 sm:px-3 py-1.5 rounded text-xs sm:text-sm font-medium transition-all shrink-0 ${
-                  t === selectedTicker
-                    ? "bg-white/10 text-white shadow-[0_2px_0_0_rgba(59,130,246,0.5)]"
-                    : "text-white/40 hover:text-white/70"
+                className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-all shrink-0 ${
+                  isSelected
+                    ? tIsPos
+                      ? "border-green-500/40 bg-green-500/10 ring-1 ring-green-500/20"
+                      : "border-red-500/40 bg-red-500/10 ring-1 ring-red-500/20"
+                    : q
+                      ? tIsPos
+                        ? "border-green-500/20 bg-green-500/5 hover:border-green-500/40 hover:bg-green-500/10"
+                        : "border-red-500/20 bg-red-500/5 hover:border-red-500/40 hover:bg-red-500/10"
+                      : "border-white/10 bg-white/5 hover:border-white/20 hover:bg-white/10"
                 }`}
               >
-                {t}
+                <span className={`font-semibold ${isSelected ? "text-white" : "text-white/90"}`}>{t}</span>
                 {q && (
-                  <span
-                    className={`ml-1 text-[10px] tabular-nums ${
-                      tIsPos ? "text-green-400/60" : "text-red-400/60"
-                    }`}
-                  >
-                    {tIsPos ? "+" : ""}{(q.change_percentage ?? 0).toFixed(1)}%
-                  </span>
+                  <>
+                    <span className="tabular-nums text-white/60">${(q.last ?? 0).toFixed(2)}</span>
+                    <span className={`tabular-nums font-medium ${tIsPos ? "text-green-400" : "text-red-400"}`}>
+                      {tIsPos ? "▲" : "▼"}{Math.abs(tChangePct).toFixed(2)}%
+                    </span>
+                  </>
                 )}
               </button>
             );
           })}
+
+          {/* Custom tickers section */}
+          {extraTickers.length > 0 && (
+            <>
+              <span className="shrink-0 w-px h-4 bg-white/10 self-center" />
+              <span className="shrink-0 text-[10px] uppercase tracking-widest text-white/20 px-1 select-none self-center">Custom</span>
+              {extraTickers.map((t) => {
+                const q = quotes?.find((q) => q.symbol === t);
+                const tChange = q?.change ?? 0;
+                const tChangePct = q?.change_percentage ?? 0;
+                const tIsPos = tChange >= 0;
+                const isSelected = t === selectedTicker;
+                return (
+                  <div key={t} className="group relative flex items-center shrink-0">
+                    <button
+                      onClick={() => { setSelectedTicker(t); setSelectedExpiration(null); }}
+                      className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-all shrink-0 ${
+                        isSelected
+                          ? tIsPos
+                            ? "border-green-500/40 bg-green-500/10 ring-1 ring-green-500/20"
+                            : "border-red-500/40 bg-red-500/10 ring-1 ring-red-500/20"
+                          : q
+                            ? tIsPos
+                              ? "border-green-500/20 bg-green-500/5 hover:border-green-500/40 hover:bg-green-500/10"
+                              : "border-red-500/20 bg-red-500/5 hover:border-red-500/40 hover:bg-red-500/10"
+                            : "border-white/10 bg-white/5 hover:border-white/20 hover:bg-white/10"
+                      }`}
+                    >
+                      <span className={`font-semibold ${isSelected ? "text-white" : "text-white/90"}`}>{t}</span>
+                      {q && (
+                        <>
+                          <span className="tabular-nums text-white/60">${(q.last ?? 0).toFixed(2)}</span>
+                          <span className={`tabular-nums font-medium ${tIsPos ? "text-green-400" : "text-red-400"}`}>
+                            {tIsPos ? "▲" : "▼"}{Math.abs(tChangePct).toFixed(2)}%
+                          </span>
+                        </>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setExtraTickers((prev) => prev.filter((x) => x !== t));
+                        if (selectedTicker === t) { setSelectedTicker(MAG7[0]); setSelectedExpiration(null); }
+                      }}
+                      className="ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-white/10 text-white/40 hover:bg-red-500/30 hover:text-red-400 transition-colors text-[10px] leading-none"
+                      aria-label={`Remove ${t}`}
+                    >×</button>
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {/* Search */}
+          <span className="shrink-0 w-px h-4 bg-white/10 self-center" />
+          {searching ? (
+            <TickerSearch
+              onSelect={(ticker) => {
+                if (!allTickers.includes(ticker)) setExtraTickers((prev) => [...prev, ticker]);
+                setSelectedTicker(ticker);
+                setSelectedExpiration(null);
+                setSearching(false);
+              }}
+              onCancel={() => setSearching(false)}
+            />
+          ) : (
+            <button
+              onClick={() => setSearching(true)}
+              className="flex shrink-0 items-center gap-1 rounded-full border border-dashed border-white/20 px-3 py-1 text-xs text-white/40 transition-all hover:border-white/40 hover:text-white/70 hover:bg-white/5"
+              aria-label="Search for a ticker"
+            >
+              <span className="text-sm leading-none">+</span>
+              <span>Search</span>
+            </button>
+          )}
         </div>
       </div>
 

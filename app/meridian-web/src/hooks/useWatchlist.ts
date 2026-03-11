@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { MAG7 } from "@/lib/tickers";
 
 const STORAGE_KEY = "meridian:watchlist";
+const TICKER_PATTERN = /^[A-Z]{1,10}$/;
 
 interface WatchlistStorage {
   version: 1;
@@ -28,46 +29,63 @@ function saveWatchlist(customTickers: string[]): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
 
-const TICKER_PATTERN = /^[A-Z]{1,10}$/;
+// ---------------------------------------------------------------------------
+// Module-level shared state so all useWatchlist() instances stay in sync
+// ---------------------------------------------------------------------------
+
+type Listener = (tickers: string[]) => void;
+const listeners = new Set<Listener>();
+let sharedTickers: string[] | null = null;
+
+function getSharedTickers(): string[] {
+  if (sharedTickers === null) {
+    sharedTickers = loadWatchlist();
+  }
+  return sharedTickers;
+}
+
+function setSharedTickers(tickers: string[]): void {
+  sharedTickers = tickers;
+  saveWatchlist(tickers);
+  for (const fn of listeners) fn(tickers);
+}
+
+// ---------------------------------------------------------------------------
+// Hook
+// ---------------------------------------------------------------------------
 
 /**
  * Manages a persistent watchlist stored in localStorage.
- * Returns the full list of watched tickers (MAG7 defaults + custom).
+ * All instances share state via module-level sync — adding a ticker
+ * in one component updates all others immediately.
  */
 export function useWatchlist() {
   const [customTickers, setCustomTickers] = useState<string[]>([]);
 
-  // Load from localStorage after mount to avoid SSR hydration mismatch
+  // Load shared state after mount (SSR-safe)
   useEffect(() => {
-    setCustomTickers(loadWatchlist());
-  }, []);
+    setCustomTickers(getSharedTickers());
 
-  // Sync to localStorage on change (skip initial empty state)
-  const mountedRef = useRef(false);
-  useEffect(() => {
-    if (!mountedRef.current) {
-      mountedRef.current = true;
-      return;
-    }
-    saveWatchlist(customTickers);
-  }, [customTickers]);
+    const listener: Listener = (tickers) => setCustomTickers(tickers);
+    listeners.add(listener);
+    return () => { listeners.delete(listener); };
+  }, []);
 
   const addTicker = useCallback((ticker: string) => {
     const upper = ticker.trim().toUpperCase();
     if (!upper || !TICKER_PATTERN.test(upper)) return;
-    setCustomTickers((prev) => {
-      // Don't add if already in MAG7 or already custom
-      if ((MAG7 as readonly string[]).includes(upper)) return prev;
-      if (prev.includes(upper)) return prev;
-      return [...prev, upper];
-    });
+    if ((MAG7 as readonly string[]).includes(upper)) return;
+
+    const current = getSharedTickers();
+    if (current.includes(upper)) return;
+    setSharedTickers([...current, upper]);
   }, []);
 
   const removeTicker = useCallback((ticker: string) => {
-    setCustomTickers((prev) => prev.filter((t) => t !== ticker));
+    const current = getSharedTickers();
+    setSharedTickers(current.filter((t) => t !== ticker));
   }, []);
 
-  // Full watchlist = MAG7 + custom
   const watchlist = [...MAG7, ...customTickers];
 
   return {

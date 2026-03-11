@@ -6,6 +6,7 @@ import { MarketCard, type MarketData } from "@/components/MarketCard";
 import { useTradierQuotes } from "@/hooks/useAnalyticsData";
 import { TradeModal } from "@/components/TradeModal";
 import { WatchlistStrip } from "@/components/WatchlistStrip";
+import { useWatchlist } from "@/hooks/useWatchlist";
 import { MAG7 } from "@/lib/tickers";
 
 // ---------------------------------------------------------------------------
@@ -476,15 +477,19 @@ function LoadingSkeleton() {
 
 export default function TradePage() {
   const { data: markets = [], isLoading: marketsLoading, isError } = useMarkets();
-  const { data: quotes = [], isLoading: quotesLoading } = useTradierQuotes([...MAG7]);
+  const { watchlist } = useWatchlist();
+  const { data: quotes = [], isLoading: quotesLoading } = useTradierQuotes(watchlist);
 
   const isLoading = marketsLoading || quotesLoading;
 
   // Generate suggested trades from live quotes
+  const mag7Set = new Set(MAG7 as readonly string[]);
   const suggestedTrades = useMemo(() => {
     if (quotes.length === 0) return [];
     return generateSuggestedTrades(quotes);
   }, [quotes]);
+  const mag7Trades = suggestedTrades.filter((t) => mag7Set.has(t.ticker));
+  const watchlistTrades = suggestedTrades.filter((t) => !mag7Set.has(t.ticker));
 
   // Group active on-chain markets by ticker
   const grouped = useMemo(() => {
@@ -562,8 +567,8 @@ export default function TradePage() {
           {/* Quick bet strip */}
           <QuickBetStrip trades={suggestedTrades} onTrade={openTradeModal} />
 
-          {/* Suggested trades grid */}
-          {suggestedTrades.length > 0 && (
+          {/* Suggested trades grid — MAG7 */}
+          {mag7Trades.length > 0 && (
             <div>
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-lg font-bold text-white">
@@ -574,7 +579,26 @@ export default function TradePage() {
                 </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {suggestedTrades.map((trade) => (
+                {mag7Trades.map((trade) => (
+                  <HotTradeCard key={trade.ticker} trade={trade} onTrade={openTradeModal} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Watchlist trades */}
+          {watchlistTrades.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-bold text-white">
+                  Your Watchlist
+                </h2>
+                <span className="text-xs text-white/30">
+                  Custom tickers added from watchlist
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {watchlistTrades.map((trade) => (
                   <HotTradeCard key={trade.ticker} trade={trade} onTrade={openTradeModal} />
                 ))}
               </div>

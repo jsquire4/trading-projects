@@ -19,7 +19,6 @@ import {
   Keypair,
   PublicKey,
   SystemProgram,
-  SYSVAR_RENT_PUBKEY,
   Transaction,
   TransactionInstruction,
   sendAndConfirmTransaction,
@@ -33,11 +32,20 @@ import {
   mintTo,
   getAccount,
 } from "@solana/spl-token";
-import { createHash } from "crypto";
 import BN from "bn.js";
-import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
+
+import {
+  loadKeypair,
+  readEnv,
+  anchorDiscriminator,
+  padTicker,
+  todayMarketCloseUnix,
+  buildPlaceOrderIx,
+  MERIDIAN_PROGRAM_ID,
+  MOCK_ORACLE_PROGRAM_ID,
+} from "./shared";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -68,14 +76,6 @@ const ADMIN_KEYPAIR_PATH = path.resolve(
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ENV_PATH = path.resolve(__dirname, "..", ".env");
-
-const MERIDIAN_PROGRAM_ID = new PublicKey(
-  "7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth",
-);
-
-const MOCK_ORACLE_PROGRAM_ID = new PublicKey(
-  "HJpHCfz1mqFFNa4ANfU8mMAZ5WoNRfo7EV1sZfEV2vZ",
-);
 
 // Side constants matching the on-chain enum
 const SIDE_USDC_BID = 0; // Buy Yes (lock USDC)
@@ -150,86 +150,7 @@ interface LoadTestReport {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function loadKeypair(filePath: string): Keypair {
-  const raw = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-  return Keypair.fromSecretKey(Uint8Array.from(raw));
-}
-
-function readEnv(): Record<string, string> {
-  if (!fs.existsSync(ENV_PATH)) return {};
-  const lines = fs.readFileSync(ENV_PATH, "utf-8").split("\n");
-  const result: Record<string, string> = {};
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eqIdx = trimmed.indexOf("=");
-    if (eqIdx === -1) continue;
-    result[trimmed.slice(0, eqIdx)] = trimmed.slice(eqIdx + 1);
-  }
-  return result;
-}
-
-function anchorDiscriminator(name: string): Buffer {
-  const hash = createHash("sha256").update(`global:${name}`).digest();
-  return hash.subarray(0, 8);
-}
-
-function padTicker(ticker: string): Buffer {
-  const buf = Buffer.alloc(8, 0);
-  Buffer.from(ticker, "utf-8").copy(buf);
-  return buf;
-}
-
-function expiryDayBuffer(marketCloseUnix: number): Buffer {
-  const day = Math.floor(marketCloseUnix / 86400);
-  const buf = Buffer.alloc(4);
-  buf.writeUInt32LE(day);
-  return buf;
-}
-
-function strikeToBuffer(strikePriceLamports: bigint): Buffer {
-  const buf = Buffer.alloc(8);
-  buf.writeBigUInt64LE(strikePriceLamports);
-  return buf;
-}
-
-/** Compute today's 4 PM ET market close unix timestamp (same logic as create-test-markets.ts). */
-function todayMarketCloseUnix(): number {
-  const now = new Date();
-  const etFormatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
-  const parts = etFormatter.formatToParts(now);
-  const getPart = (type: string) => parts.find((p) => p.type === type)?.value ?? "0";
-  const etYear = parseInt(getPart("year"));
-  const etMonth = parseInt(getPart("month")) - 1;
-  const etDay = parseInt(getPart("day"));
-  const etHour = parseInt(getPart("hour"));
-  const etMinute = parseInt(getPart("minute"));
-  const etSecond = parseInt(getPart("second"));
-
-  const etDateStr = `${getPart("year")}-${getPart("month")}-${getPart("day")}T${getPart("hour")}:${getPart("minute")}:${getPart("second")}`;
-  const etDateUtc = new Date(etDateStr + "Z");
-  const diffMs = now.getTime() - etDateUtc.getTime();
-  const etOffsetHours = Math.round(diffMs / (3600 * 1000));
-
-  const closeUtcMs = new Date(
-    Date.UTC(etYear, etMonth, etDay, 16 + etOffsetHours, 0, 0),
-  ).getTime();
-
-  const closeUnix = Math.floor(closeUtcMs / 1000);
-  if (closeUnix <= Math.floor(Date.now() / 1000)) {
-    return closeUnix + 86400;
-  }
-  return closeUnix;
-}
+import { expiryDayBuffer, strikeToBuffer } from "../services/shared/src/pda";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -484,78 +405,65 @@ async function mintPairsForWallets(
 // Step 4: Place orders
 // ---------------------------------------------------------------------------
 
-/**
- * Build a place_order TransactionInstruction.
- *
- * Side semantics (on-chain):
- *   0 = USDC bid (Buy Yes): requires USDC, no Yes/No tokens needed
- *   1 = Yes ask (Sell Yes): requires Yes tokens
- *   2 = No-backed bid (Sell No): requires No tokens
- *
- * Position constraint enforced by the program:
- *   side=0 (USDC bid) requires user No balance == 0 OR user holds no Yes
- *   In practice, after mint_pair the user holds both Yes and No.
- *   To place a USDC bid, the user must not hold No tokens.
- *   To place a Yes ask, user must not hold USDC bids on the same market
- *   (the program checks position constraints via escrow balances).
- *
- * For the load test, we use side=1 (sell Yes) and side=2 (sell No) since
- * wallets hold both Yes and No tokens from mint_pair, which avoids the
- * USDC-bid position constraint (which requires zero No balance).
- * We also place some side=0 bids using wallets that have not minted pairs
- * on that market (they hold no Yes/No), but that requires careful setup.
- *
- * Simplest reliable approach: use side=1 and side=2 for all orders,
- * distributing half-and-half. Both are always valid after mint_pair.
- */
-function buildPlaceOrderIx(
+/** Submit a single order and record the result. */
+async function submitOrder(
+  connection: Connection,
   configPda: PublicKey,
   wallet: Keypair,
-  m: MarketAddresses,
+  walletIndex: number,
+  market: MarketAddresses,
   usdcMint: PublicKey,
   side: number,
   price: number,
   quantity: number,
-): TransactionInstruction {
-  const disc = anchorDiscriminator("place_order");
-  // Data: disc(8) + side(1) + price(1) + quantity(8) + order_type(1) + max_fills(1)
-  const data = Buffer.concat([
-    disc,
-    Buffer.from([side]),
-    Buffer.from([price]),
-    new BN(quantity).toArrayLike(Buffer, "le", 8),
-    Buffer.from([ORDER_TYPE_LIMIT]),
-    Buffer.from([5]), // max_fills
-  ]);
+  results: OrderResult[],
+  orderCount: { value: number },
+  logErrors: boolean,
+): Promise<void> {
+  const ix = buildPlaceOrderIx(configPda, wallet, market, usdcMint, side, price, quantity);
+  const tx = new Transaction().add(ix);
 
-  const walletUsdcAta = getAssociatedTokenAddressSync(usdcMint, wallet.publicKey);
-  const walletYesAta = getAssociatedTokenAddressSync(m.yesMint, wallet.publicKey);
-  const walletNoAta = getAssociatedTokenAddressSync(m.noMint, wallet.publicKey);
+  const startMs = Date.now();
+  try {
+    const sig = await sendAndConfirmTransaction(connection, tx, [wallet], {
+      commitment: "confirmed",
+    });
+    const elapsedMs = Date.now() - startMs;
+    results.push({
+      walletIndex,
+      marketTicker: market.ticker,
+      side,
+      price,
+      quantity,
+      success: true,
+      signature: sig,
+      elapsedMs,
+    });
+    orderCount.value++;
 
-  // Account order matches PlaceOrder struct:
-  //   user, config, market, order_book, usdc_vault, escrow_vault,
-  //   yes_escrow, no_escrow, yes_mint, no_mint,
-  //   user_usdc_ata, user_yes_ata, user_no_ata,
-  //   token_program, system_program
-  const keys = [
-    { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-    { pubkey: configPda, isSigner: false, isWritable: false },
-    { pubkey: m.market, isSigner: false, isWritable: true },
-    { pubkey: m.orderBook, isSigner: false, isWritable: true },
-    { pubkey: m.usdcVault, isSigner: false, isWritable: true },
-    { pubkey: m.escrowVault, isSigner: false, isWritable: true },
-    { pubkey: m.yesEscrow, isSigner: false, isWritable: true },
-    { pubkey: m.noEscrow, isSigner: false, isWritable: true },
-    { pubkey: m.yesMint, isSigner: false, isWritable: true },
-    { pubkey: m.noMint, isSigner: false, isWritable: true },
-    { pubkey: walletUsdcAta, isSigner: false, isWritable: true },
-    { pubkey: walletYesAta, isSigner: false, isWritable: true },
-    { pubkey: walletNoAta, isSigner: false, isWritable: true },
-    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-  ];
+    if (orderCount.value % 10 === 0) {
+      console.log(`  Progress: ${orderCount.value}/${TOTAL_ORDERS} orders placed`);
+    }
+  } catch (err) {
+    const elapsedMs = Date.now() - startMs;
+    const errMsg = err instanceof Error ? err.message : String(err);
+    results.push({
+      walletIndex,
+      marketTicker: market.ticker,
+      side,
+      price,
+      quantity,
+      success: false,
+      error: errMsg,
+      elapsedMs,
+    });
+    orderCount.value++;
+    if (logErrors) {
+      console.error(`  ERROR (wallet ${walletIndex + 1}, ${market.ticker}, side=${side}, price=${price}): ${errMsg.slice(0, 120)}`);
+    }
+  }
 
-  return new TransactionInstruction({ programId: MERIDIAN_PROGRAM_ID, keys, data });
+  await sleep(ORDER_DELAY_MS);
 }
 
 async function placeOrders(
@@ -572,17 +480,9 @@ async function placeOrders(
   );
 
   const results: OrderResult[] = [];
-
-  // Distribute orders: each wallet gets ORDERS_PER_WALLET orders spread
-  // evenly across all 5 markets (4 orders per market per wallet).
-  // Alternate between side=1 (sell Yes) and side=2 (sell No).
-  // Prices are distributed across the 30-70 range to create realistic spread.
-
   const ordersPerMarketPerWallet = Math.floor(ORDERS_PER_WALLET / markets.length);
-  // Quantity: 1 token per order (1_000_000 lamports)
   const orderQuantity = 1_000_000;
-
-  let orderCount = 0;
+  const orderCount = { value: 0 };
 
   for (let wi = 0; wi < wallets.length; wi++) {
     const wallet = wallets[wi];
@@ -591,111 +491,28 @@ async function placeOrders(
       const m = markets[mi];
 
       for (let oi = 0; oi < ordersPerMarketPerWallet; oi++) {
-        // Alternate sides: even = side 1 (Sell Yes), odd = side 2 (Sell No)
         const side = oi % 2 === 0 ? SIDE_YES_ASK : SIDE_NO_BID;
-
-        // Spread prices across 30-70 range
-        // Yes asks should be on the ask side (price ≥ 50 means asking high)
-        // No bids are effectively equivalent to Yes asks at (100 - price)
-        // For variety, distribute prices around the mid
         const priceBase = side === SIDE_YES_ASK ? 55 : 45;
         const priceOffset = (oi * 3 + wi) % 15;
         const price = Math.max(1, Math.min(99, priceBase + priceOffset - 7));
 
-        const ix = buildPlaceOrderIx(configPda, wallet, m, usdcMint, side, price, orderQuantity);
-        const tx = new Transaction().add(ix);
-
-        const startMs = Date.now();
-        try {
-          const sig = await sendAndConfirmTransaction(connection, tx, [wallet], {
-            commitment: "confirmed",
-          });
-          const elapsedMs = Date.now() - startMs;
-          results.push({
-            walletIndex: wi,
-            marketTicker: m.ticker,
-            side,
-            price,
-            quantity: orderQuantity,
-            success: true,
-            signature: sig,
-            elapsedMs,
-          });
-          orderCount++;
-
-          if (orderCount % 10 === 0) {
-            console.log(`  Progress: ${orderCount}/${TOTAL_ORDERS} orders placed`);
-          }
-        } catch (err) {
-          const elapsedMs = Date.now() - startMs;
-          const errMsg = err instanceof Error ? err.message : String(err);
-          results.push({
-            walletIndex: wi,
-            marketTicker: m.ticker,
-            side,
-            price,
-            quantity: orderQuantity,
-            success: false,
-            error: errMsg,
-            elapsedMs,
-          });
-          orderCount++;
-          console.error(`  ERROR (wallet ${wi + 1}, ${m.ticker}, side=${side}, price=${price}): ${errMsg.slice(0, 120)}`);
-        }
-
-        // Throttle to avoid RPC rate limiting
-        await sleep(ORDER_DELAY_MS);
+        await submitOrder(
+          connection, configPda, wallet, wi, m, usdcMint,
+          side, price, orderQuantity, results, orderCount, true,
+        );
       }
     }
 
-    // Handle any remaining orders beyond ordersPerMarketPerWallet * markets.length
-    // (e.g., if ORDERS_PER_WALLET is not evenly divisible by markets.length)
+    // Handle remainder orders if ORDERS_PER_WALLET not evenly divisible by market count
     const extraOrders = ORDERS_PER_WALLET - ordersPerMarketPerWallet * markets.length;
     for (let oi = 0; oi < extraOrders; oi++) {
       const m = markets[oi % markets.length];
-      const side = SIDE_YES_ASK;
       const price = 50 + oi;
 
-      const ix = buildPlaceOrderIx(configPda, wallet, m, usdcMint, side, price, orderQuantity);
-      const tx = new Transaction().add(ix);
-
-      const startMs = Date.now();
-      try {
-        const sig = await sendAndConfirmTransaction(connection, tx, [wallet], {
-          commitment: "confirmed",
-        });
-        const elapsedMs = Date.now() - startMs;
-        results.push({
-          walletIndex: wi,
-          marketTicker: m.ticker,
-          side,
-          price,
-          quantity: orderQuantity,
-          success: true,
-          signature: sig,
-          elapsedMs,
-        });
-        orderCount++;
-        if (orderCount % 10 === 0) {
-          console.log(`  Progress: ${orderCount}/${TOTAL_ORDERS} orders placed`);
-        }
-      } catch (err) {
-        const elapsedMs = Date.now() - startMs;
-        const errMsg = err instanceof Error ? err.message : String(err);
-        results.push({
-          walletIndex: wi,
-          marketTicker: m.ticker,
-          side,
-          price,
-          quantity: orderQuantity,
-          success: false,
-          error: errMsg,
-          elapsedMs,
-        });
-        orderCount++;
-      }
-
-      await sleep(ORDER_DELAY_MS);
+      await submitOrder(
+        connection, configPda, wallet, wi, m, usdcMint,
+        SIDE_YES_ASK, price, orderQuantity, results, orderCount, false,
+      );
     }
   }
 
@@ -845,7 +662,7 @@ async function main(): Promise<void> {
   console.log(`\nAdmin: ${admin.publicKey.toBase58()}`);
 
   // ── Read USDC mint and faucet from .env ────────────────────────────────────
-  const env = readEnv();
+  const env = readEnv(ENV_PATH);
 
   if (!env["USDC_MINT"]) {
     throw new Error("USDC_MINT not found in .env. Run scripts/create-mock-usdc.ts first.");

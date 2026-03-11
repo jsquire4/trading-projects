@@ -1,3 +1,4 @@
+// SYNC: services/shared/src/volatility.ts — keep identical
 /**
  * Historical volatility from OHLCV data — pure math, no external dependencies.
  *

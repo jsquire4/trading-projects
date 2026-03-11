@@ -146,74 +146,108 @@ export function parseEventsFromLogs(
   return events;
 }
 
-let subscriptionId: number | null = null;
+export interface LiveListener {
+  start(): void;
+  stop(): Promise<void>;
+}
+
+/**
+ * Create a live event listener instance.
+ * Encapsulates subscription state in a closure for multi-instance support.
+ */
+export function createLiveListener(
+  connection: Connection,
+  programId: PublicKey,
+  idl: Idl,
+): LiveListener {
+  const coder = new BorshCoder(idl);
+  const programIdStr = programId.toBase58();
+  let subscriptionId: number | null = null;
+
+  return {
+    start(): void {
+      if (subscriptionId !== null) {
+        log.warn("Live listener already running, ignoring duplicate start");
+        return;
+      }
+
+      log.info("Starting live event listener", { programId: programIdStr });
+
+      subscriptionId = connection.onLogs(
+        programId,
+        (logResult: Logs, ctx: Context) => {
+          try {
+            if (logResult.err) return;
+
+            const { signature, logs: logMessages } = logResult;
+            const slot = ctx.slot;
+
+            if (signatureExists(signature)) return;
+
+            const events = parseEventsFromLogs(coder, logMessages, programIdStr);
+
+            if (events.length === 0) return;
+
+            for (const event of events) {
+              insertEvent({
+                type: event.type,
+                market: event.market,
+                data: JSON.stringify(event.data),
+                signature,
+                slot,
+                timestamp: event.timestamp,
+              });
+            }
+
+            upsertCheckpoint(signature, slot);
+
+            log.info(`Indexed ${events.length} event(s) from live tx`, {
+              signature: signature.slice(0, 16) + "...",
+              slot,
+              types: events.map((e) => e.type),
+            });
+          } catch (err) {
+            log.error("Error processing live log event", {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        },
+        "confirmed",
+      );
+
+      log.info("Live listener subscribed", { subscriptionId });
+    },
+
+    async stop(): Promise<void> {
+      if (subscriptionId !== null) {
+        await connection.removeOnLogsListener(subscriptionId);
+        log.info("Live listener stopped", { subscriptionId });
+        subscriptionId = null;
+      }
+    },
+  };
+}
+
+/**
+ * Convenience wrappers for backward compatibility.
+ * These use a module-level singleton — prefer createLiveListener for new code.
+ */
+let _defaultListener: LiveListener | null = null;
 
 export function startLiveListener(
   connection: Connection,
   programId: PublicKey,
   idl: Idl,
 ): void {
-  const coder = new BorshCoder(idl);
-  const programIdStr = programId.toBase58();
-
-  if (subscriptionId !== null) {
-    log.warn("Live listener already running, ignoring duplicate start");
-    return;
-  }
-
-  log.info("Starting live event listener", { programId: programIdStr });
-
-  subscriptionId = connection.onLogs(
-    programId,
-    (logResult: Logs, ctx: Context) => {
-      try {
-        if (logResult.err) return;
-
-        const { signature, logs: logMessages } = logResult;
-        const slot = ctx.slot;
-
-        if (signatureExists(signature)) return;
-
-        const events = parseEventsFromLogs(coder, logMessages, programIdStr);
-
-        if (events.length === 0) return;
-
-        for (const event of events) {
-          insertEvent({
-            type: event.type,
-            market: event.market,
-            data: JSON.stringify(event.data),
-            signature,
-            slot,
-            timestamp: event.timestamp,
-          });
-        }
-
-        upsertCheckpoint(signature, slot);
-
-        log.info(`Indexed ${events.length} event(s) from live tx`, {
-          signature: signature.slice(0, 16) + "...",
-          slot,
-          types: events.map((e) => e.type),
-        });
-      } catch (err) {
-        log.error("Error processing live log event", {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    },
-    "confirmed",
-  );
-
-  log.info("Live listener subscribed", { subscriptionId });
+  _defaultListener = createLiveListener(connection, programId, idl);
+  _defaultListener.start();
 }
 
 export async function stopLiveListener(
   connection: Connection,
 ): Promise<void> {
-  if (subscriptionId !== null) {
-    await connection.removeOnLogsListener(subscriptionId);
-    log.info("Live listener stopped", { subscriptionId });
-    subscriptionId = null;
+  if (_defaultListener) {
+    await _defaultListener.stop();
+    _defaultListener = null;
   }
 }

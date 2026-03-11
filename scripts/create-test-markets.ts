@@ -20,10 +20,18 @@ import {
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { createHash } from "crypto";
 import BN from "bn.js";
-import * as fs from "fs";
 import * as path from "path";
+
+import {
+  loadKeypair,
+  readEnv,
+  padTicker,
+  anchorDiscriminator,
+  todayMarketCloseUnix,
+  MERIDIAN_PROGRAM_ID,
+  MOCK_ORACLE_PROGRAM_ID,
+} from "./shared";
 
 const DEVNET_URL = "https://api.devnet.solana.com";
 const ENV_PATH = path.resolve(__dirname, "..", ".env");
@@ -31,104 +39,6 @@ const ADMIN_KEYPAIR_PATH = path.resolve(
   process.env.HOME || "~",
   ".config/solana/id.json"
 );
-
-const MERIDIAN_PROGRAM_ID = new PublicKey("7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth");
-const MOCK_ORACLE_PROGRAM_ID = new PublicKey("HJpHCfz1mqFFNa4ANfU8mMAZ5WoNRfo7EV1sZfEV2vZ");
-
-function loadKeypair(filePath: string): Keypair {
-  const raw = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-  return Keypair.fromSecretKey(Uint8Array.from(raw));
-}
-
-function readEnv(): Record<string, string> {
-  if (!fs.existsSync(ENV_PATH)) return {};
-  const lines = fs.readFileSync(ENV_PATH, "utf-8").split("\n");
-  const env: Record<string, string> = {};
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eqIdx = trimmed.indexOf("=");
-    if (eqIdx === -1) continue;
-    env[trimmed.slice(0, eqIdx)] = trimmed.slice(eqIdx + 1);
-  }
-  return env;
-}
-
-/** Pad a ticker string to exactly 8 bytes (zero-padded). */
-function tickerBytes(ticker: string): Buffer {
-  const buf = Buffer.alloc(8, 0);
-  buf.write(ticker, "utf-8");
-  return buf;
-}
-
-/** Compute Anchor instruction discriminator. */
-function anchorDiscriminator(instructionName: string): Buffer {
-  const hash = createHash("sha256")
-    .update(`global:${instructionName}`)
-    .digest();
-  return hash.subarray(0, 8);
-}
-
-/**
- * Get today's 4:00 PM ET as a Unix timestamp.
- * ET = UTC-5 (EST) or UTC-4 (EDT). We detect based on Date offset.
- */
-function todayMarketCloseUnix(): number {
-  const now = new Date();
-  // Create a date for today in ET
-  const etOffset = now.toLocaleString("en-US", { timeZone: "America/New_York" });
-  const etNow = new Date(etOffset);
-
-  // Build 4:00 PM ET today
-  const closeET = new Date(etNow);
-  closeET.setHours(16, 0, 0, 0);
-
-  // Convert back: figure out the UTC offset for ET today
-  const utcNow = now.getTime();
-  const etNowMs = etNow.getTime();
-  // This gives us the local-to-ET offset from the string parse, but we need
-  // to be precise. Use a direct approach:
-  const jan = new Date(now.getFullYear(), 0, 1);
-  const jul = new Date(now.getFullYear(), 6, 1);
-  const stdOffset = Math.max(jan.getTimezoneOffset(), jul.getTimezoneOffset());
-  // We need ET offset, not local offset. Use Intl to get it.
-  const etFormatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
-  const parts = etFormatter.formatToParts(now);
-  const getPart = (type: string) => parts.find((p) => p.type === type)?.value || "0";
-  const etYear = parseInt(getPart("year"));
-  const etMonth = parseInt(getPart("month")) - 1;
-  const etDay = parseInt(getPart("day"));
-
-  // Build 4PM ET as UTC by adding the ET-to-UTC offset
-  // ET is either UTC-5 or UTC-4. Determine by comparing:
-  const etDateStr = `${getPart("year")}-${getPart("month")}-${getPart("day")}T${getPart("hour")}:${getPart("minute")}:${getPart("second")}`;
-  const etDateUtc = new Date(etDateStr + "Z"); // treat as UTC
-  const diffMs = now.getTime() - etDateUtc.getTime();
-  // diffMs is the ET-to-UTC offset in ms (positive means ET is behind UTC)
-  // For EST: diffMs ≈ 5*3600*1000, for EDT: diffMs ≈ 4*3600*1000
-  const etOffsetHours = Math.round(diffMs / (3600 * 1000));
-
-  // 4PM ET in UTC
-  const closeUtcMs = new Date(
-    Date.UTC(etYear, etMonth, etDay, 16 + etOffsetHours, 0, 0)
-  ).getTime();
-
-  // If market close is already past, use tomorrow
-  const closeUnix = Math.floor(closeUtcMs / 1000);
-  if (closeUnix <= Math.floor(Date.now() / 1000)) {
-    return closeUnix + 86400; // tomorrow same time
-  }
-  return closeUnix;
-}
 
 /** Compute expiry_day as floor(unix / 86400) — Unix day number, matching Rust PDA seeds. */
 function expiryDayFromUnix(unix: number): number {
@@ -146,7 +56,7 @@ function sleep(ms: number): Promise<void> {
   console.log(`Admin: ${admin.publicKey.toBase58()}`);
 
   // ── Read USDC_MINT from .env ───────────────────────────────────────────────
-  const env = readEnv();
+  const env = readEnv(ENV_PATH);
   if (!env["USDC_MINT"]) {
     console.error("ERROR: USDC_MINT not found in .env. Run create-mock-usdc.ts first.");
     process.exit(1);
@@ -156,7 +66,7 @@ function sleep(ms: number): Promise<void> {
 
   // ── Market parameters ──────────────────────────────────────────────────────
   const ticker = "AAPL";
-  const tBytes = tickerBytes(ticker);
+  const tBytes = padTicker(ticker);
   const strikePrice = new BN(200_000_000);     // $200.00
   const previousClose = new BN(198_000_000);   // $198.00
   const marketCloseUnix = todayMarketCloseUnix();

@@ -28,11 +28,13 @@ describe("Market Creation", () => {
   const TICKER = "AAPL";
   const STRIKE_PRICE = 200_000_000; // $200.00
   const PREVIOUS_CLOSE = 195_000_000; // $195.00
-  // Far-future close time so it always passes the > clock check
-  const MARKET_CLOSE_UNIX = Math.floor(Date.now() / 1000) + 86400 * 30;
+  let MARKET_CLOSE_UNIX: number;
 
   before(async () => {
     ctx = await setupBankrun();
+    // Use bankrun clock instead of host wall clock for consistency
+    const clock = await ctx.context.banksClient.getClock();
+    MARKET_CLOSE_UNIX = Number(clock.unixTimestamp) + 86400 * 30;
     usdcMint = await createMockUsdc(ctx.context, ctx.admin);
     await initializeConfig(ctx.context, ctx.admin, usdcMint, MOCK_ORACLE_PROGRAM_ID);
     [config] = findGlobalConfig();

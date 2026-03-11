@@ -41,11 +41,11 @@ describe("normalCdf", () => {
   });
 
   it("approaches 0 for very negative x", () => {
-    expect(normalCdf(-8)).toBeLessThan(1e-10);
+    expect(normalCdf(-10)).toBe(0);
   });
 
   it("approaches 1 for very positive x", () => {
-    expect(normalCdf(8)).toBeGreaterThan(1 - 1e-10);
+    expect(normalCdf(10)).toBe(1);
   });
 });
 

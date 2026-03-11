@@ -68,19 +68,7 @@ pub fn handle_crank_cancel<'info>(
 
     // 4. Build market PDA signer seeds
     let market = &ctx.accounts.market;
-    let strike_price_bytes = market.strike_price.to_le_bytes();
-    let expiry_day = (market.market_close_unix / 86400) as u32;
-    let expiry_day_bytes = expiry_day.to_le_bytes();
-    let bump_slice = &[market.bump];
-
-    let seeds: &[&[u8]] = &[
-        StrikeMarket::SEED_PREFIX,
-        market.ticker.as_ref(),
-        &strike_price_bytes,
-        &expiry_day_bytes,
-        bump_slice,
-    ];
-    let signer_seeds = &[seeds];
+    market_signer_seeds!(market => strike_bytes, expiry_bytes, bump_byte, seeds, signer_seeds);
 
     let tp = ctx.accounts.token_program.to_account_info();
     let market_ai = ctx.accounts.market.to_account_info();

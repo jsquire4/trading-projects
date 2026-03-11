@@ -78,5 +78,7 @@ export function useCostBasis() {
     return map;
   }, [events, publicKey]);
 
-  return { costBasis, isLoading };
+  const isComplete = (events?.length ?? 0) < 1000;
+
+  return { costBasis, isLoading, isComplete };
 }

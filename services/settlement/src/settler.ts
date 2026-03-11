@@ -62,13 +62,13 @@ function isRetryableOracleError(err: unknown): boolean {
     return true;
   }
 
-  // Fallback: check the message string
+  // Fallback: check the message string using the same constants
   const msg = String((e as any)?.message ?? (e as any)?.msg ?? e);
   return (
     msg.includes("OracleStale") ||
     msg.includes("OracleConfidenceTooWide") ||
-    msg.includes("6040") ||
-    msg.includes("6041")
+    msg.includes(String(ORACLE_STALE_CODE)) ||
+    msg.includes(String(ORACLE_CONFIDENCE_TOO_WIDE_CODE))
   );
 }
 

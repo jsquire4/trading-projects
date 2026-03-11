@@ -5,56 +5,21 @@
 // then streams real-time prices from Tradier and updates mock_oracle feeds.
 // ---------------------------------------------------------------------------
 
-import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import { Program, AnchorProvider, Wallet } from "@coral-xyz/anchor";
+import { Connection, Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { createLogger } from "../../shared/src/alerting.js";
+import { findGlobalConfig } from "../../shared/src/pda.js";
 import { startFeeder, type FeederHandle } from "./feeder.js";
+
+import type { Meridian } from "../../shared/src/idl/meridian.js";
+import MeridianIDL from "../../shared/src/idl/meridian.json" with { type: "json" };
 
 const log = createLogger("oracle-feeder");
 
 // ---------------------------------------------------------------------------
-// Program IDs
-// ---------------------------------------------------------------------------
-
-const MERIDIAN_PROGRAM_ID = new PublicKey(
-  "7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth",
-);
-
-// ---------------------------------------------------------------------------
-// Config constants for reading GlobalConfig on-chain
-// ---------------------------------------------------------------------------
-
-// GlobalConfig account discriminator (first 8 bytes)
-const GLOBAL_CONFIG_DISCRIMINATOR = Buffer.from([
-  149, 8, 156, 202, 160, 252, 176, 217,
-]);
-
-// On-chain layout offsets (after 8-byte discriminator):
-//   admin:                Pubkey  (32)  offset  8
-//   usdc_mint:            Pubkey  (32)  offset 40
-//   oracle_program:       Pubkey  (32)  offset 72
-//   staleness_threshold:  u64    (8)   offset 104
-//   settlement_staleness: u64    (8)   offset 112
-//   confidence_bps:       u64    (8)   offset 120
-//   is_paused:            bool   (1)   offset 128
-//   oracle_type:          u8     (1)   offset 129
-//   tickers:              [u8;8]*7 (56) offset 130
-//   ticker_count:         u8     (1)   offset 186
-
-const TICKERS_OFFSET = 130; // 8 disc + 32+32+32+8+8+8+1+1
-const TICKER_COUNT_OFFSET = 186; // 8 disc + 32+32+32+8+8+8+1+1+56
-const TICKER_SIZE = 8;
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function findGlobalConfig(): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("config")],
-    MERIDIAN_PROGRAM_ID,
-  );
-}
 
 function loadKeypair(): Keypair {
   const encoded = process.env.FEEDER_KEYPAIR;
@@ -67,42 +32,41 @@ function loadKeypair(): Keypair {
   return Keypair.fromSecretKey(secretKey);
 }
 
-/** Read active tickers from on-chain GlobalConfig. */
+/** Read active tickers from on-chain GlobalConfig via Anchor IDL. */
 async function readTickersFromChain(
   connection: Connection,
 ): Promise<string[]> {
   const [configPda] = findGlobalConfig();
   log.info(`Reading GlobalConfig at ${configPda.toBase58()}`);
 
-  const accountInfo = await connection.getAccountInfo(configPda);
-  if (!accountInfo) {
-    throw new Error(
-      `GlobalConfig account not found at ${configPda.toBase58()}. Has the program been initialized?`,
-    );
-  }
+  // Build a read-only Anchor program (no signer needed for fetch)
+  const dummyKeypair = Keypair.generate();
+  const wallet = new Wallet(dummyKeypair);
+  const provider = new AnchorProvider(connection, wallet, {
+    commitment: "confirmed",
+  });
+  const program = new Program<Meridian>(
+    MeridianIDL as unknown as Meridian,
+    provider,
+  );
 
-  const data = Buffer.from(accountInfo.data);
+  const globalConfig = await (program.account as any).globalConfig.fetch(
+    configPda,
+  );
 
-  // Verify discriminator
-  const disc = data.subarray(0, 8);
-  if (!disc.equals(GLOBAL_CONFIG_DISCRIMINATOR)) {
-    throw new Error("GlobalConfig discriminator mismatch — wrong account?");
-  }
-
-  const tickerCount = data.readUInt8(TICKER_COUNT_OFFSET);
+  const tickerCount = (globalConfig.tickerCount as number) ?? 0;
   if (tickerCount === 0 || tickerCount > 7) {
     throw new Error(`Unexpected ticker_count: ${tickerCount}`);
   }
 
+  const tickerArrays = globalConfig.tickers as number[][];
   const tickers: string[] = [];
   for (let i = 0; i < tickerCount; i++) {
-    const start = TICKERS_OFFSET + i * TICKER_SIZE;
-    const raw = data.subarray(start, start + TICKER_SIZE);
-    // Strip zero-padding
-    const end = raw.indexOf(0);
-    const ticker = raw.subarray(0, end === -1 ? TICKER_SIZE : end).toString("utf-8");
-    if (ticker.length > 0) {
-      tickers.push(ticker);
+    const t = Buffer.from(tickerArrays[i])
+      .toString("utf-8")
+      .replace(/\0+$/, "");
+    if (t.length > 0) {
+      tickers.push(t);
     }
   }
 

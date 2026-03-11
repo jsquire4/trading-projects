@@ -64,10 +64,8 @@ export function binaryCallPrice(
   r: number = 0.05,
 ): number {
   // Edge cases
-  if (K <= 0) return 0.01;
-  if (S <= 0) return 0.01;
-  if (T <= 0) return S >= K ? 0.99 : 0.01;
-  if (sigma <= 0) return S >= K ? 0.99 : 0.01;
+  if (K <= 0 || S <= 0) return 0.0;
+  if (T <= 0 || sigma <= 0) return S >= K ? 1.0 : 0.0;
 
   const d2 =
     (Math.log(S / K) + (r - 0.5 * sigma * sigma) * T) /
@@ -75,8 +73,8 @@ export function binaryCallPrice(
 
   const prob = Math.exp(-r * T) * normalCdf(d2);
 
-  // Clamp to [0.01, 0.99]
-  return Math.max(0.01, Math.min(0.99, prob));
+  // Clamp to [0, 1]
+  return Math.max(0, Math.min(1, prob));
 }
 
 /**

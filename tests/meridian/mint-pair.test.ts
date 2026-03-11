@@ -17,6 +17,8 @@ import {
   MarketAccounts,
   findGlobalConfig,
   MOCK_ORACLE_PROGRAM_ID,
+  createFundedUser,
+  executeMintPair,
 } from "../helpers";
 import { buildMintPairIx } from "../helpers/instructions";
 import { BankrunProvider } from "anchor-bankrun";
@@ -60,72 +62,20 @@ describe("Mint Pair", () => {
     );
   });
 
-  /** Helper: create a funded user with a USDC ATA. */
-  async function createFundedUser(
+  /** Helper: create a funded user with a USDC ATA (delegates to shared helper). */
+  async function fundUser(
     usdcAmount: number,
   ): Promise<{ user: Keypair; userUsdcAta: PublicKey }> {
-    const user = Keypair.generate();
-
-    // Fund the user with SOL via context
-    ctx.context.setAccount(user.publicKey, {
-      lamports: 10_000_000_000, // 10 SOL
-      data: Buffer.alloc(0),
-      owner: PublicKey.default,
-      executable: false,
-    });
-
-    // Create USDC ATA for user (raw instruction for bankrun compatibility)
-    const userUsdcAta = await createAta(
-      ctx.context,
-      ctx.admin,
-      usdcMint,
-      user.publicKey,
-    );
-
-    if (usdcAmount > 0) {
-      await mintTestUsdc(
-        ctx.context,
-        usdcMint,
-        ctx.admin,
-        userUsdcAta,
-        usdcAmount,
-      );
-    }
-
-    return { user, userUsdcAta };
+    return createFundedUser(ctx.context, ctx.admin, usdcMint, usdcAmount);
   }
 
-  /** Helper: build and send a mint_pair transaction. */
-  async function executeMintPair(
+  /** Helper: build and send a mint_pair transaction (delegates to shared helper). */
+  async function mintPair(
     user: Keypair,
     userUsdcAta: PublicKey,
     quantity: number,
   ): Promise<void> {
-    const provider = new BankrunProvider(ctx.context);
-    const userYesAta = getAssociatedTokenAddressSync(
-      marketAccounts.yesMint,
-      user.publicKey,
-    );
-    const userNoAta = getAssociatedTokenAddressSync(
-      marketAccounts.noMint,
-      user.publicKey,
-    );
-
-    const ix = buildMintPairIx({
-      user: user.publicKey,
-      config,
-      market: marketAccounts.market,
-      yesMint: marketAccounts.yesMint,
-      noMint: marketAccounts.noMint,
-      userUsdcAta,
-      userYesAta,
-      userNoAta,
-      usdcVault: marketAccounts.usdcVault,
-      quantity: new BN(quantity),
-    });
-
-    const tx = new Transaction().add(ix);
-    await provider.sendAndConfirm!(tx, [user]);
+    return executeMintPair(ctx.context, user, userUsdcAta, config, marketAccounts, quantity);
   }
 
   /** Helper: read a token account balance. */
@@ -150,12 +100,12 @@ describe("Mint Pair", () => {
   it("mints a yes/no pair and deposits USDC to vault", async () => {
     const quantity = 5_000_000; // 5 tokens
     const initialUsdc = 100_000_000; // 100 USDC
-    const { user, userUsdcAta } = await createFundedUser(initialUsdc);
+    const { user, userUsdcAta } = await fundUser(initialUsdc);
 
     const vaultBefore = await getTokenBalance(marketAccounts.usdcVault);
     const totalMintedBefore = await getTotalMinted();
 
-    await executeMintPair(user, userUsdcAta, quantity);
+    await mintPair(user, userUsdcAta, quantity);
 
     const userYesAta = getAssociatedTokenAddressSync(
       marketAccounts.yesMint,
@@ -208,7 +158,7 @@ describe("Mint Pair", () => {
       usdcMint,
     );
 
-    const { user, userUsdcAta } = await createFundedUser(500_000_000);
+    const { user, userUsdcAta } = await fundUser(500_000_000);
 
     const amounts = [3_000_000, 7_000_000, 2_000_000];
     let cumulativeMinted = 0;
@@ -224,7 +174,7 @@ describe("Mint Pair", () => {
     // Use separate users for each mint to satisfy position constraint
     let totalVaulted = 0;
     for (const amount of amounts) {
-      const minter = await createFundedUser(amount * 2);
+      const minter = await fundUser(amount * 2);
       const provider = new BankrunProvider(ctx.context);
       const userYesAta = getAssociatedTokenAddressSync(
         ma2.yesMint,
@@ -264,7 +214,7 @@ describe("Mint Pair", () => {
 
   it("creates ATAs via init_if_needed", async () => {
     // Fresh user with no existing Yes/No ATAs — mint_pair should create them
-    const { user, userUsdcAta } = await createFundedUser(50_000_000);
+    const { user, userUsdcAta } = await fundUser(50_000_000);
 
     const userYesAta = getAssociatedTokenAddressSync(
       marketAccounts.yesMint,
@@ -282,7 +232,7 @@ describe("Mint Pair", () => {
     expect(noBefore).to.be.null;
 
     // Mint pair — should create both ATAs automatically
-    await executeMintPair(user, userUsdcAta, 1_000_000);
+    await mintPair(user, userUsdcAta, 1_000_000);
 
     // Verify ATAs now exist with tokens
     const yesAfter = await getTokenBalance(userYesAta);
@@ -292,10 +242,10 @@ describe("Mint Pair", () => {
   });
 
   it("rejects quantity below minimum", async () => {
-    const { user, userUsdcAta } = await createFundedUser(50_000_000);
+    const { user, userUsdcAta } = await fundUser(50_000_000);
 
     try {
-      await executeMintPair(user, userUsdcAta, 999_999);
+      await mintPair(user, userUsdcAta, 999_999);
       expect.fail("Expected transaction to fail with InvalidQuantity");
     } catch (err: any) {
       // Anchor error code 6053 = InvalidQuantity (0x17a5)
@@ -305,10 +255,10 @@ describe("Mint Pair", () => {
   });
 
   it("rejects insufficient USDC balance", async () => {
-    const { user, userUsdcAta } = await createFundedUser(0); // zero USDC
+    const { user, userUsdcAta } = await fundUser(0); // zero USDC
 
     try {
-      await executeMintPair(user, userUsdcAta, 1_000_000);
+      await mintPair(user, userUsdcAta, 1_000_000);
       expect.fail("Expected transaction to fail with InsufficientBalance");
     } catch (err: any) {
       // Anchor error code 6050 = InsufficientBalance (0x17a2)
@@ -318,8 +268,8 @@ describe("Mint Pair", () => {
   });
 
   it("yes supply equals no supply", async () => {
-    const { user, userUsdcAta } = await createFundedUser(50_000_000);
-    await executeMintPair(user, userUsdcAta, 3_000_000);
+    const { user, userUsdcAta } = await fundUser(50_000_000);
+    await mintPair(user, userUsdcAta, 3_000_000);
 
     // Read mint supply from the mint accounts
     const yesMintAcct = await ctx.context.banksClient.getAccount(

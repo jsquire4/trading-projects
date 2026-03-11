@@ -99,15 +99,12 @@ function buildCalibration(settlements: SettlementData[]): CalibrationBucket[] {
 
   for (const s of settlements) {
     if (s.strikePrice <= 0) continue;
-    // Binary option: Yes wins when settlementPrice >= strikePrice.
-    // Implied probability = how likely Yes was to win, approximated by
-    // how far above/below strike the settlement price landed.
-    // ratio > 1 means settlement was above strike (Yes territory),
-    // ratio < 1 means below strike (No territory). Clamp to [0, 1].
+    // NOTE: True implied probability requires pre-settlement Yes token prices,
+    // which are not yet collected. As a proxy, we bucket by the distance of
+    // settlement price from strike, mapped to [0, 1]. This measures "how
+    // decisive the outcome was", NOT the market's ex-ante belief. The chart
+    // axis is labeled "Distance from Strike (%)" to avoid misleading users.
     const aboveStrike = s.settlementPrice >= s.strikePrice;
-    // Use distance from strike as a probability-like metric:
-    // If above strike: ratio = 0.5 + 0.5 * min(1, (settlementPrice - strikePrice) / strikePrice)
-    // If below strike: ratio = 0.5 - 0.5 * min(1, (strikePrice - settlementPrice) / strikePrice)
     const distFrac = Math.min(1, Math.abs(s.settlementPrice - s.strikePrice) / s.strikePrice);
     const ratio = aboveStrike ? 0.5 + 0.5 * distFrac : 0.5 - 0.5 * distFrac;
     const idx = toBucket(ratio);
@@ -268,10 +265,10 @@ export function SettlementAnalytics() {
       <section>
         <h3 className="text-sm font-medium text-white/70 mb-3">Calibration Chart</h3>
         <p className="text-xs text-white/40 mb-4">
-          Buckets by implied probability (settlement/strike ratio). Diagonal line = perfect calibration.
+          Buckets by distance from strike (settlement/strike ratio). Diagonal line = perfect calibration.
           <br />
-          <em>Note: Uses settlement outcome data as a proxy for implied probability. True calibration
-          requires pre-settlement Yes token prices, which are not yet collected.</em>
+          <em>Note: Uses settlement-to-strike distance as a proxy, not true implied probability.
+          True calibration requires pre-settlement Yes token fill prices, which are not yet collected.</em>
         </p>
         <div className="rounded-lg border border-white/10 bg-white/5 p-4">
           <ResponsiveContainer width="100%" height={300}>
@@ -369,7 +366,7 @@ export function SettlementAnalytics() {
           <StatCard
             label="Overall Accuracy"
             value={formatPercent(accuracy.accuracy)}
-            sub="Implied favorite = settlement/strike ratio > 50%"
+            sub="Favorite = settlement price on same side as strike"
           />
         </div>
       </section>

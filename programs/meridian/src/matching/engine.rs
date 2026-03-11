@@ -10,6 +10,11 @@
 use anchor_lang::prelude::*;
 use crate::state::order_book::*;
 
+/// The total price in cents for a Yes+No pair (always $1.00 = 100 cents).
+/// Used in merge/burn matching to compute the price complement:
+/// if a No-backed bid is at price P, the maximum Yes ask it can match is (MERGE_TOTAL_CENTS - P).
+const MERGE_TOTAL_CENTS: u8 = 100;
+
 /// Result of a single fill during matching
 #[derive(Clone, Debug)]
 pub struct Fill {
@@ -138,37 +143,10 @@ fn match_against_asks(
 }
 
 /// Match a No-backed bid against Yes asks (merge/burn).
-/// For merge/burn: No price + Yes price must cover $1.
-/// No-backed bid at price P means "I'll sell No for $(1-P/100)" which means
-/// the taker is willing to accept any Yes ask at price <= (100 - P).
-/// Wait — let me re-read the spec...
 ///
-/// Actually per the build plan: No-backed bid at price P means the No holder
-/// is willing to pay up to P cents for the merge. A Yes ask at price Q means
-/// the Yes holder wants at least Q cents. Fill when: Q <= (100 - P)?
-///
-/// No — per the build plan example: "No-backed bid at price 45 ($0.45 for No =
-/// willing to pay up to $0.55 for the merge)". The fill price is the resting
-/// order's price (the Yes ask). The No seller receives $(1 - fill_price/100).
-///
-/// So matching condition for merge/burn: the No-backed bid price represents
-/// the *complement* price the No seller is willing to accept. No bid at 45
-/// means willing to accept $0.45 for No, so Yes can cost up to $0.55.
-/// Fill when: Yes ask price <= (100 - No bid price).
-///
-/// Actually re-reading more carefully: "Incoming No-backed bid at price 45
-/// ($0.45 for No = willing to pay up to $0.55 for the merge)." This means:
-/// - No bid price 45 → No seller gets $0.45 → willing to merge if Yes ask ≤ $0.55
-/// - Matching condition: Yes ask price ≤ (100 - No bid price)
-///
-/// Wait, but the example says fill price = 60 (resting Yes ask). And No seller
-/// gets $0.40 = $(1.00 - 0.60). So the No bid price of 45 means "willing to
-/// accept as little as $0.45 for my No tokens." The fill price is the resting
-/// ask's price, and No seller actually gets $(1.00 - fill_price).
-///
-/// So matching: No bid at price P, Yes ask at price Q.
-/// No seller gets $(1 - Q/100). They want at least P/100.
-/// So: (1 - Q/100) >= P/100 → Q + P <= 100 → Q <= 100 - P.
+/// Matching condition: Yes ask price Q + No bid price P <= 100.
+/// No seller gets $(P/100), Yes seller gets $((100-P)/100).
+/// Fill price is the resting order's price.
 fn match_against_asks_merge(
     book: &mut OrderBook,
     taker_side: u8,
@@ -177,7 +155,7 @@ fn match_against_asks_merge(
     max_fills: u8,
 ) {
     // Max Yes ask price that this No bid can match against
-    let max_yes_ask = 100u8.saturating_sub(no_bid_price);
+    let max_yes_ask = MERGE_TOTAL_CENTS.saturating_sub(no_bid_price);
 
     // Walk from price level 0 (price=1) upward
     for level_idx in 0..MAX_PRICE_LEVELS {
@@ -199,8 +177,11 @@ fn match_against_asks_merge(
     }
 }
 
-/// Match a Yes ask against bids (USDC bids and No-backed bids).
-/// Walks from highest bid price downward.
+/// Match a Yes ask against both USDC bids and No-backed bids.
+///
+/// For USDC bids: fill when bid_price >= ask_price (standard swap).
+/// For No-backed bids: fill when (100 - no_bid_price) >= ask_price (merge/burn).
+/// Walks from highest bid price downward (price-time priority).
 fn match_against_bids(
     book: &mut OrderBook,
     taker_side: u8,
@@ -231,62 +212,9 @@ fn match_against_bids(
             );
         }
 
-        // Check No-backed bids — a No bid at this price level means:
-        // the No holder wants at least bid_price cents for their No.
-        // The Yes seller gets the fill price. Fill price = ?
-        // For No-backed bid × Yes ask merge: the Yes ask is the taker.
-        // Fill price should be... the resting order's price.
-        // No-backed bid at price P: the resting order's price is P.
-        // The Yes seller (taker) gets P cents. The No seller (maker) gets (100-P) cents.
-        // So fill when: taker's min ask price <= P... wait that doesn't make sense.
-        //
-        // Let me reconsider. For a No-backed bid at price P:
-        // P represents the "effective Yes price" — the No seller sees the Yes ask side.
-        // Actually, the No-backed bid IS on the bid side. Its price represents
-        // what the No holder values their No position at.
-        //
-        // When matching Yes ask (taker, min_price) against No-backed bid (maker, price P):
-        // The Yes ask taker wants at least min_price cents for their Yes.
-        // In a merge/burn, both tokens are burned and $1 released.
-        // Yes seller gets... the fill price (resting order's terms).
-        //
-        // For No bid at price P: fill price = P. But wait — in the build plan example,
-        // fill price was the resting Yes ask price, not the No bid price.
-        //
-        // Hmm, the example had No bid as the TAKER. Let me think about the reverse.
-        // Here, Yes ask is the taker, No bid is the maker (resting).
-        // Fill price = resting order's price = the No bid's price.
-        //
-        // But what does No bid price mean? In the build plan:
-        // "No-backed bid at price 45" → willing to accept $0.45 for No.
-        // So the No bid price represents the complement: the No seller values No at P cents.
-        // In a merge, Yes seller gets (100 - P) and No seller gets P.
-        //
-        // Wait no, re-reading: "No seller receives $0.40 USDC per token from vault
-        // (= $1.00 − $0.60)" where fill price was 60 (the resting Yes ASK).
-        //
-        // OK so in that example the No bid was the TAKER and the Yes ask was the MAKER.
-        // Fill price = resting order price = Yes ask price = 60.
-        // Yes seller (maker) gets $0.60, No seller (taker) gets $0.40.
-        //
-        // Now when Yes ask is taker and No bid is maker:
-        // Fill price = resting order price = No bid price.
-        // But what's the payout? The No bid price represents what?
-        //
-        // I think the No bid price represents the "effective bid for Yes" in complement.
-        // A No bid at price 45 means: "I have No tokens worth $0.45 to me, so the
-        // implied Yes price I'm willing to pay is $0.55."
-        //
-        // So for the merge math when No bid is the resting order at price P:
-        // - Effective Yes price = (100 - P) → Yes seller gets $(100-P)/100
-        // - No seller gets $P/100
-        //
-        // Fill condition: Yes ask (taker) wants at least min_price.
-        // Yes seller gets (100 - P). So: (100 - P) >= min_price → P <= 100 - min_price.
-        //
-        // That's exactly the complement condition.
-
-        let max_no_price = 100u8.saturating_sub(min_price);
+        // No-backed bids: fill when (100 - no_bid_price) >= min_price,
+        // i.e., no_bid_price <= (100 - min_price).
+        let max_no_price = MERGE_TOTAL_CENTS.saturating_sub(min_price);
         if bid_price <= max_no_price {
             match_at_level_for_side(
                 book, taker_side, SIDE_NO_BID, bid_price, level_idx, result, max_fills, true,

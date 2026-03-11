@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { BN } from "@coral-xyz/anchor";
+import { Transaction } from "@solana/web3.js";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAnchorProgram } from "@/hooks/useAnchorProgram";
@@ -30,75 +31,86 @@ function MarketActionRow({ market }: { market: ParsedMarket }) {
   const overrideDeadline = Number(market.overrideDeadline);
   const canOverride = market.isSettled && now < overrideDeadline && market.overrideCount < 3;
 
+  const buildSettle = useCallback(async (config: ReturnType<typeof findGlobalConfig>[0]) => {
+    return program!.methods.settleMarket()
+      .accountsPartial({
+        caller: publicKey!,
+        config,
+        market: market.publicKey,
+        oracleFeed: market.oracleFeed,
+      }).transaction();
+  }, [program, publicKey, market]);
+
+  const buildAdminSettle = useCallback(async (config: ReturnType<typeof findGlobalConfig>[0]) => {
+    const parsed = parseFloat(settlePriceInput);
+    if (isNaN(parsed) || parsed <= 0) return null;
+    const price = new BN(Math.round(parsed * 1_000_000));
+    return program!.methods.adminSettle(price)
+      .accountsPartial({
+        admin: publicKey!,
+        config,
+        market: market.publicKey,
+      }).transaction();
+  }, [program, publicKey, market, settlePriceInput]);
+
+  const buildOverride = useCallback(async (config: ReturnType<typeof findGlobalConfig>[0]) => {
+    const parsed = parseFloat(overridePriceInput);
+    if (isNaN(parsed) || parsed <= 0) return null;
+    const price = new BN(Math.round(parsed * 1_000_000));
+    return program!.methods.adminOverrideSettlement(price)
+      .accountsPartial({
+        admin: publicKey!,
+        config,
+        market: market.publicKey,
+      }).transaction();
+  }, [program, publicKey, market, overridePriceInput]);
+
+  const buildPause = useCallback(async (config: ReturnType<typeof findGlobalConfig>[0]) => {
+    return program!.methods.pause(market.publicKey)
+      .accountsPartial({
+        admin: publicKey!,
+        config,
+        market: market.publicKey,
+      }).transaction();
+  }, [program, publicKey, market]);
+
+  const buildUnpause = useCallback(async (config: ReturnType<typeof findGlobalConfig>[0]) => {
+    return program!.methods.unpause(market.publicKey)
+      .accountsPartial({
+        admin: publicKey!,
+        config,
+        market: market.publicKey,
+      }).transaction();
+  }, [program, publicKey, market]);
+
+  type ConfigKey = ReturnType<typeof findGlobalConfig>[0];
+  const handlers: Record<string, (config: ConfigKey) => Promise<Transaction | null>> = useMemo(
+    () => ({
+      settle: buildSettle,
+      "admin-settle": buildAdminSettle,
+      override: buildOverride,
+      pause: buildPause,
+      unpause: buildUnpause,
+    }),
+    [buildSettle, buildAdminSettle, buildOverride, buildPause, buildUnpause],
+  );
+
   const handleAction = useCallback(async (action: string) => {
     if (!program || !publicKey) return;
+    const handler = handlers[action];
+    if (!handler) return;
+
     setSubmitting(action);
     try {
       const [config] = findGlobalConfig();
-      let tx;
-
-      switch (action) {
-        case "settle": {
-          tx = await program.methods.settleMarket()
-            .accountsPartial({
-              caller: publicKey,
-              config,
-              market: market.publicKey,
-              oracleFeed: market.oracleFeed,
-            }).transaction();
-          break;
-        }
-        case "admin-settle": {
-          const parsed = parseFloat(settlePriceInput);
-          if (isNaN(parsed) || parsed <= 0) return;
-          const price = new BN(Math.round(parsed * 1_000_000));
-          tx = await program.methods.adminSettle(price)
-            .accountsPartial({
-              admin: publicKey,
-              config,
-              market: market.publicKey,
-            }).transaction();
-          break;
-        }
-        case "override": {
-          const parsed = parseFloat(overridePriceInput);
-          if (isNaN(parsed) || parsed <= 0) return;
-          const price = new BN(Math.round(parsed * 1_000_000));
-          tx = await program.methods.adminOverrideSettlement(price)
-            .accountsPartial({
-              admin: publicKey,
-              config,
-              market: market.publicKey,
-            }).transaction();
-          break;
-        }
-        case "pause": {
-          tx = await program.methods.pause(market.publicKey)
-            .accountsPartial({
-              admin: publicKey,
-              config,
-              market: market.publicKey,
-            }).transaction();
-          break;
-        }
-        case "unpause": {
-          tx = await program.methods.unpause(market.publicKey)
-            .accountsPartial({
-              admin: publicKey,
-              config,
-              market: market.publicKey,
-            }).transaction();
-          break;
-        }
-      }
-
+      const tx = await handler(config);
       if (tx) {
         await sendTransaction(tx, { description: `${action} ${market.ticker}` });
         queryClient.invalidateQueries({ queryKey: ["markets"] });
       }
     } catch { /* handled by toast */ }
     finally { setSubmitting(null); }
-  }, [program, publicKey, market, settlePriceInput, overridePriceInput, sendTransaction, queryClient]);
+  }, [program, publicKey, handlers, market.ticker, sendTransaction, queryClient]);
 
   return (
     <div className="rounded-lg border border-white/10 bg-white/5 p-4 space-y-3">

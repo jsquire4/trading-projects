@@ -47,7 +47,22 @@ const NYSE_HOLIDAYS: Set<string> = new Set([
   "2027-09-06", // Labor Day
   "2027-11-25", // Thanksgiving
   "2027-12-24", // Christmas Day (observed)
+  // 2028
+  "2028-01-17", // MLK Jr. Day
+  "2028-02-21", // Presidents' Day
+  "2028-04-14", // Good Friday
+  "2028-05-29", // Memorial Day
+  "2028-06-19", // Juneteenth
+  "2028-07-04", // Independence Day
+  "2028-09-04", // Labor Day
+  "2028-11-23", // Thanksgiving
+  "2028-12-25", // Christmas Day
 ]);
+
+const maxHolidayYear = 2028; // Update when adding new years
+if (new Date().getFullYear() > maxHolidayYear) {
+  console.warn(`[timezone] NYSE holiday list may be stale — last updated for ${maxHolidayYear}`);
+}
 
 /**
  * Parse the current ET date/time components from Intl formatters.

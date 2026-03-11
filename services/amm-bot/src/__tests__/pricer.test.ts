@@ -110,47 +110,47 @@ describe("binaryCallPrice", () => {
     expect(price).toBeLessThan(0.55);
   });
 
-  it("deep ITM (S >> K): probability near 0.99", () => {
+  it("deep ITM (S >> K): probability near 1.0", () => {
     const price = binaryCallPrice(200, 100, sigma, T, r);
-    expect(price).toBeCloseTo(0.99, 1);
+    expect(price).toBeGreaterThan(0.95);
   });
 
-  it("deep OTM (S << K): probability near 0.01", () => {
+  it("deep OTM (S << K): probability near 0.0", () => {
     const price = binaryCallPrice(50, 100, sigma, T, r);
-    expect(price).toBeCloseTo(0.01, 1);
+    expect(price).toBeLessThan(0.05);
   });
 
-  it("T=0, S > K → 0.99 (expired ITM)", () => {
-    expect(binaryCallPrice(101, 100, sigma, 0, r)).toBe(0.99);
+  it("T=0, S > K → 1.0 (expired ITM)", () => {
+    expect(binaryCallPrice(101, 100, sigma, 0, r)).toBe(1.0);
   });
 
-  it("T=0, S < K → 0.01 (expired OTM)", () => {
-    expect(binaryCallPrice(99, 100, sigma, 0, r)).toBe(0.01);
+  it("T=0, S < K → 0.0 (expired OTM)", () => {
+    expect(binaryCallPrice(99, 100, sigma, 0, r)).toBe(0.0);
   });
 
-  it("T=0, S = K → 0.99 (at-the-money at expiry resolves ITM)", () => {
-    // The code uses S >= K → 0.99 for T <= 0
-    expect(binaryCallPrice(100, 100, sigma, 0, r)).toBe(0.99);
+  it("T=0, S = K → 1.0 (at-the-money at expiry resolves ITM)", () => {
+    // The code uses S >= K → 1.0 for T <= 0
+    expect(binaryCallPrice(100, 100, sigma, 0, r)).toBe(1.0);
   });
 
-  it("sigma=0, S > K → 0.99", () => {
-    expect(binaryCallPrice(110, 100, 0, T, r)).toBe(0.99);
+  it("sigma=0, S > K → 1.0", () => {
+    expect(binaryCallPrice(110, 100, 0, T, r)).toBe(1.0);
   });
 
-  it("sigma=0, S < K → 0.01", () => {
-    expect(binaryCallPrice(90, 100, 0, T, r)).toBe(0.01);
+  it("sigma=0, S < K → 0.0", () => {
+    expect(binaryCallPrice(90, 100, 0, T, r)).toBe(0.0);
   });
 
-  it("sigma=0, S = K → 0.99", () => {
-    expect(binaryCallPrice(100, 100, 0, T, r)).toBe(0.99);
+  it("sigma=0, S = K → 1.0", () => {
+    expect(binaryCallPrice(100, 100, 0, T, r)).toBe(1.0);
   });
 
-  it("S=0 → 0.01 (worthless underlying)", () => {
-    expect(binaryCallPrice(0, 100, sigma, T, r)).toBe(0.01);
+  it("S=0 → 0.0 (worthless underlying)", () => {
+    expect(binaryCallPrice(0, 100, sigma, T, r)).toBe(0.0);
   });
 
-  it("S negative → 0.01", () => {
-    expect(binaryCallPrice(-10, 100, sigma, T, r)).toBe(0.01);
+  it("S negative → 0.0", () => {
+    expect(binaryCallPrice(-10, 100, sigma, T, r)).toBe(0.0);
   });
 
   it("very small T (5 minutes), S well above K → near 0.99", () => {
@@ -172,7 +172,7 @@ describe("binaryCallPrice", () => {
     expect(price).toBeLessThan(0.60);
   });
 
-  it("result is always clamped to [0.01, 0.99]", () => {
+  it("result is always clamped to [0, 1]", () => {
     // Edge cases that might push the formula outside bounds
     const cases = [
       { S: 1000, K: 1, sigma: 0.01, T: 1, r: 0 },
@@ -181,8 +181,8 @@ describe("binaryCallPrice", () => {
     ];
     for (const c of cases) {
       const price = binaryCallPrice(c.S, c.K, c.sigma, c.T, c.r);
-      expect(price).toBeGreaterThanOrEqual(0.01);
-      expect(price).toBeLessThanOrEqual(0.99);
+      expect(price).toBeGreaterThanOrEqual(0);
+      expect(price).toBeLessThanOrEqual(1);
     }
   });
 

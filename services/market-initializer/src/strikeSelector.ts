@@ -7,6 +7,7 @@
 // ---------------------------------------------------------------------------
 
 import { historicalVolatility, type OHLCVBar } from "../../shared/src/volatility.ts";
+import { roundToNearest, roundingIncrement } from "../../shared/src/strikes.ts";
 
 export type { OHLCVBar };
 
@@ -21,22 +22,6 @@ const HV20_WINDOW = 20;
 
 // Sigma multiples for strike placement
 const SIGMA_LEVELS = [1, 1.5, 2];
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Round a value to the nearest multiple of `nearest`.
- * Uses $10 rounding for stocks >= $100, $5 for stocks < $100.
- */
-function roundToNearest(value: number, nearest: number): number {
-  return Math.round(value / nearest) * nearest;
-}
-
-function roundingIncrement(price: number): number {
-  return price >= 100 ? 10 : 5;
-}
 
 // ---------------------------------------------------------------------------
 // Public API

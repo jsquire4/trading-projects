@@ -14,30 +14,8 @@ export function normalPdf(x: number): number {
   return Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
 }
 
-/**
- * Standard normal cumulative distribution function.
- * Uses the Abramowitz & Stegun rational approximation (eqn 26.2.17)
- * which is accurate to ~1.5 × 10⁻⁷.
- */
-export function normalCdf(x: number): number {
-  if (x < -8) return 0;
-  if (x > 8) return 1;
-
-  const a1 = 0.254829592;
-  const a2 = -0.284496736;
-  const a3 = 1.421413741;
-  const a4 = -1.453152027;
-  const a5 = 1.061405429;
-  const p = 0.3275911;
-
-  const sign = x < 0 ? -1 : 1;
-  const absX = Math.abs(x);
-  const t = 1 / (1 + p * absX);
-  const poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t;
-  const y = 1 - poly * Math.exp(-0.5 * absX * absX);
-
-  return 0.5 * (1 + sign * y);
-}
+// normalCdf: use the ±10 clamp version from pricer.ts (more accurate at tails)
+export { normalCdf } from './pricer';
 
 /** Black-Scholes d2: d2 = [ln(S/K) + (r - σ²/2) · T] / (σ · √T) */
 export function d2(

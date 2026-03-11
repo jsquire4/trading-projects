@@ -84,24 +84,14 @@ function parseMarketAccount(
     noEscrow: a.noEscrow as PublicKey,
     orderBook: a.orderBook as PublicKey,
     oracleFeed: a.oracleFeed as PublicKey,
-    strikePrice: BigInt((a.strikePrice as { toString(): string }).toString()),
-    marketCloseUnix: BigInt(
-      (a.marketCloseUnix as { toString(): string }).toString(),
-    ),
-    totalMinted: BigInt((a.totalMinted as { toString(): string }).toString()),
-    totalRedeemed: BigInt(
-      (a.totalRedeemed as { toString(): string }).toString(),
-    ),
-    settlementPrice: BigInt(
-      (a.settlementPrice as { toString(): string }).toString(),
-    ),
-    previousClose: BigInt(
-      (a.previousClose as { toString(): string }).toString(),
-    ),
-    settledAt: BigInt((a.settledAt as { toString(): string }).toString()),
-    overrideDeadline: BigInt(
-      (a.overrideDeadline as { toString(): string }).toString(),
-    ),
+    strikePrice: BigInt((a.strikePrice ?? 0).toString()),
+    marketCloseUnix: BigInt((a.marketCloseUnix ?? 0).toString()),
+    totalMinted: BigInt((a.totalMinted ?? 0).toString()),
+    totalRedeemed: BigInt((a.totalRedeemed ?? 0).toString()),
+    settlementPrice: BigInt((a.settlementPrice ?? 0).toString()),
+    previousClose: BigInt((a.previousClose ?? 0).toString()),
+    settledAt: BigInt((a.settledAt ?? 0).toString()),
+    overrideDeadline: BigInt((a.overrideDeadline ?? 0).toString()),
     altAddress: a.altAddress as PublicKey,
     ticker,
     isSettled: a.isSettled as boolean,

@@ -21,12 +21,13 @@ import {
  * Piggybacks on usePositions polling (15s) to write P&L snapshots to IndexedDB.
  * Runs consolidation on mount to compress old intraday data into daily summaries.
  */
-export function usePortfolioSnapshot() {
+export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
   const { publicKey } = useWallet();
   const { data: positions = [] } = usePositions();
   const [intradayData, setIntradayData] = useState<PnlSnapshot[]>([]);
   const [dailySummaries, setDailySummaries] = useState<DailySummary[]>([]);
   const [isReady, setIsReady] = useState(false);
+  const [approximate, setApproximate] = useState(false);
   const lastSnapshotRef = useRef<number>(0);
   const consolidatedRef = useRef(false);
 
@@ -48,15 +49,24 @@ export function usePortfolioSnapshot() {
     if (now - lastSnapshotRef.current < 10_000) return;
     lastSnapshotRef.current = now;
 
-    const posSnapshots: PositionSnapshot[] = positions.map((p) => ({
-      market: p.market.publicKey.toBase58(),
-      ticker: p.market.ticker,
-      yesBal: Number(p.yesBal) / 1_000_000,
-      noBal: Number(p.noBal) / 1_000_000,
-      // Rough valuation: use 50c mid as fallback when no live book data
-      yesValue: (Number(p.yesBal) / 1_000_000) * 0.5,
-      noValue: (Number(p.noBal) / 1_000_000) * 0.5,
-    }));
+    let usedFallback = false;
+    const posSnapshots: PositionSnapshot[] = positions.map((p) => {
+      const marketKey = p.market.publicKey.toBase58();
+      const mid = midPrices?.get(marketKey);
+      const yesMid = mid ?? 0.5;
+      const noMid = 1 - yesMid;
+      if (mid === undefined) usedFallback = true;
+      return {
+        market: marketKey,
+        ticker: p.market.ticker,
+        yesBal: Number(p.yesBal) / 1_000_000,
+        noBal: Number(p.noBal) / 1_000_000,
+        yesValue: (Number(p.yesBal) / 1_000_000) * yesMid,
+        noValue: (Number(p.noBal) / 1_000_000) * noMid,
+      };
+    });
+
+    setApproximate(usedFallback);
 
     const totalValue = posSnapshots.reduce(
       (sum, ps) => sum + ps.yesValue + ps.noValue,
@@ -71,7 +81,7 @@ export function usePortfolioSnapshot() {
     };
 
     writeSnapshot(snapshot).catch(() => {});
-  }, [wallet, positions]);
+  }, [wallet, positions, midPrices]);
 
   // Load intraday data and daily summaries (clear on wallet disconnect)
   useEffect(() => {
@@ -149,5 +159,6 @@ export function usePortfolioSnapshot() {
     topPerformer,
     bottomPerformer,
     isReady,
+    approximate,
   };
 }

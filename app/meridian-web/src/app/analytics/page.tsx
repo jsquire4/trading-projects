@@ -9,6 +9,7 @@ import { HistoricalOverlay } from "@/components/analytics/HistoricalOverlay";
 import { SettlementAnalytics } from "@/components/analytics/SettlementAnalytics";
 import { GreeksDisplay } from "@/components/analytics/GreeksDisplay";
 import { PriceHistory } from "@/components/analytics/PriceHistory";
+import { TickerButton } from "@/components/analytics/TickerButton";
 import { useTradierQuotes } from "@/hooks/useAnalyticsData";
 import { MAG7 } from "@/lib/tickers";
 
@@ -184,89 +185,34 @@ export default function AnalyticsPage() {
         <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide py-1 pr-2">
           {/* MAG7 section */}
           <span className="shrink-0 text-[10px] uppercase tracking-widest text-white/20 px-1 select-none self-center">MAG7</span>
-          {(MAG7 as readonly string[]).map((t) => {
-            const q = quotes?.find((q) => q.symbol === t);
-            const tChange = q?.change ?? 0;
-            const tChangePct = q?.change_percentage ?? 0;
-            const tIsPos = tChange >= 0;
-            const isSelected = t === selectedTicker;
-            return (
-              <button
-                key={t}
-                onClick={() => { setSelectedTicker(t); setSelectedExpiration(null); }}
-                className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-all shrink-0 ${
-                  isSelected
-                    ? tIsPos
-                      ? "border-green-500/40 bg-green-500/10 ring-1 ring-green-500/20"
-                      : "border-red-500/40 bg-red-500/10 ring-1 ring-red-500/20"
-                    : q
-                      ? tIsPos
-                        ? "border-green-500/20 bg-green-500/5 hover:border-green-500/40 hover:bg-green-500/10"
-                        : "border-red-500/20 bg-red-500/5 hover:border-red-500/40 hover:bg-red-500/10"
-                      : "border-white/10 bg-white/5 hover:border-white/20 hover:bg-white/10"
-                }`}
-              >
-                <span className={`font-semibold ${isSelected ? "text-white" : "text-white/90"}`}>{t}</span>
-                {q && (
-                  <>
-                    <span className="tabular-nums text-white/60">${(q.last ?? 0).toFixed(2)}</span>
-                    <span className={`tabular-nums font-medium ${tIsPos ? "text-green-400" : "text-red-400"}`}>
-                      {tIsPos ? "▲" : "▼"}{Math.abs(tChangePct).toFixed(2)}%
-                    </span>
-                  </>
-                )}
-              </button>
-            );
-          })}
+          {(MAG7 as readonly string[]).map((t) => (
+            <TickerButton
+              key={t}
+              ticker={t}
+              quote={quotes?.find((q) => q.symbol === t)}
+              isSelected={t === selectedTicker}
+              onSelect={() => { setSelectedTicker(t); setSelectedExpiration(null); }}
+            />
+          ))}
 
           {/* Custom tickers section */}
           {extraTickers.length > 0 && (
             <>
               <span className="shrink-0 w-px h-4 bg-white/10 self-center" />
               <span className="shrink-0 text-[10px] uppercase tracking-widest text-white/20 px-1 select-none self-center">Custom</span>
-              {extraTickers.map((t) => {
-                const q = quotes?.find((q) => q.symbol === t);
-                const tChange = q?.change ?? 0;
-                const tChangePct = q?.change_percentage ?? 0;
-                const tIsPos = tChange >= 0;
-                const isSelected = t === selectedTicker;
-                return (
-                  <div key={t} className="group relative flex items-center shrink-0">
-                    <button
-                      onClick={() => { setSelectedTicker(t); setSelectedExpiration(null); }}
-                      className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-all shrink-0 ${
-                        isSelected
-                          ? tIsPos
-                            ? "border-green-500/40 bg-green-500/10 ring-1 ring-green-500/20"
-                            : "border-red-500/40 bg-red-500/10 ring-1 ring-red-500/20"
-                          : q
-                            ? tIsPos
-                              ? "border-green-500/20 bg-green-500/5 hover:border-green-500/40 hover:bg-green-500/10"
-                              : "border-red-500/20 bg-red-500/5 hover:border-red-500/40 hover:bg-red-500/10"
-                            : "border-white/10 bg-white/5 hover:border-white/20 hover:bg-white/10"
-                      }`}
-                    >
-                      <span className={`font-semibold ${isSelected ? "text-white" : "text-white/90"}`}>{t}</span>
-                      {q && (
-                        <>
-                          <span className="tabular-nums text-white/60">${(q.last ?? 0).toFixed(2)}</span>
-                          <span className={`tabular-nums font-medium ${tIsPos ? "text-green-400" : "text-red-400"}`}>
-                            {tIsPos ? "▲" : "▼"}{Math.abs(tChangePct).toFixed(2)}%
-                          </span>
-                        </>
-                      )}
-                    </button>
-                    <button
-                      onClick={() => {
-                        setExtraTickers((prev) => prev.filter((x) => x !== t));
-                        if (selectedTicker === t) { setSelectedTicker(MAG7[0]); setSelectedExpiration(null); }
-                      }}
-                      className="ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-white/10 text-white/40 hover:bg-red-500/30 hover:text-red-400 transition-colors text-[10px] leading-none"
-                      aria-label={`Remove ${t}`}
-                    >×</button>
-                  </div>
-                );
-              })}
+              {extraTickers.map((t) => (
+                <TickerButton
+                  key={t}
+                  ticker={t}
+                  quote={quotes?.find((q) => q.symbol === t)}
+                  isSelected={t === selectedTicker}
+                  onSelect={() => { setSelectedTicker(t); setSelectedExpiration(null); }}
+                  onRemove={() => {
+                    setExtraTickers((prev) => prev.filter((x) => x !== t));
+                    if (selectedTicker === t) { setSelectedTicker(MAG7[0]); setSelectedExpiration(null); }
+                  }}
+                />
+              ))}
             </>
           )}
 

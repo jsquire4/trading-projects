@@ -13,7 +13,6 @@ import {
 } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { BankrunProvider } from "anchor-bankrun";
-import { Clock } from "solana-bankrun";
 import BN from "bn.js";
 
 import {
@@ -29,6 +28,7 @@ import {
   MOCK_ORACLE_PROGRAM_ID,
   mintTestUsdc,
   createAta,
+  readOrderSlot,
 } from "../helpers";
 
 import {
@@ -45,90 +45,12 @@ import {
   buildUnpauseIx,
 } from "../helpers/instructions";
 
-
-// ---------------------------------------------------------------------------
-// Layout helpers for reading on-chain StrikeMarket data
-// ---------------------------------------------------------------------------
-
-// StrikeMarket byte offsets (after 8-byte Anchor discriminator):
-// 9 pubkeys = 288 bytes → u64/i64 block starts at offset 296
-const MARKET_DISC = 8;
-const MARKET_PUBKEYS = 9 * 32; // 288
-const OFF_STRIKE_PRICE     = MARKET_DISC + MARKET_PUBKEYS;         // 296
-const OFF_MARKET_CLOSE     = OFF_STRIKE_PRICE + 8;                 // 304
-const OFF_TOTAL_MINTED     = OFF_MARKET_CLOSE + 8;                 // 312
-const OFF_TOTAL_REDEEMED   = OFF_TOTAL_MINTED + 8;                 // 320
-const OFF_SETTLEMENT_PRICE = OFF_TOTAL_REDEEMED + 8;               // 328
-const OFF_PREVIOUS_CLOSE   = OFF_SETTLEMENT_PRICE + 8;             // 336
-const OFF_SETTLED_AT       = OFF_PREVIOUS_CLOSE + 8;               // 344
-const OFF_OVERRIDE_DEADLINE = OFF_SETTLED_AT + 8;                  // 352
-// alt_address(32) at 360, ticker(8) at 392
-const OFF_IS_SETTLED       = 400;
-const OFF_OUTCOME          = 401;
-const OFF_IS_PAUSED        = 402;
-const OFF_IS_CLOSED        = 403;
-const OFF_OVERRIDE_COUNT   = 404;
-
-function readMarketFields(data: Buffer) {
-  return {
-    strikePrice:     new BN(data.subarray(OFF_STRIKE_PRICE, OFF_STRIKE_PRICE + 8), "le").toNumber(),
-    marketCloseUnix: new BN(data.subarray(OFF_MARKET_CLOSE, OFF_MARKET_CLOSE + 8), "le").toNumber(),
-    totalMinted:     new BN(data.subarray(OFF_TOTAL_MINTED, OFF_TOTAL_MINTED + 8), "le").toNumber(),
-    totalRedeemed:   new BN(data.subarray(OFF_TOTAL_REDEEMED, OFF_TOTAL_REDEEMED + 8), "le").toNumber(),
-    settlementPrice: new BN(data.subarray(OFF_SETTLEMENT_PRICE, OFF_SETTLEMENT_PRICE + 8), "le").toNumber(),
-    previousClose:   new BN(data.subarray(OFF_PREVIOUS_CLOSE, OFF_PREVIOUS_CLOSE + 8), "le").toNumber(),
-    settledAt:       new BN(data.subarray(OFF_SETTLED_AT, OFF_SETTLED_AT + 8), "le").toNumber(),
-    overrideDeadline:new BN(data.subarray(OFF_OVERRIDE_DEADLINE, OFF_OVERRIDE_DEADLINE + 8), "le").toNumber(),
-    isSettled:       data[OFF_IS_SETTLED] !== 0,
-    outcome:         data[OFF_OUTCOME],
-    isPaused:        data[OFF_IS_PAUSED] !== 0,
-    isClosed:        data[OFF_IS_CLOSED] !== 0,
-    overrideCount:   data[OFF_OVERRIDE_COUNT],
-  };
-}
-
-async function getTokenBalance(ctx: BankrunContext, ata: PublicKey): Promise<number> {
-  const acct = await ctx.context.banksClient.getAccount(ata);
-  if (!acct) return 0;
-  const data = Buffer.from(acct.data);
-  return new BN(data.subarray(64, 72), "le").toNumber();
-}
-
-async function readMarket(ctx: BankrunContext, market: PublicKey) {
-  const acct = await ctx.context.banksClient.getAccount(market);
-  return readMarketFields(Buffer.from(acct!.data));
-}
-
-/**
- * Advance the bankrun clock's unix_timestamp while preserving other fields.
- * The Clock object from getClock() uses non-enumerable getters, so spread
- * doesn't work — we must copy each field explicitly.
- */
-async function advanceClock(ctx: BankrunContext, unixTimestamp: number) {
-  const clock = await ctx.context.banksClient.getClock();
-  ctx.context.setClock(
-    new Clock(
-      clock.slot,
-      clock.epochStartTimestamp,
-      clock.epoch,
-      clock.leaderScheduleEpoch,
-      BigInt(unixTimestamp),
-    ),
-  );
-}
-
-// Order book layout constants for reading order slots
-const OB_DISCRIMINATOR_SIZE = 8;
-const OB_ORDER_SLOT_SIZE = 80;
-const OB_PRICE_LEVEL_SIZE = 1288;
-const OB_LEVELS_OFFSET = OB_DISCRIMINATOR_SIZE + 32 + 8; // 48
-
-function readOrderSlot(data: Buffer, levelIdx: number, slotIdx: number) {
-  const offset = OB_LEVELS_OFFSET + levelIdx * OB_PRICE_LEVEL_SIZE + slotIdx * OB_ORDER_SLOT_SIZE;
-  const orderId = new BN(data.subarray(offset + 32, offset + 40), "le").toNumber();
-  const isActive = data[offset + 72] !== 0;
-  return { orderId, isActive };
-}
+import {
+  readMarketFields,
+  readMarket,
+  getTokenBalance,
+  advanceClock,
+} from "../helpers/market-layout";
 
 // Monotonically increasing CU limit to differentiate transactions and avoid
 // bankrun's "already processed" deduplication.

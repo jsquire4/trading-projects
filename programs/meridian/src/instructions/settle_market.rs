@@ -51,10 +51,28 @@ struct OraclePriceFeed {
 }
 
 impl OraclePriceFeed {
-    /// Minimum account data length: 8 (discriminator) + 8 + 8 + 8 + 8 + 32 + 1 + 1 + 6 = 80
+    /// Minimum account data length (byte layout after 8-byte Anchor discriminator):
+    ///   discriminator:  8 bytes  (offset 0..8)
+    ///   ticker:         8 bytes  (offset 8..16)
+    ///   price:          8 bytes  (offset 16..24)  — u64
+    ///   confidence:     8 bytes  (offset 24..32)  — u64
+    ///   timestamp:      8 bytes  (offset 32..40)  — i64
+    ///   authority:     32 bytes  (offset 40..72)  — Pubkey
+    ///   is_initialized: 1 byte   (offset 72..73)  — bool
+    ///   bump:           1 byte   (offset 73..74)  — u8
+    ///   _padding:       6 bytes  (offset 74..80)
+    ///   Total:         80 bytes
     const MIN_DATA_LEN: usize = 8 + 8 + 8 + 8 + 8 + 32 + 1 + 1 + 6;
 
+    // Compile-time assertion: MIN_DATA_LEN must equal 80
+    const _ASSERT_MIN_DATA_LEN: () = assert!(
+        Self::MIN_DATA_LEN == 80,
+        "OraclePriceFeed::MIN_DATA_LEN does not match expected 80 bytes"
+    );
+
     fn parse(data: &[u8]) -> Result<Self> {
+        // Force evaluation of the compile-time size assertion
+        let _ = Self::_ASSERT_MIN_DATA_LEN;
         require!(data.len() >= Self::MIN_DATA_LEN, MeridianError::OracleNotInitialized);
 
         let d = &data[8..]; // skip 8-byte Anchor discriminator

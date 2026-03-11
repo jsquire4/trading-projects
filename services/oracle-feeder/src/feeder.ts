@@ -10,14 +10,11 @@ import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import WebSocket from "ws";
 import { TradierClient } from "../../shared/src/tradier-client.js";
 import { createLogger } from "../../shared/src/alerting.js";
+import { findPriceFeed } from "../../shared/src/pda.js";
 import type { MockOracle } from "../../shared/src/idl/mock_oracle.js";
 import MockOracleIDL from "../../shared/src/idl/mock_oracle.json" assert { type: "json" };
 
 const log = createLogger("oracle-feeder");
-
-const MOCK_ORACLE_PROGRAM_ID = new PublicKey(
-  "HJpHCfz1mqFFNa4ANfU8mMAZ5WoNRfo7EV1sZfEV2vZ",
-);
 
 const TRADIER_WS_URL = "wss://ws.tradier.com/v1/markets/events";
 
@@ -27,27 +24,6 @@ const RATE_LIMIT_MS = 5_000;
 // Retry config
 const MAX_RETRIES = 3;
 const BASE_RETRY_DELAY_MS = 1_000;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function padTicker(ticker: string): Buffer {
-  const buf = Buffer.alloc(8, 0);
-  const bytes = Buffer.from(ticker, "utf-8");
-  if (bytes.length > 8) {
-    throw new Error(`Ticker "${ticker}" exceeds 8 bytes when UTF-8 encoded`);
-  }
-  bytes.copy(buf);
-  return buf;
-}
-
-function findPriceFeedPDA(ticker: string): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("price_feed"), padTicker(ticker)],
-    MOCK_ORACLE_PROGRAM_ID,
-  );
-}
 
 /** Convert a dollar price (e.g. 185.42) to USDC lamports (u64). */
 function priceToLamports(price: number): BN {
@@ -94,7 +70,7 @@ export async function startFeeder(
   // Pre-derive all PDA addresses
   const priceFeedPDAs = new Map<string, PublicKey>();
   for (const ticker of tickers) {
-    const [pda] = findPriceFeedPDA(ticker);
+    const [pda] = findPriceFeed(ticker);
     priceFeedPDAs.set(ticker, pda);
     log.info(`PriceFeed PDA for ${ticker}: ${pda.toBase58()}`);
   }
@@ -107,6 +83,7 @@ export async function startFeeder(
 
   let ws: WebSocket | null = null;
   let stopped = false;
+  let connecting = false;
   let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 
   // ------ On-chain update with retry ------
@@ -163,68 +140,73 @@ export async function startFeeder(
   // ------ WebSocket streaming ------
 
   async function connect(): Promise<void> {
-    if (stopped) return;
+    if (stopped || connecting) return;
+    connecting = true;
 
-    let sessionId: string;
     try {
-      sessionId = await tradierClient.createStreamSession();
-      log.info("Created Tradier streaming session");
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error("Failed to create stream session, retrying in 10s", {
-        error: msg,
-      });
-      reconnectTimeout = setTimeout(() => connect(), 10_000);
-      return;
-    }
-
-    ws = new WebSocket(TRADIER_WS_URL);
-
-    ws.on("open", () => {
-      log.info(`WebSocket connected, subscribing to: ${tickers.join(", ")}`);
-      ws!.send(
-        JSON.stringify({
-          symbols: tickers,
-          sessionid: sessionId,
-          filter: ["trade"],
-        }),
-      );
-    });
-
-    ws.on("message", (data: WebSocket.Data) => {
+      let sessionId: string;
       try {
-        const raw = data.toString();
-        // Tradier sends newline-delimited JSON
-        for (const line of raw.split("\n")) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-
-          const msg = JSON.parse(trimmed);
-
-          // Trade events have type "trade"
-          if (msg.type === "trade" && msg.symbol && typeof msg.price === "number") {
-            updateOnChain(msg.symbol, msg.price).catch((err) => {
-              log.error(`Unhandled updateOnChain error for ${msg.symbol}`, {
-                error: err instanceof Error ? err.message : String(err),
-              });
-            });
-          }
-        }
-      } catch {
-        // Ignore parse errors on heartbeats or malformed messages
+        sessionId = await tradierClient.createStreamSession();
+        log.info("Created Tradier streaming session");
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error("Failed to create stream session, retrying in 10s", {
+          error: msg,
+        });
+        reconnectTimeout = setTimeout(() => connect(), 10_000);
+        return;
       }
-    });
 
-    ws.on("close", (code: number) => {
-      if (stopped) return;
-      log.warn(`WebSocket closed (code ${code}), reconnecting in 5s`);
-      reconnectTimeout = setTimeout(() => connect(), 5_000);
-    });
+      ws = new WebSocket(TRADIER_WS_URL);
 
-    ws.on("error", (err: Error) => {
-      log.error("WebSocket error", { error: err.message });
-      // close handler will trigger reconnect
-    });
+      ws.on("open", () => {
+        log.info(`WebSocket connected, subscribing to: ${tickers.join(", ")}`);
+        ws!.send(
+          JSON.stringify({
+            symbols: tickers,
+            sessionid: sessionId,
+            filter: ["trade"],
+          }),
+        );
+      });
+
+      ws.on("message", (data: WebSocket.Data) => {
+        try {
+          const raw = data.toString();
+          // Tradier sends newline-delimited JSON
+          for (const line of raw.split("\n")) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+
+            const msg = JSON.parse(trimmed);
+
+            // Trade events have type "trade"
+            if (msg.type === "trade" && msg.symbol && typeof msg.price === "number") {
+              updateOnChain(msg.symbol, msg.price).catch((err) => {
+                log.error(`Unhandled updateOnChain error for ${msg.symbol}`, {
+                  error: err instanceof Error ? err.message : String(err),
+                });
+              });
+            }
+          }
+        } catch {
+          // Ignore parse errors on heartbeats or malformed messages
+        }
+      });
+
+      ws.on("close", (code: number) => {
+        if (stopped) return;
+        log.warn(`WebSocket closed (code ${code}), reconnecting in 5s`);
+        reconnectTimeout = setTimeout(() => connect(), 5_000);
+      });
+
+      ws.on("error", (err: Error) => {
+        log.error("WebSocket error", { error: err.message });
+        // close handler will trigger reconnect
+      });
+    } finally {
+      connecting = false;
+    }
   }
 
   // Start the connection

@@ -1,3 +1,4 @@
+// SYNC: services/shared/src/pda.ts — keep identical
 import { PublicKey } from "@solana/web3.js";
 
 // ---------------------------------------------------------------------------

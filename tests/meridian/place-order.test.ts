@@ -21,6 +21,13 @@ import {
   findGlobalConfig,
   MOCK_ORACLE_PROGRAM_ID,
   MERIDIAN_PROGRAM_ID,
+  readOrderSlot,
+  readLevelCount,
+  SIDE_USDC_BID,
+  SIDE_YES_ASK,
+  SIDE_NO_BID,
+  ORDER_TYPE_MARKET,
+  ORDER_TYPE_LIMIT,
 } from "../helpers";
 
 import {
@@ -29,45 +36,8 @@ import {
   buildCancelOrderIx,
 } from "../helpers/instructions";
 
-// Order book layout constants
-const DISCRIMINATOR_SIZE = 8;
-const ORDER_SLOT_SIZE = 80;
-const PRICE_LEVEL_SIZE = 1288;
-const LEVELS_OFFSET = DISCRIMINATOR_SIZE + 32 + 8; // 48
+import { getTokenBalance } from "../helpers/market-layout";
 
-// Side constants
-const SIDE_USDC_BID = 0;
-const SIDE_YES_ASK = 1;
-const SIDE_NO_BID = 2;
-
-// Order type constants
-const ORDER_TYPE_MARKET = 0;
-const ORDER_TYPE_LIMIT = 1;
-
-function readOrderSlot(data: Buffer, levelIdx: number, slotIdx: number) {
-  const offset = LEVELS_OFFSET + levelIdx * PRICE_LEVEL_SIZE + slotIdx * ORDER_SLOT_SIZE;
-  const owner = new PublicKey(data.subarray(offset, offset + 32));
-  const orderId = new BN(data.subarray(offset + 32, offset + 40), "le").toNumber();
-  const quantity = new BN(data.subarray(offset + 40, offset + 48), "le").toNumber();
-  const originalQuantity = new BN(data.subarray(offset + 48, offset + 56), "le").toNumber();
-  const side = data[offset + 56];
-  const timestamp = new BN(data.subarray(offset + 64, offset + 72), "le").toNumber();
-  const isActive = data[offset + 72] !== 0;
-  return { owner, orderId, quantity, originalQuantity, side, timestamp, isActive };
-}
-
-function readLevelCount(data: Buffer, levelIdx: number): number {
-  const countOffset = LEVELS_OFFSET + levelIdx * PRICE_LEVEL_SIZE + 16 * ORDER_SLOT_SIZE;
-  return data[countOffset];
-}
-
-async function getTokenBalance(ctx: BankrunContext, ata: PublicKey): Promise<number> {
-  const acct = await ctx.context.banksClient.getAccount(ata);
-  if (!acct) return 0;
-  const data = Buffer.from(acct.data);
-  // SPL Token account: amount is at offset 64, u64 LE
-  return new BN(data.subarray(64, 72), "le").toNumber();
-}
 
 describe("Place Order", () => {
   let ctx: BankrunContext;

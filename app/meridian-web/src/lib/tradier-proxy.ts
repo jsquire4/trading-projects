@@ -82,7 +82,11 @@ function setCache<T>(key: string, data: T, ttlMs: number = DEFAULT_TTL_MS): void
 }
 
 // ---------------------------------------------------------------------------
-// Rate limiter (token bucket — 60 req/min)
+// Rate limiter (token bucket -- 60 req/min)
+//
+// NOTE: This rate limiter is per-process (module-level singleton).
+// In Railway's single-server deployment this is correct and intentional.
+// For multi-instance scale-out, replace with Redis-backed rate limiting.
 // ---------------------------------------------------------------------------
 
 const BUCKET_CAPACITY = 60;

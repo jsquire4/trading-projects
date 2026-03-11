@@ -1,5 +1,6 @@
 "use client";
 
+import { useId } from "react";
 import {
   ResponsiveContainer,
   AreaChart,
@@ -101,6 +102,10 @@ function ChartTooltip({
 // ---------------------------------------------------------------------------
 
 export function PnlTab() {
+  const id = useId();
+  const greenGradientId = `${id}-pnlGradientGreen`;
+  const redGradientId = `${id}-pnlGradientRed`;
+
   const {
     intradayData,
     dailySummaries,
@@ -226,11 +231,11 @@ export function PnlTab() {
               margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
             >
               <defs>
-                <linearGradient id="pnlGradientGreen" x1="0" y1="0" x2="0" y2="1">
+                <linearGradient id={greenGradientId} x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor={COLORS.yes} stopOpacity={0.25} />
                   <stop offset="95%" stopColor={COLORS.yes} stopOpacity={0} />
                 </linearGradient>
-                <linearGradient id="pnlGradientRed" x1="0" y1="0" x2="0" y2="1">
+                <linearGradient id={redGradientId} x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor={COLORS.no} stopOpacity={0.25} />
                   <stop offset="95%" stopColor={COLORS.no} stopOpacity={0} />
                 </linearGradient>
@@ -268,7 +273,7 @@ export function PnlTab() {
                 dataKey="totalValue"
                 stroke={chartColor}
                 strokeWidth={2}
-                fill={`url(#${isPositive ? "pnlGradientGreen" : "pnlGradientRed"})`}
+                fill={`url(#${isPositive ? greenGradientId : redGradientId})`}
                 dot={false}
                 activeDot={{ r: 4, fill: chartColor, strokeWidth: 0 }}
                 isAnimationActive={false}

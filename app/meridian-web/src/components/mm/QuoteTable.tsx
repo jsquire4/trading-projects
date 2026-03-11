@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useEffect } from "react";
 import type { ParsedMarket } from "@/hooks/useMarkets";
 import { useOrderBook } from "@/hooks/useMarkets";
 
@@ -62,7 +62,18 @@ function MarketRow({ market }: { market: ParsedMarket }) {
   );
 }
 
+// TODO: For >20 markets, virtualize rows or batch orderbook subscriptions.
+// Each MarketRow independently polls useOrderBook -- scales linearly with market count.
 export function QuoteTable({ markets }: QuoteTableProps) {
+  useEffect(() => {
+    if (markets.length > 10) {
+      console.warn(
+        `[QuoteTable] ${markets.length} markets each polling useOrderBook independently. ` +
+        `Consider virtualizing rows or batching subscriptions for >20 markets.`,
+      );
+    }
+  }, [markets.length]);
+
   if (markets.length === 0) {
     return (
       <div className="rounded-xl bg-white/5 border border-white/10 px-6 py-10 text-center">

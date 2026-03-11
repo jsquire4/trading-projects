@@ -20,6 +20,7 @@ import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 import { TradierClient } from "../../shared/src/tradier-client.ts";
 import { createLogger } from "../../shared/src/alerting.ts";
+import { getETOffsetMinutes } from "../../automation/src/timezone.js";
 import { generateVolAwareStrikes } from "./strikeSelector.ts";
 import {
   findGlobalConfig,
@@ -433,10 +434,8 @@ export function computeMarketCloseUnix(date?: Date): number {
   const month = parseInt(parts.find((p) => p.type === "month")!.value);
   const day = parseInt(parts.find((p) => p.type === "day")!.value);
 
-  // Compute ET-to-UTC offset (DST-aware)
-  const etStr = now.toLocaleString("en-US", { timeZone: "America/New_York" });
-  const utcStr = now.toLocaleString("en-US", { timeZone: "UTC" });
-  const etOffsetMinutes = Math.round((new Date(etStr).getTime() - new Date(utcStr).getTime()) / 60_000);
+  // Compute ET-to-UTC offset (DST-aware) via shared timezone helper
+  const etOffsetMinutes = getETOffsetMinutes(now);
 
   // Start of day in UTC
   const startOfDayUTC = Date.UTC(year, month - 1, day, 0, 0, 0);

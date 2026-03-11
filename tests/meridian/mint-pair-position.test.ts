@@ -18,6 +18,8 @@ import {
   MarketAccounts,
   findGlobalConfig,
   MOCK_ORACLE_PROGRAM_ID,
+  createFundedUser,
+  executeMintPair,
 } from "../helpers";
 import { buildMintPairIx } from "../helpers/instructions";
 import { BankrunProvider } from "anchor-bankrun";
@@ -61,81 +63,31 @@ describe("Mint Pair — Position Constraints", () => {
     );
   });
 
-  /** Helper: create a funded user with a USDC ATA. */
-  async function createFundedUser(
+  /** Helper: create a funded user with a USDC ATA (delegates to shared helper). */
+  async function fundUser(
     usdcAmount: number,
   ): Promise<{ user: Keypair; userUsdcAta: PublicKey }> {
-    const user = Keypair.generate();
-
-    ctx.context.setAccount(user.publicKey, {
-      lamports: 10_000_000_000,
-      data: Buffer.alloc(0),
-      owner: PublicKey.default,
-      executable: false,
-    });
-
-    const userUsdcAta = await createAta(
-      ctx.context,
-      ctx.admin,
-      usdcMint,
-      user.publicKey,
-    );
-
-    if (usdcAmount > 0) {
-      await mintTestUsdc(
-        ctx.context,
-        usdcMint,
-        ctx.admin,
-        userUsdcAta,
-        usdcAmount,
-      );
-    }
-
-    return { user, userUsdcAta };
+    return createFundedUser(ctx.context, ctx.admin, usdcMint, usdcAmount);
   }
 
-  /** Helper: build and send a mint_pair transaction. */
-  async function executeMintPair(
+  /** Helper: build and send a mint_pair transaction (delegates to shared helper). */
+  async function mintPair(
     user: Keypair,
     userUsdcAta: PublicKey,
     quantity: number,
   ): Promise<void> {
-    const provider = new BankrunProvider(ctx.context);
-    const userYesAta = getAssociatedTokenAddressSync(
-      marketAccounts.yesMint,
-      user.publicKey,
-    );
-    const userNoAta = getAssociatedTokenAddressSync(
-      marketAccounts.noMint,
-      user.publicKey,
-    );
-
-    const ix = buildMintPairIx({
-      user: user.publicKey,
-      config,
-      market: marketAccounts.market,
-      yesMint: marketAccounts.yesMint,
-      noMint: marketAccounts.noMint,
-      userUsdcAta,
-      userYesAta,
-      userNoAta,
-      usdcVault: marketAccounts.usdcVault,
-      quantity: new BN(quantity),
-    });
-
-    const tx = new Transaction().add(ix);
-    await provider.sendAndConfirm!(tx, [user]);
+    return executeMintPair(ctx.context, user, userUsdcAta, config, marketAccounts, quantity);
   }
 
   it("rejects mint if user holds Yes tokens", async () => {
-    const { user, userUsdcAta } = await createFundedUser(100_000_000);
+    const { user, userUsdcAta } = await fundUser(100_000_000);
 
     // First mint succeeds — user now holds Yes tokens
-    await executeMintPair(user, userUsdcAta, 1_000_000);
+    await mintPair(user, userUsdcAta, 1_000_000);
 
     // Second mint should fail due to ConflictingPosition
     try {
-      await executeMintPair(user, userUsdcAta, 1_000_000);
+      await mintPair(user, userUsdcAta, 1_000_000);
       expect.fail("Expected transaction to fail with ConflictingPosition");
     } catch (err: any) {
       // Anchor error code 6059 = ConflictingPosition (0x17ab)
@@ -145,11 +97,11 @@ describe("Mint Pair — Position Constraints", () => {
   });
 
   it("allows mint when user holds only No tokens", async () => {
-    const { user, userUsdcAta } = await createFundedUser(100_000_000);
+    const { user, userUsdcAta } = await fundUser(100_000_000);
     const provider = new BankrunProvider(ctx.context);
 
     // First mint — user gets Yes + No tokens
-    await executeMintPair(user, userUsdcAta, 2_000_000);
+    await mintPair(user, userUsdcAta, 2_000_000);
 
     // Transfer ALL Yes tokens to a separate keypair
     const recipient = Keypair.generate();
@@ -188,7 +140,7 @@ describe("Mint Pair — Position Constraints", () => {
     expect(Number(decoded.amount)).to.equal(0, "Yes ATA should be empty after transfer");
 
     // Second mint should succeed — user holds only No tokens, Yes ATA is 0
-    await executeMintPair(user, userUsdcAta, 1_000_000);
+    await mintPair(user, userUsdcAta, 1_000_000);
 
     // Verify the mint succeeded
     const yesBalanceAfter = AccountLayout.decode(
@@ -198,7 +150,7 @@ describe("Mint Pair — Position Constraints", () => {
   });
 
   it("allows first mint for fresh user", async () => {
-    const { user, userUsdcAta } = await createFundedUser(50_000_000);
+    const { user, userUsdcAta } = await fundUser(50_000_000);
 
     // Verify user has no Yes/No ATAs
     const userYesAta = getAssociatedTokenAddressSync(
@@ -215,7 +167,7 @@ describe("Mint Pair — Position Constraints", () => {
     expect(noBefore).to.be.null;
 
     // First mint for a fresh user should succeed
-    await executeMintPair(user, userUsdcAta, 1_000_000);
+    await mintPair(user, userUsdcAta, 1_000_000);
 
     // Verify tokens received
     const yesAcct = await ctx.context.banksClient.getAccount(userYesAta);

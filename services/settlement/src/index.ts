@@ -30,41 +30,11 @@ import { crankCancelAll } from "./cranker.js";
 const log = createLogger("settlement");
 
 // ---------------------------------------------------------------------------
-// Environment
-// ---------------------------------------------------------------------------
-
-const RPC_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
-const ADMIN_KEYPAIR_B58 = process.env.ADMIN_KEYPAIR;
-
-if (!ADMIN_KEYPAIR_B58) {
-  log.critical("ADMIN_KEYPAIR env var is required (base58 secret key)");
-  process.exit(1);
-}
-
-// ---------------------------------------------------------------------------
-// Setup
-// ---------------------------------------------------------------------------
-
-const adminKeypair = Keypair.fromSecretKey(bs58.decode(ADMIN_KEYPAIR_B58));
-const connection = new Connection(RPC_URL, "confirmed");
-const wallet = new Wallet(adminKeypair);
-const provider = new AnchorProvider(connection, wallet, {
-  commitment: "confirmed",
-  preflightCommitment: "confirmed",
-});
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const meridianProgram = new Program(meridianIdl as any, provider);
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const oracleProgram = new Program(mockOracleIdl as any, provider);
-
-const tradier = new TradierClient();
-
-// ---------------------------------------------------------------------------
 // Step 1: Fetch closing prices from Tradier
 // ---------------------------------------------------------------------------
 
 async function fetchClosingPrices(
+  tradier: TradierClient,
   tickers: string[],
 ): Promise<Map<string, number>> {
   log.info(`Fetching closing prices for ${tickers.length} tickers`, {
@@ -93,6 +63,8 @@ async function fetchClosingPrices(
 // ---------------------------------------------------------------------------
 
 async function updateOracleFeeds(
+  oracleProgram: Program,
+  adminKeypair: Keypair,
   prices: Map<string, number>,
 ): Promise<void> {
   log.info("Updating oracle price feeds");
@@ -156,7 +128,9 @@ async function updateOracleFeeds(
 // Step 3 + 4: Load markets, settle, crank
 // ---------------------------------------------------------------------------
 
-async function loadUnsettledMarkets(): Promise<MarketInfo[]> {
+async function loadUnsettledMarkets(
+  meridianProgram: Program,
+): Promise<MarketInfo[]> {
   log.info("Loading all StrikeMarket accounts");
 
   // Fetch all StrikeMarket program accounts
@@ -193,6 +167,30 @@ async function main(): Promise<void> {
   log.info("=== Settlement Service starting ===");
   const startTime = Date.now();
 
+  // ---- Environment ----------------------------------------------------------
+  const RPC_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
+  const ADMIN_KEYPAIR_B58 = process.env.ADMIN_KEYPAIR;
+
+  if (!ADMIN_KEYPAIR_B58) {
+    throw new Error("ADMIN_KEYPAIR env var is required (base58 secret key)");
+  }
+
+  // ---- Setup ----------------------------------------------------------------
+  const adminKeypair = Keypair.fromSecretKey(bs58.decode(ADMIN_KEYPAIR_B58));
+  const connection = new Connection(RPC_URL, "confirmed");
+  const wallet = new Wallet(adminKeypair);
+  const provider = new AnchorProvider(connection, wallet, {
+    commitment: "confirmed",
+    preflightCommitment: "confirmed",
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const meridianProgram = new Program(meridianIdl as any, provider);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const oracleProgram = new Program(mockOracleIdl as any, provider);
+
+  const tradier = new TradierClient();
+
   try {
     // ---- Load on-chain state ----
     const [configPda] = findGlobalConfig();
@@ -216,13 +214,13 @@ async function main(): Promise<void> {
     log.info(`Active tickers: ${activeTickers.join(", ")}`);
 
     // ---- Step 1: Fetch closing prices ----
-    const closingPrices = await fetchClosingPrices(activeTickers);
+    const closingPrices = await fetchClosingPrices(tradier, activeTickers);
 
     // ---- Step 2: Update oracle feeds ----
-    await updateOracleFeeds(closingPrices);
+    await updateOracleFeeds(oracleProgram, adminKeypair, closingPrices);
 
     // ---- Step 3: Settle markets ----
-    const allMarkets = await loadUnsettledMarkets();
+    const allMarkets = await loadUnsettledMarkets(meridianProgram);
     const now = Math.floor(Date.now() / 1000);
     const expiredUnsettled = allMarkets.filter((m) => {
       if (m.account.isSettled) return false;

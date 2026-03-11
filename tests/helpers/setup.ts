@@ -37,6 +37,23 @@ import {
   buildUpdatePriceIx,
 } from "./instructions";
 
+// Import PDA helpers from the canonical source
+import {
+  findGlobalConfig as _findGlobalConfig,
+  findTreasury as _findTreasury,
+  findStrikeMarket as _findStrikeMarketBigint,
+  findYesMint as _findYesMint,
+  findNoMint as _findNoMint,
+  findUsdcVault as _findUsdcVault,
+  findEscrowVault as _findEscrowVault,
+  findYesEscrow as _findYesEscrow,
+  findNoEscrow as _findNoEscrow,
+  findOrderBook as _findOrderBook,
+  findPriceFeed as _findPriceFeed,
+  expiryDayBuffer,
+  strikeToBuffer,
+} from "../../services/shared/src/pda";
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -67,94 +84,31 @@ export interface MarketAccounts {
 }
 
 // ---------------------------------------------------------------------------
-// PDA derivation helpers (duplicated from pda.ts for test isolation)
+// PDA derivation helpers — re-exported from services/shared/src/pda.ts
 // ---------------------------------------------------------------------------
 
-export function findGlobalConfig(): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("config")],
-    MERIDIAN_PROGRAM_ID,
-  );
-}
+export const findGlobalConfig = _findGlobalConfig;
+export const findTreasury = _findTreasury;
+export const findYesMint = _findYesMint;
+export const findNoMint = _findNoMint;
+export const findUsdcVault = _findUsdcVault;
+export const findEscrowVault = _findEscrowVault;
+export const findYesEscrow = _findYesEscrow;
+export const findNoEscrow = _findNoEscrow;
+export const findOrderBook = _findOrderBook;
+export const findPriceFeed = _findPriceFeed;
 
-export function findTreasury(): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("treasury")],
-    MERIDIAN_PROGRAM_ID,
-  );
-}
-
+/**
+ * Wrapper around the canonical findStrikeMarket that accepts BN
+ * (used by all test code) instead of bigint (used by the shared module).
+ */
 export function findStrikeMarket(
   ticker: string,
   strikePriceLamports: BN,
   marketCloseUnix: number,
 ): [PublicKey, number] {
-  const expiryDay = Math.floor(marketCloseUnix / 86400);
-  return PublicKey.findProgramAddressSync(
-    [
-      Buffer.from("market"),
-      padTicker(ticker),
-      strikePriceLamports.toArrayLike(Buffer, "le", 8),
-      new BN(expiryDay).toArrayLike(Buffer, "le", 4),
-    ],
-    MERIDIAN_PROGRAM_ID,
-  );
-}
-
-export function findYesMint(market: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("yes_mint"), market.toBuffer()],
-    MERIDIAN_PROGRAM_ID,
-  );
-}
-
-export function findNoMint(market: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("no_mint"), market.toBuffer()],
-    MERIDIAN_PROGRAM_ID,
-  );
-}
-
-export function findUsdcVault(market: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("vault"), market.toBuffer()],
-    MERIDIAN_PROGRAM_ID,
-  );
-}
-
-export function findEscrowVault(market: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("escrow"), market.toBuffer()],
-    MERIDIAN_PROGRAM_ID,
-  );
-}
-
-export function findYesEscrow(market: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("yes_escrow"), market.toBuffer()],
-    MERIDIAN_PROGRAM_ID,
-  );
-}
-
-export function findNoEscrow(market: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("no_escrow"), market.toBuffer()],
-    MERIDIAN_PROGRAM_ID,
-  );
-}
-
-export function findOrderBook(market: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("order_book"), market.toBuffer()],
-    MERIDIAN_PROGRAM_ID,
-  );
-}
-
-export function findPriceFeed(ticker: string): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("price_feed"), padTicker(ticker)],
-    MOCK_ORACLE_PROGRAM_ID,
-  );
+  const strikeBigint = BigInt(strikePriceLamports.toString());
+  return _findStrikeMarketBigint(ticker, strikeBigint, marketCloseUnix);
 }
 
 // ---------------------------------------------------------------------------

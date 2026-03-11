@@ -7,8 +7,9 @@ import { useWalletState } from "@/hooks/useWalletState";
 import { PositionsTab } from "@/components/portfolio/PositionsTab";
 import { OpenOrdersTab } from "@/components/portfolio/OpenOrdersTab";
 import { PnlTab } from "@/components/portfolio/PnlTab";
+import { TradeHistoryTab } from "@/components/portfolio/TradeHistoryTab";
 
-type Tab = "performance" | "positions" | "orders";
+type Tab = "performance" | "positions" | "orders" | "history";
 
 export default function PortfolioPage() {
   const { connected } = useWallet();
@@ -65,6 +66,7 @@ export default function PortfolioPage() {
           { key: "performance" as Tab, label: "Performance" },
           { key: "positions" as Tab, label: "Positions" },
           { key: "orders" as Tab, label: "Open Orders" },
+          { key: "history" as Tab, label: "History" },
         ]).map(({ key, label }) => (
           <button
             key={key}
@@ -84,6 +86,7 @@ export default function PortfolioPage() {
       {tab === "performance" && <PnlTab />}
       {tab === "positions" && <PositionsTab />}
       {tab === "orders" && <OpenOrdersTab />}
+      {tab === "history" && <TradeHistoryTab />}
     </div>
   );
 }

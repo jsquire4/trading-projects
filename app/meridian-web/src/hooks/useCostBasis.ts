@@ -10,7 +10,7 @@ export interface CostBasisEntry {
   totalCostUsdc: number;  // total USDC spent
 }
 
-const EVENT_INDEXER_URL = process.env.NEXT_PUBLIC_EVENT_INDEXER_URL ?? "http://localhost:4800";
+const EVENT_INDEXER_URL = process.env.NEXT_PUBLIC_EVENT_INDEXER_URL ?? "http://localhost:3001";
 
 /**
  * Derives cost basis per market from fill events for the connected wallet.

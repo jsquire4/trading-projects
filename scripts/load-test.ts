@@ -51,7 +51,7 @@ import {
 // Configuration
 // ---------------------------------------------------------------------------
 
-const RPC_URL = process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
+const RPC_URL = process.env.SOLANA_RPC_URL ?? "http://127.0.0.1:8899";
 const NUM_WALLETS = 5;
 const ORDERS_PER_WALLET = 20;
 const TOTAL_ORDERS = NUM_WALLETS * ORDERS_PER_WALLET;

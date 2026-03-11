@@ -1,6 +1,6 @@
 export type NetworkCluster = "mainnet-beta" | "devnet" | "localnet";
 
-const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com";
+const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? "http://127.0.0.1:8899";
 
 export function getClusterFromRpcUrl(rpcUrl: string): NetworkCluster {
   if (rpcUrl.includes("mainnet")) return "mainnet-beta";

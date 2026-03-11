@@ -5,6 +5,10 @@ anchor_version = "0.31.1"
 resolution = true
 skip-lint = false
 
+[programs.localnet]
+meridian = "7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth"
+mock_oracle = "HJpHCfz1mqFFNa4ANfU8mMAZ5WoNRfo7EV1sZfEV2vZ"
+
 [programs.devnet]
 meridian = "7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth"
 mock_oracle = "HJpHCfz1mqFFNa4ANfU8mMAZ5WoNRfo7EV1sZfEV2vZ"
@@ -13,7 +17,7 @@ mock_oracle = "HJpHCfz1mqFFNa4ANfU8mMAZ5WoNRfo7EV1sZfEV2vZ"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "Devnet"
+cluster = "Localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

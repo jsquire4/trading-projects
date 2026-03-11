@@ -52,10 +52,18 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
     let usedFallback = false;
     const posSnapshots: PositionSnapshot[] = positions.map((p) => {
       const marketKey = p.market.publicKey.toBase58();
-      const mid = midPrices?.get(marketKey);
-      const yesMid = mid ?? 0.5;
-      const noMid = 1 - yesMid;
-      if (mid === undefined) usedFallback = true;
+      let yesMid: number;
+      let noMid: number;
+      if (p.market.isSettled) {
+        // Settled: winners get $1, losers get $0
+        yesMid = p.market.outcome === 1 ? 1.0 : 0.0;
+        noMid = 1 - yesMid;
+      } else {
+        const mid = midPrices?.get(marketKey);
+        yesMid = mid ?? 0.5;
+        noMid = 1 - yesMid;
+        if (mid === undefined) usedFallback = true;
+      }
       return {
         market: marketKey,
         ticker: p.market.ticker,
@@ -113,9 +121,16 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
   // Compute current portfolio value from positions directly (avoids cold start)
   const liveValue = positions.reduce((sum, p) => {
     const marketKey = p.market.publicKey.toBase58();
-    const mid = midPrices?.get(marketKey);
-    const yesMid = mid ?? 0.5;
-    const noMid = 1 - yesMid;
+    let yesMid: number;
+    let noMid: number;
+    if (p.market.isSettled) {
+      yesMid = p.market.outcome === 1 ? 1.0 : 0.0;
+      noMid = 1 - yesMid;
+    } else {
+      const mid = midPrices?.get(marketKey);
+      yesMid = mid ?? 0.5;
+      noMid = 1 - yesMid;
+    }
     return sum + (Number(p.yesBal) / 1_000_000) * yesMid + (Number(p.noBal) / 1_000_000) * noMid;
   }, 0);
 

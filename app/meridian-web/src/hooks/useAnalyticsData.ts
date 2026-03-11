@@ -125,7 +125,7 @@ export function useTradierOptions(symbol: string | null, expiration?: string | n
 // Event indexer hooks
 // ---------------------------------------------------------------------------
 
-const EVENT_INDEXER_URL = process.env.NEXT_PUBLIC_EVENT_INDEXER_URL ?? "http://localhost:4800";
+const EVENT_INDEXER_URL = process.env.NEXT_PUBLIC_EVENT_INDEXER_URL ?? "http://localhost:3001";
 
 /**
  * Fetch events from the event indexer, optionally filtered by type and market.
@@ -146,7 +146,7 @@ export function useIndexedEvents(options?: {
       if (market) params.set("market", market);
       params.set("limit", String(limit));
 
-      const res = await fetch(`${EVENT_INDEXER_URL}/events?${params}`);
+      const res = await fetch(`${EVENT_INDEXER_URL}/api/events?${params}`);
       if (!res.ok) throw new Error(`Event indexer fetch failed: ${res.status}`);
       const json = await res.json();
       // API returns { events: [...], count, limit, offset } — unwrap

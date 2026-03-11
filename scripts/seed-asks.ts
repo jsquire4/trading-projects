@@ -40,15 +40,16 @@ import { generateQuotes } from "../services/amm-bot/src/quoter";
 // Config
 // ---------------------------------------------------------------------------
 
-const DEVNET_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
+const RPC_URL = process.env.RPC_URL ?? "http://127.0.0.1:8899";
 const ENV_PATH = path.resolve(__dirname, "..", ".env");
 const ADMIN_KEYPAIR_PATH = path.resolve(
   process.env.HOME || "~",
   ".config/solana/id.json",
 );
 
-const ASK_QTY = 50;
+const ASK_QTY = 200;
 const DEFAULT_VOL = 0.35;
+const SEED_LEVELS = 3;
 
 const MAG7_PRICES: Record<string, number> = {
   AAPL: 198, MSFT: 420, GOOGL: 175, AMZN: 200,
@@ -77,7 +78,7 @@ function expiryDayFromUnix(unix: number): number {
 // ---------------------------------------------------------------------------
 
 (async () => {
-  const connection = new Connection(DEVNET_URL, "confirmed");
+  const connection = new Connection(RPC_URL, "confirmed");
   const admin = loadKeypair(ADMIN_KEYPAIR_PATH);
   console.log(`Admin: ${admin.publicKey.toBase58()}`);
 
@@ -154,19 +155,19 @@ function expiryDayFromUnix(unix: number): number {
         // ATA doesn't exist yet
       }
 
-      const mintLamports = ASK_QTY * 1_000_000;
+      const perLevelLamports = ASK_QTY * 1_000_000;
+      const totalNeeded = perLevelLamports * SEED_LEVELS;
 
       // Mint pairs if admin doesn't have enough Yes tokens
-      if (yesBalance < BigInt(mintLamports)) {
+      if (yesBalance < BigInt(totalNeeded)) {
         if (yesBalance > BigInt(0)) {
-          // Has partial balance — can't mint (requires 0 balance), use what we have
           console.log(`  ${label}: Using existing ${Number(yesBalance) / 1e6} Yes tokens`);
         } else {
           const mintIx = buildMintPairIx(admin, {
             market: marketPda, yesMint, noMint, usdcVault, configPda, usdcMint,
-          }, mintLamports);
+          }, totalNeeded);
           await sendAndConfirmTransaction(connection, new Transaction().add(mintIx), [admin], { commitment: "confirmed" });
-          yesBalance = BigInt(mintLamports);
+          yesBalance = BigInt(totalNeeded);
           minted++;
         }
       }
@@ -178,9 +179,7 @@ function expiryDayFromUnix(unix: number): number {
       const fairProb = binaryCallPrice(spec.spotPrice, spec.strikeDollars, DEFAULT_VOL, T);
       const quote = generateQuotes(fairProb, 0);
 
-      // Post Yes ask (side=1)
-      const askLamports = Math.min(Number(yesBalance), mintLamports);
-      if (askLamports < 1_000_000) {
+      if (Number(yesBalance) < 1_000_000) {
         console.log(`  ${label}: Insufficient Yes balance for ask — skipping`);
         skipped++;
         continue;
@@ -190,10 +189,16 @@ function expiryDayFromUnix(unix: number): number {
         market: marketPda, yesMint, noMint, usdcVault, escrowVault,
         yesEscrow, noEscrow, orderBook, oracleFeed,
       };
-      const askIx = buildPlaceOrderIx(configPda, admin, marketAddrs, usdcMint, 1, quote.askPrice, askLamports, 1, 0);
-      await sendAndConfirmTransaction(connection, new Transaction().add(askIx), [admin], { commitment: "confirmed" });
+
+      // Post asks at multiple price levels (askPrice, askPrice+1, askPrice+2)
+      for (let lvl = 0; lvl < SEED_LEVELS; lvl++) {
+        const askPrice = Math.min(99, quote.askPrice + lvl);
+        const lvlQty = Math.round(perLevelLamports * (1 - lvl * 0.25));
+        const askIx = buildPlaceOrderIx(configPda, admin, marketAddrs, usdcMint, 1, askPrice, lvlQty, 1, 0);
+        await sendAndConfirmTransaction(connection, new Transaction().add(askIx), [admin], { commitment: "confirmed" });
+      }
       asked++;
-      console.log(`  [${asked}] ${label}  fair=${probToCents(fairProb)}c  ask=${quote.askPrice}c`);
+      console.log(`  [${asked}] ${label}  fair=${probToCents(fairProb)}c  ask=${quote.askPrice}c  levels=${SEED_LEVELS}`);
     } catch (err: any) {
       failed++;
       console.error(`  FAILED: ${label} — ${err.message?.slice(0, 150)}`);

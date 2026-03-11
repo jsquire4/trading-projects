@@ -89,7 +89,7 @@ function generateStrikes(previousClose: number): number[] {
 // Constants
 // ---------------------------------------------------------------------------
 
-const DEVNET_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
+const RPC_URL = process.env.RPC_URL ?? "http://127.0.0.1:8899";
 const ENV_PATH = path.resolve(__dirname, "..", ".env");
 const ADMIN_KEYPAIR_PATH = path.resolve(
   process.env.HOME || "~",
@@ -99,8 +99,9 @@ const ADMIN_KEYPAIR_PATH = path.resolve(
 const ORDER_BOOK_TOTAL_SPACE = 8 + 127_560; // 127,568 bytes
 const MAX_GROWTH = 10_240;
 const BATCH_SIZE = 6;
-const QUOTE_QTY = 50; // Post 50-token bid orders per market
+const QUOTE_QTY = 200; // Post 200-token orders per price level per market
 const DEFAULT_VOL = 0.35; // 35% annualized volatility for seed pricing
+const SEED_LEVELS = 3; // Seed bids/asks at 3 price levels around fair value
 
 function expiryDayFromUnix(unix: number): number {
   return Math.floor(unix / 86400);
@@ -354,7 +355,7 @@ function toScriptMarketAddrs(addrs: MarketAddresses) {
 // ---------------------------------------------------------------------------
 
 (async () => {
-  const connection = new Connection(DEVNET_URL, "confirmed");
+  const connection = new Connection(RPC_URL, "confirmed");
   const admin = loadKeypair(ADMIN_KEYPAIR_PATH);
   console.log(`Admin: ${admin.publicKey.toBase58()}`);
 
@@ -449,9 +450,11 @@ function toScriptMarketAddrs(addrs: MarketAddresses) {
   if (toSeed.length === 0) {
     console.log(`\nAll markets already seeded.`);
   } else {
-    // ── Pass 2: Seed USDC bids (side=0) — admin has no tokens yet ───────
-    console.log(`\n── Pass 2: Posting USDC bids for ${toSeed.length} markets ──`);
     const quoteLamports = QUOTE_QTY * 1_000_000;
+
+    // ── Pass 2: Seed USDC bids (side=0) at multiple price levels ────────
+    // Posts bids at fair-1, fair-2, fair-3 to create realistic depth
+    console.log(`\n── Pass 2: Posting USDC bids (${SEED_LEVELS} levels) for ${toSeed.length} markets ──`);
     let bidCount = 0;
 
     for (const entry of toSeed) {
@@ -460,26 +463,34 @@ function toScriptMarketAddrs(addrs: MarketAddresses) {
       try {
         await ensureATAs(connection, admin, addrs);
         const { quote, fairCents } = computeQuote(spec.previousClose, spec.strikeDollars, marketCloseUnix);
-        const bidIx = buildPlaceOrderIx(addrs.configPda, admin, toScriptMarketAddrs(addrs), addrs.usdcMint, 0, quote.bidPrice, quoteLamports, 1, 0);
-        await sendAndConfirmTransaction(connection, new Transaction().add(bidIx), [admin], { commitment: "confirmed" });
+
+        for (let lvl = 0; lvl < SEED_LEVELS; lvl++) {
+          const bidPrice = Math.max(1, quote.bidPrice - lvl);
+          // Taper quantity: full at best bid, 75% at next, 50% at third
+          const lvlQty = Math.round(quoteLamports * (1 - lvl * 0.25));
+          const bidIx = buildPlaceOrderIx(addrs.configPda, admin, toScriptMarketAddrs(addrs), addrs.usdcMint, 0, bidPrice, lvlQty, 1, 0);
+          await sendAndConfirmTransaction(connection, new Transaction().add(bidIx), [admin], { commitment: "confirmed" });
+        }
+
         bidCount++;
-        console.log(`  [${bidCount}/${toSeed.length}] Bid: ${label}  (fair=${fairCents}c  bid=${quote.bidPrice}c)`);
+        console.log(`  [${bidCount}/${toSeed.length}] Bids: ${label}  (fair=${fairCents}c  best_bid=${quote.bidPrice}c  levels=${SEED_LEVELS})`);
       } catch (err: any) {
         console.error(`  Bid FAILED: ${label} — ${err.message?.slice(0, 120)}`);
       }
     }
 
-    // ── Pass 3: Mint pairs + post Yes asks (side=1) ──────────────────────
-    console.log(`\n── Pass 3: Minting pairs + posting asks for ${toSeed.length} markets ──`);
-    const MINT_QTY = QUOTE_QTY; // Mint same qty as bid size
-    const mintLamports = MINT_QTY * 1_000_000;
+    // ── Pass 3: Mint pairs + post Yes asks at multiple price levels ──────
+    // Need enough tokens for SEED_LEVELS asks. Mint extra to cover.
+    const totalAskTokens = SEED_LEVELS * quoteLamports;
+    const mintLamports = totalAskTokens;
+    console.log(`\n── Pass 3: Minting pairs + posting asks (${SEED_LEVELS} levels) for ${toSeed.length} markets ──`);
     let askCount = 0;
 
     for (const entry of toSeed) {
       const { spec, addrs } = entry;
       const label = `${spec.ticker} $${spec.strikeDollars}`;
       try {
-        // Mint pairs — admin gets Yes + No tokens
+        // Mint enough pairs for all ask levels
         const mintIx = buildMintPairIx(admin, {
           market: addrs.marketPda,
           yesMint: addrs.yesMint,
@@ -490,12 +501,17 @@ function toScriptMarketAddrs(addrs: MarketAddresses) {
         }, mintLamports);
         await sendAndConfirmTransaction(connection, new Transaction().add(mintIx), [admin], { commitment: "confirmed" });
 
-        // Post Yes ask (side=1) — admin has Yes tokens from minting
+        // Post asks at fair+1, fair+2, fair+3
         const { quote, fairCents } = computeQuote(spec.previousClose, spec.strikeDollars, marketCloseUnix);
-        const askIx = buildPlaceOrderIx(addrs.configPda, admin, toScriptMarketAddrs(addrs), addrs.usdcMint, 1, quote.askPrice, quoteLamports, 1, 0);
-        await sendAndConfirmTransaction(connection, new Transaction().add(askIx), [admin], { commitment: "confirmed" });
+        for (let lvl = 0; lvl < SEED_LEVELS; lvl++) {
+          const askPrice = Math.min(99, quote.askPrice + lvl);
+          const lvlQty = Math.round(quoteLamports * (1 - lvl * 0.25));
+          const askIx = buildPlaceOrderIx(addrs.configPda, admin, toScriptMarketAddrs(addrs), addrs.usdcMint, 1, askPrice, lvlQty, 1, 0);
+          await sendAndConfirmTransaction(connection, new Transaction().add(askIx), [admin], { commitment: "confirmed" });
+        }
+
         askCount++;
-        console.log(`  [${askCount}/${toSeed.length}] Mint+Ask: ${label}  (fair=${fairCents}c  ask=${quote.askPrice}c)`);
+        console.log(`  [${askCount}/${toSeed.length}] Mint+Asks: ${label}  (fair=${fairCents}c  best_ask=${quote.askPrice}c  levels=${SEED_LEVELS})`);
       } catch (err: any) {
         console.error(`  Mint/Ask FAILED: ${label} — ${err.message?.slice(0, 120)}`);
         const logs = err?.logs ?? [];
@@ -508,7 +524,7 @@ function toScriptMarketAddrs(addrs: MarketAddresses) {
   console.log(`\n=== Test market creation complete ===`);
   console.log(`  Created: ${created}`);
   console.log(`  Skipped: ${skipped} (already existed)`);
-  console.log(`  Seeded:  ${toSeed.length} (bids + asks)`);
+  console.log(`  Seeded:  ${toSeed.length} (${SEED_LEVELS} bid levels + ${SEED_LEVELS} ask levels per market)`);
   console.log(`  Failed:  ${failed}`);
   console.log(`  Total:   ${specs.length}`);
 })().catch((err) => {

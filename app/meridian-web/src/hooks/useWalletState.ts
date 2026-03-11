@@ -10,7 +10,7 @@ import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 // ---------------------------------------------------------------------------
 
 /**
- * USDC mint address on devnet. Override via NEXT_PUBLIC_USDC_MINT env var.
+ * USDC mint address. Override via NEXT_PUBLIC_USDC_MINT env var.
  */
 export const USDC_MINT = new PublicKey(
   process.env.NEXT_PUBLIC_USDC_MINT ??
@@ -124,8 +124,12 @@ export function useWalletState(): UseWalletStateReturn {
 
     fetchBalances();
 
+    // Poll every 10 seconds for live balance updates
+    const interval = setInterval(fetchBalances, 10_000);
+
     return () => {
       cancelled = true;
+      clearInterval(interval);
     };
   }, [connection, publicKey, connected, refreshCounter]);
 

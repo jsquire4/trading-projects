@@ -10,6 +10,7 @@ import { OrderBook } from "@/components/OrderBook";
 import { OrderForm } from "@/components/OrderForm";
 import { OraclePrice } from "@/components/OraclePrice";
 import { SettlementStatus } from "@/components/SettlementStatus";
+import { SettleButton } from "@/components/SettleButton";
 import { MarketInfo } from "@/components/MarketInfo";
 import { MyOrders } from "@/components/MyOrders";
 import { MyPositions } from "@/components/MyPositions";
@@ -197,14 +198,17 @@ export default function TradingCockpit({
             <OraclePrice ticker={ticker} />
           </div>
         </div>
-        <SettlementStatus
-          marketCloseUnix={Number(market.marketCloseUnix)}
-          isSettled={market.isSettled}
-          outcome={market.outcome}
-          overrideDeadline={Number(market.overrideDeadline)}
-          settlementPrice={Number(market.settlementPrice)}
-          strikePrice={Number(market.strikePrice)}
-        />
+        <div className="flex items-center gap-3">
+          <SettlementStatus
+            marketCloseUnix={Number(market.marketCloseUnix)}
+            isSettled={market.isSettled}
+            outcome={market.outcome}
+            overrideDeadline={Number(market.overrideDeadline)}
+            settlementPrice={Number(market.settlementPrice)}
+            strikePrice={Number(market.strikePrice)}
+          />
+          <SettleButton market={market} />
+        </div>
       </div>
 
       {/* Strike selector */}
@@ -240,12 +244,12 @@ export default function TradingCockpit({
             strikePrice={Number(market.strikePrice)}
           />
 
-          {/* Redeem panel — show when user has positions */}
-          {position && (
+          {/* Redeem panel — show when user has positions or market is settled */}
+          {(position || market.isSettled) && (
             <RedeemPanel
               market={market}
-              yesBal={position.yesBal}
-              noBal={position.noBal}
+              yesBal={position?.yesBal ?? BigInt(0)}
+              noBal={position?.noBal ?? BigInt(0)}
             />
           )}
         </div>

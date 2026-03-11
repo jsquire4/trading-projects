@@ -23,7 +23,7 @@ import * as path from "path";
 
 import { MOCK_ORACLE_PROGRAM_ID } from "./shared";
 
-const DEVNET_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
+const RPC_URL = process.env.RPC_URL ?? "http://127.0.0.1:8899";
 const ADMIN_KEYPAIR_PATH = path.resolve(
   process.env.HOME || "~",
   ".config/solana/id.json"
@@ -60,7 +60,7 @@ function deriveFeedPda(ticker: string): [PublicKey, number] {
 }
 
 (async () => {
-  const connection = new Connection(DEVNET_URL, "confirmed");
+  const connection = new Connection(RPC_URL, "confirmed");
   const admin = loadKeypair(ADMIN_KEYPAIR_PATH);
   console.log(`Admin: ${admin.publicKey.toBase58()}`);
 

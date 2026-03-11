@@ -9,7 +9,7 @@
 # make local-stop  — Stop local validator + all services
 # make clean      — Stop all background processes
 
-.PHONY: install dev services web test clean local local-stop stress-test
+.PHONY: install dev services web test clean local local-stop stress-test validate
 
 # Install all dependencies
 install:
@@ -62,6 +62,10 @@ local-stop:
 stress-test:
 	@echo "Running Meridian stress test against local validator..."
 	npx tsx scripts/stress-test.ts
+
+# Validate running stack (smoke test)
+validate:
+	npx ts-node scripts/validate-stack.ts
 
 # Kill background services
 clean:

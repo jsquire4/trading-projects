@@ -1,15 +1,30 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo } from "react";
+import { useMemo, useState, useCallback } from "react";
+import { PublicKey } from "@solana/web3.js";
+import { BN } from "@coral-xyz/anchor";
+import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from "@solana/spl-token";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { usePositions, type Position } from "@/hooks/usePositions";
 import { useOrderBook } from "@/hooks/useMarkets";
 import { useCostBasis } from "@/hooks/useCostBasis";
+import { useAnchorProgram } from "@/hooks/useAnchorProgram";
+import { useTransaction } from "@/hooks/useTransaction";
+import { USDC_MINT } from "@/hooks/useWalletState";
+import { findGlobalConfig, findYesMint, findNoMint, findUsdcVault } from "@/lib/pda";
 import { InsightTooltip } from "@/components/InsightTooltip";
 import { interpretPosition } from "@/lib/insights";
 
 function PositionCard({ position, totalCost }: { position: Position; totalCost: number }) {
   const { data: book } = useOrderBook(position.market.publicKey.toBase58());
+  const { program } = useAnchorProgram();
+  const { sendTransaction } = useTransaction();
+  const { publicKey } = useWallet();
+  const queryClient = useQueryClient();
+  const [submitting, setSubmitting] = useState(false);
+
   const yesBal = Number(position.yesBal) / 1_000_000;
   const noBal = Number(position.noBal) / 1_000_000;
   const strikeDollars = Number(position.market.strikePrice) / 1_000_000;
@@ -35,13 +50,65 @@ function PositionCard({ position, totalCost }: { position: Position; totalCost: 
 
   const isSettled = position.market.isSettled;
   const outcome = position.market.outcome;
+  const isYesWinner = outcome === 1;
   const isWinner =
     (outcome === 1 && yesBal > 0) || (outcome === 2 && noBal > 0);
+
+  const winnerBal = isYesWinner ? position.yesBal : position.noBal;
+  const winnerTokens = Number(winnerBal) / 1_000_000;
+  const winnerLabel = isYesWinner ? "Yes" : "No";
+
+  const overrideDeadline = Number(position.market.overrideDeadline);
+  const inOverrideWindow = isSettled && now < overrideDeadline;
+  const canRedeem = isSettled && isWinner && !inOverrideWindow && !position.market.isPaused && winnerBal > BigInt(0);
 
   const minutesLeft = Math.max(0, remaining / 60);
   const side = yesBal >= noBal ? "yes" : "no";
   const pnl = totalValue - totalCost;
   const positionInsight = interpretPosition(side, pnl, minutesLeft);
+
+  const handleRedeem = useCallback(async () => {
+    if (!program || !publicKey || winnerBal <= BigInt(0)) return;
+    setSubmitting(true);
+    try {
+      const [config] = findGlobalConfig();
+      const [yesMint] = findYesMint(position.market.publicKey);
+      const [noMint] = findNoMint(position.market.publicKey);
+      const [usdcVault] = findUsdcVault(position.market.publicKey);
+      const userUsdcAta = await getAssociatedTokenAddress(USDC_MINT, publicKey);
+      const userYesAta = await getAssociatedTokenAddress(yesMint, publicKey);
+      const userNoAta = await getAssociatedTokenAddress(noMint, publicKey);
+
+      const tx = await program.methods
+        .redeem(1, new BN(winnerBal.toString()))
+        .accountsPartial({
+          user: publicKey,
+          config,
+          market: position.market.publicKey,
+          yesMint,
+          noMint,
+          usdcVault,
+          userUsdcAta,
+          userYesAta,
+          userNoAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .transaction();
+
+      await sendTransaction(tx, { description: `Redeem ${winnerTokens.toFixed(0)} ${winnerLabel} tokens` });
+      queryClient.invalidateQueries({ queryKey: ["positions"] });
+      queryClient.invalidateQueries({ queryKey: ["markets"] });
+    } catch {
+      // Error handled by useTransaction toast
+    } finally {
+      setSubmitting(false);
+    }
+  }, [program, publicKey, position.market, winnerBal, winnerTokens, winnerLabel, sendTransaction, queryClient]);
+
+  // Settled value: winners get $1 per token
+  const settledValue = isSettled
+    ? isWinner ? winnerTokens : 0
+    : null;
 
   return (
     <div className={`rounded-lg border p-4 ${
@@ -83,13 +150,13 @@ function PositionCard({ position, totalCost }: { position: Position; totalCost: 
             <div className="text-red-400 font-medium tabular-nums">{noBal.toFixed(0)}</div>
           </div>
         )}
-        {totalValue > 0 && (
-          <div>
-            <span className="text-white/40">Est. Value</span>
-            <div className="text-white font-medium tabular-nums">${totalValue.toFixed(2)}</div>
+        <div>
+          <span className="text-white/40">{isSettled ? "Value" : "Est. Value"}</span>
+          <div className="text-white font-medium tabular-nums">
+            ${(settledValue ?? totalValue).toFixed(2)}
           </div>
-        )}
-        {midPrice && (
+        </div>
+        {!isSettled && midPrice && (
           <div>
             <span className="text-white/40">Mid Price</span>
             <div className="text-white/70 font-mono">{midPrice.toFixed(0)}c</div>
@@ -97,12 +164,31 @@ function PositionCard({ position, totalCost }: { position: Position; totalCost: 
         )}
       </div>
 
-      <Link
-        href={`/trade/${position.market.ticker}?market=${position.market.publicKey.toBase58()}`}
-        className="text-xs text-accent hover:text-accent/80 transition-colors font-medium"
-      >
-        {isSettled ? "View Settlement" : "Trade More"} →
-      </Link>
+      {/* Redeem button for winning settled positions */}
+      {canRedeem ? (
+        <button
+          onClick={handleRedeem}
+          disabled={submitting}
+          className="w-full rounded-md py-2 text-xs font-semibold text-white bg-green-500/20 hover:bg-green-500/30 disabled:bg-white/5 disabled:text-white/20 transition-colors"
+        >
+          {submitting ? "Redeeming..." : `Redeem $${winnerTokens.toFixed(2)} USDC`}
+        </button>
+      ) : isSettled && isWinner && inOverrideWindow ? (
+        <p className="text-[11px] text-yellow-400/60">
+          Redemption unlocks at {new Date(overrideDeadline * 1000).toLocaleTimeString()}
+        </p>
+      ) : isSettled && !isWinner ? (
+        <p className="text-[11px] text-white/30">
+          Position expired worthless
+        </p>
+      ) : (
+        <Link
+          href={`/trade/${position.market.ticker}?market=${position.market.publicKey.toBase58()}`}
+          className="text-xs text-accent hover:text-accent/80 transition-colors font-medium"
+        >
+          Trade More →
+        </Link>
+      )}
     </div>
   );
 }
@@ -110,6 +196,28 @@ function PositionCard({ position, totalCost }: { position: Position; totalCost: 
 export function PositionsTab() {
   const { data: positions = [], isLoading } = usePositions();
   const { costBasis } = useCostBasis();
+
+  // Sort: winning settled positions first, then active, then losing settled
+  const sortedPositions = useMemo(() => {
+    return [...positions].sort((a, b) => {
+      const aSettled = a.market.isSettled ? 1 : 0;
+      const bSettled = b.market.isSettled ? 1 : 0;
+      const aWinner = a.market.isSettled && (
+        (a.market.outcome === 1 && a.yesBal > BigInt(0)) ||
+        (a.market.outcome === 2 && a.noBal > BigInt(0))
+      );
+      const bWinner = b.market.isSettled && (
+        (b.market.outcome === 1 && b.yesBal > BigInt(0)) ||
+        (b.market.outcome === 2 && b.noBal > BigInt(0))
+      );
+      // Winning settled first, then active, then losing
+      if (aWinner && !bWinner) return -1;
+      if (!aWinner && bWinner) return 1;
+      if (!aSettled && bSettled) return -1;
+      if (aSettled && !bSettled) return 1;
+      return 0;
+    });
+  }, [positions]);
 
   if (isLoading) {
     return (
@@ -140,7 +248,7 @@ export function PositionsTab() {
 
   return (
     <div className="space-y-3">
-      {positions.map((pos) => {
+      {sortedPositions.map((pos) => {
         const cb = costBasis.get(pos.market.publicKey.toBase58());
         return (
           <PositionCard

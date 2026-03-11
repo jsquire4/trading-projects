@@ -156,11 +156,16 @@ export function PnlTab() {
 
     let mid: number;
     if (pos.market.isSettled) {
+      // Winners get $1, losers get $0
       mid = pos.market.outcome === 1 ? 1.0 : 0.0;
     } else {
       mid = midPriceMap.get(marketKey) ?? 0.5;
     }
     const currentVal = yesBal * mid + noBal * (1 - mid);
+    const isWinner = pos.market.isSettled && (
+      (pos.market.outcome === 1 && yesBal > 0) ||
+      (pos.market.outcome === 2 && noBal > 0)
+    );
 
     const totalCost = cb ? cb.totalCostUsdc : null;
     const pnl = totalCost != null ? currentVal - totalCost : null;
@@ -179,6 +184,8 @@ export function PnlTab() {
       currentVal,
       pnl: pnl as number | null,
       pnlPct: pnlPct as number | null,
+      isSettled: pos.market.isSettled,
+      isWinner,
     };
   });
 
@@ -377,7 +384,16 @@ export function PnlTab() {
                       className="hover:bg-white/5 transition-colors"
                     >
                       <td className="px-4 py-3 font-semibold text-white">
-                        {row.ticker}
+                        <span className="flex items-center gap-1.5">
+                          {row.ticker}
+                          {row.isSettled && (
+                            <span className={`text-[9px] font-medium px-1 py-0.5 rounded ${
+                              row.isWinner ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"
+                            }`}>
+                              {row.isWinner ? "WON" : "LOST"}
+                            </span>
+                          )}
+                        </span>
                       </td>
                       <td className="px-4 py-3 text-white/60">{row.side}</td>
                       <td className="px-4 py-3 text-right font-mono text-white/80">

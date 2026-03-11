@@ -19,6 +19,7 @@ pub struct SettleMarket<'info> {
         has_one = oracle_feed @ MeridianError::OracleProgramMismatch,
         constraint = !market.is_settled @ MeridianError::MarketAlreadySettled,
         constraint = !market.is_paused @ MeridianError::MarketPaused,
+        constraint = !market.is_closed @ MeridianError::MarketClosed,
     )]
     pub market: Box<Account<'info, StrikeMarket>>,
 

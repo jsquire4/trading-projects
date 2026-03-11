@@ -801,3 +801,131 @@ export function buildCrankCancelIx(
     data,
   });
 }
+
+// ---------------------------------------------------------------------------
+// Meridian: close_market
+// ---------------------------------------------------------------------------
+
+export interface CloseMarketParams {
+  admin: PublicKey;
+  config: PublicKey;
+  market: PublicKey;
+  orderBook: PublicKey;
+  usdcVault: PublicKey;
+  escrowVault: PublicKey;
+  yesEscrow: PublicKey;
+  noEscrow: PublicKey;
+  yesMint: PublicKey;
+  noMint: PublicKey;
+  treasury: PublicKey;
+}
+
+export function buildCloseMarketIx(
+  params: CloseMarketParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("close_market");
+
+  // Account order matches CloseMarket struct:
+  //   admin, config, market, order_book, usdc_vault, escrow_vault,
+  //   yes_escrow, no_escrow, yes_mint, no_mint, treasury,
+  //   token_program, system_program
+  const keys = [
+    { pubkey: params.admin, isSigner: true, isWritable: true },
+    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.market, isSigner: false, isWritable: true },
+    { pubkey: params.orderBook, isSigner: false, isWritable: true },
+    { pubkey: params.usdcVault, isSigner: false, isWritable: true },
+    { pubkey: params.escrowVault, isSigner: false, isWritable: true },
+    { pubkey: params.yesEscrow, isSigner: false, isWritable: true },
+    { pubkey: params.noEscrow, isSigner: false, isWritable: true },
+    { pubkey: params.yesMint, isSigner: false, isWritable: true },
+    { pubkey: params.noMint, isSigner: false, isWritable: true },
+    { pubkey: params.treasury, isSigner: false, isWritable: true },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+  ];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data: disc,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Meridian: treasury_redeem
+// ---------------------------------------------------------------------------
+
+export interface TreasuryRedeemParams {
+  user: PublicKey;
+  config: PublicKey;
+  market: PublicKey;
+  yesMint: PublicKey;
+  noMint: PublicKey;
+  treasury: PublicKey;
+  userUsdcAta: PublicKey;
+  userYesAta: PublicKey;
+  userNoAta: PublicKey;
+}
+
+export function buildTreasuryRedeemIx(
+  params: TreasuryRedeemParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("treasury_redeem");
+
+  // Account order matches TreasuryRedeem struct:
+  //   user, config, market, yes_mint, no_mint, treasury,
+  //   user_usdc_ata, user_yes_ata, user_no_ata, token_program
+  const keys = [
+    { pubkey: params.user, isSigner: true, isWritable: true },
+    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.market, isSigner: false, isWritable: true },
+    { pubkey: params.yesMint, isSigner: false, isWritable: true },
+    { pubkey: params.noMint, isSigner: false, isWritable: true },
+    { pubkey: params.treasury, isSigner: false, isWritable: true },
+    { pubkey: params.userUsdcAta, isSigner: false, isWritable: true },
+    { pubkey: params.userYesAta, isSigner: false, isWritable: true },
+    { pubkey: params.userNoAta, isSigner: false, isWritable: true },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+  ];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data: disc,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Meridian: cleanup_market
+// ---------------------------------------------------------------------------
+
+export interface CleanupMarketParams {
+  admin: PublicKey;
+  config: PublicKey;
+  market: PublicKey;
+  yesMint: PublicKey;
+  noMint: PublicKey;
+}
+
+export function buildCleanupMarketIx(
+  params: CleanupMarketParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("cleanup_market");
+
+  // Account order matches CleanupMarket struct:
+  //   admin, config, market, yes_mint, no_mint
+  const keys = [
+    { pubkey: params.admin, isSigner: true, isWritable: true },
+    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.market, isSigner: false, isWritable: true },
+    { pubkey: params.yesMint, isSigner: false, isWritable: true },
+    { pubkey: params.noMint, isSigner: false, isWritable: true },
+  ];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data: disc,
+  });
+}

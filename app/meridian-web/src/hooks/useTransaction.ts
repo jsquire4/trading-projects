@@ -5,6 +5,7 @@ import { useConnection } from "@solana/wallet-adapter-react";
 import type { Transaction, VersionedTransaction } from "@solana/web3.js";
 import { toast } from "sonner";
 import { useAnchorProgram } from "./useAnchorProgram";
+import { getExplorerUrl } from "../lib/network";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -36,10 +37,6 @@ interface SendOptions {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function explorerUrl(signature: string): string {
-  return `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
-}
 
 function shortenSig(sig: string): string {
   return `${sig.slice(0, 8)}...${sig.slice(-8)}`;
@@ -124,7 +121,7 @@ export function useTransaction(): UseTransactionReturn {
             description: shortenSig(signature),
             action: {
               label: "View",
-              onClick: () => window.open(explorerUrl(signature), "_blank"),
+              onClick: () => window.open(getExplorerUrl(signature), "_blank"),
             },
           });
           if (mountedRef.current) {
@@ -148,7 +145,7 @@ export function useTransaction(): UseTransactionReturn {
           description: shortenSig(signature),
           action: {
             label: "View",
-            onClick: () => window.open(explorerUrl(signature), "_blank"),
+            onClick: () => window.open(getExplorerUrl(signature), "_blank"),
           },
         });
 

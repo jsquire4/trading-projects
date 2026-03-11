@@ -1,6 +1,7 @@
 "use client";
 
 import { buildXShareUrl, buildLinkedInShareUrl } from "@/lib/share";
+import { getExplorerUrl } from "@/lib/network";
 
 interface TransactionReceiptProps {
   signature: string;
@@ -10,10 +11,6 @@ interface TransactionReceiptProps {
   quantity: number;
   cost: number;
   onClose: () => void;
-}
-
-function explorerUrl(sig: string): string {
-  return `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
 }
 
 export function TransactionReceipt({
@@ -80,7 +77,7 @@ export function TransactionReceipt({
 
       <div className="flex items-center gap-2 pt-1">
         <a
-          href={explorerUrl(signature)}
+          href={getExplorerUrl(signature)}
           target="_blank"
           rel="noopener noreferrer"
           className="flex-1 text-center text-xs text-accent hover:text-accent/80 transition-colors py-1.5 rounded-md border border-white/10 hover:border-white/20"

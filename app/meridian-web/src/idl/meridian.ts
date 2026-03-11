@@ -231,6 +231,173 @@ export type Meridian = {
       ]
     },
     {
+      "name": "cleanupMarket",
+      "discriminator": [
+        124,
+        83,
+        231,
+        13,
+        231,
+        181,
+        155,
+        4
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "yesMint",
+          "docs": [
+            "Yes mint — checked for zero supply but NOT closed (owned by Token program)"
+          ],
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "noMint",
+          "docs": [
+            "No mint — checked for zero supply but NOT closed (owned by Token program)"
+          ],
+          "relations": [
+            "market"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "closeMarket",
+      "discriminator": [
+        88,
+        154,
+        248,
+        186,
+        48,
+        14,
+        123,
+        244
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "orderBook",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "usdcVault",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "escrowVault",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "yesEscrow",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "noEscrow",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "yesMint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "noMint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Treasury USDC account (config PDA authority, seeds=[b\"treasury\"])"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "crankCancel",
       "discriminator": [
         157,
@@ -864,7 +1031,7 @@ export type Meridian = {
         {
           "name": "userNoAta",
           "docs": [
-            "User's No token account — created if needed. NOT checked for balance (Buy No flow needs this)."
+            "User's No token account — created if needed. Must have zero balance (checked in handler)."
           ],
           "writable": true,
           "pda": {
@@ -1330,6 +1497,100 @@ export type Meridian = {
       "args": []
     },
     {
+      "name": "treasuryRedeem",
+      "discriminator": [
+        154,
+        179,
+        45,
+        198,
+        243,
+        135,
+        180,
+        77
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "yesMint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "noMint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Treasury USDC account (config PDA authority)"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "userUsdcAta",
+          "docs": [
+            "User's USDC ATA"
+          ],
+          "writable": true
+        },
+        {
+          "name": "userYesAta",
+          "docs": [
+            "User's Yes token ATA"
+          ],
+          "writable": true
+        },
+        {
+          "name": "userNoAta",
+          "docs": [
+            "User's No token ATA"
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "unpause",
       "discriminator": [
         169,
@@ -1576,6 +1837,11 @@ export type Meridian = {
       "msg": "Not enough remaining_accounts for fill settlement"
     },
     {
+      "code": 6038,
+      "name": "invalidMakerAccount",
+      "msg": "Maker token account owner does not match fill maker"
+    },
+    {
       "code": 6040,
       "name": "oracleStale",
       "msg": "Oracle price is stale — exceeds staleness threshold"
@@ -1599,6 +1865,11 @@ export type Meridian = {
       "code": 6044,
       "name": "oracleProgramMismatch",
       "msg": "Oracle program ID doesn't match GlobalConfig"
+    },
+    {
+      "code": 6045,
+      "name": "invalidOracleDiscriminator",
+      "msg": "Oracle account discriminator does not match PriceFeed"
     },
     {
       "code": 6050,

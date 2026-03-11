@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useMemo } from "react";
 import { useMarkets } from "@/hooks/useMarkets";
+import { useNetwork } from "@/hooks/useNetwork";
 import { WalletButton } from "@/components/WalletButton";
+import { FaucetButton } from "@/components/FaucetButton";
 
 // ---------------------------------------------------------------------------
 // How It Works step card
@@ -92,6 +94,7 @@ function StatCard({ label, value, sub }: StatCardProps) {
 
 export default function HomePage() {
   const { data: markets = [], isLoading } = useMarkets();
+  const { isMainnet, isDevnet, isLocalnet } = useNetwork();
 
   // Derive per-ticker summaries from active (unsettled) markets
   const tickerSummaries = useMemo(() => {
@@ -142,7 +145,7 @@ export default function HomePage() {
       {/* ------------------------------------------------------------------ */}
       <section className="flex flex-col items-center text-center gap-6 pt-8">
         <div className="inline-block rounded-full bg-accent/10 border border-accent/20 px-4 py-1 text-xs text-accent font-medium tracking-wider uppercase">
-          0DTE — Settles 4 PM ET daily
+          {isMainnet ? "Live Trading" : isDevnet ? "Devnet — Test Mode" : "Local — Test Mode"} — 0DTE — Settles 4 PM ET daily
         </div>
         <h1 className="text-5xl font-bold leading-tight max-w-2xl text-gradient">
           Binary Stock Outcomes on Solana
@@ -150,6 +153,7 @@ export default function HomePage() {
         <p className="text-white/50 text-lg max-w-xl">
           Trade Yes/No contracts on MAG7 stocks. Pay $1 USDC, win $1 USDC.
           Every contract settles at the close.
+          {!isMainnet && " You are on a test network — no real funds at risk."}
         </p>
         <div className="flex items-center gap-4 mt-2">
           <Link
@@ -159,6 +163,7 @@ export default function HomePage() {
             View Markets
           </Link>
           <WalletButton />
+          {!isMainnet && <FaucetButton />}
         </div>
       </section>
 

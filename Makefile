@@ -9,7 +9,7 @@
 # make local-stop  — Stop local validator + all services
 # make clean      — Stop all background processes
 
-.PHONY: install dev services web test clean local local-stop
+.PHONY: install dev services web test clean local local-stop stress-test
 
 # Install all dependencies
 install:
@@ -20,6 +20,7 @@ install:
 	cd services/event-indexer && yarn install
 	cd services/market-initializer && yarn install
 	cd services/automation && yarn install
+	cd services/monitor && yarn install
 
 # Start everything
 dev: web services
@@ -34,11 +35,13 @@ services:
 	cd services/amm-bot && yarn start &
 	cd services/event-indexer && yarn start &
 	cd services/automation && yarn start &
+	cd services/monitor && yarn start &
 	@echo "All services started in background."
 	@echo "  - oracle-feeder (Tradier -> on-chain oracle)"
 	@echo "  - amm-bot (liquidity seeder)"
 	@echo "  - event-indexer (on-chain event listener + REST API)"
 	@echo "  - automation (scheduler: market-initializer + settlement + verification)"
+	@echo "  - monitor (health checks: SOL balance, oracle freshness, expired markets)"
 
 # Run all test suites
 test:
@@ -55,11 +58,17 @@ local:
 local-stop:
 	./scripts/local-stack.sh --stop
 
+# Stress test against local validator
+stress-test:
+	@echo "Running Meridian stress test against local validator..."
+	npx tsx scripts/stress-test.ts
+
 # Kill background services
 clean:
 	@pkill -f "oracle-feeder" 2>/dev/null || true
 	@pkill -f "amm-bot" 2>/dev/null || true
 	@pkill -f "event-indexer" 2>/dev/null || true
 	@pkill -f "automation" 2>/dev/null || true
+	@pkill -f "monitor" 2>/dev/null || true
 	@pkill -f "next dev" 2>/dev/null || true
 	@echo "All services stopped."

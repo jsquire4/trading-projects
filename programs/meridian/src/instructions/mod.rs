@@ -12,6 +12,9 @@ pub mod admin_settle;
 pub mod admin_override_settlement;
 pub mod redeem;
 pub mod crank_cancel;
+pub mod close_market;
+pub mod treasury_redeem;
+pub mod cleanup_market;
 
 pub use allocate_order_book::*;
 pub use initialize_config::*;
@@ -27,3 +30,6 @@ pub use admin_settle::*;
 pub use admin_override_settlement::*;
 pub use redeem::*;
 pub use crank_cancel::*;
+pub use close_market::*;
+pub use treasury_redeem::*;
+pub use cleanup_market::*;

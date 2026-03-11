@@ -24,6 +24,9 @@ pub use instructions::admin_settle::*;
 pub use instructions::admin_override_settlement::*;
 pub use instructions::redeem::*;
 pub use instructions::crank_cancel::*;
+pub use instructions::close_market::*;
+pub use instructions::treasury_redeem::*;
+pub use instructions::cleanup_market::*;
 
 declare_id!("7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth");
 
@@ -135,5 +138,17 @@ pub mod meridian {
         batch_size: u8,
     ) -> Result<()> {
         instructions::crank_cancel::handle_crank_cancel(ctx, batch_size)
+    }
+
+    pub fn close_market(ctx: Context<CloseMarket>) -> Result<()> {
+        instructions::close_market::handle_close_market(ctx)
+    }
+
+    pub fn treasury_redeem(ctx: Context<TreasuryRedeem>) -> Result<()> {
+        instructions::treasury_redeem::handle_treasury_redeem(ctx)
+    }
+
+    pub fn cleanup_market(ctx: Context<CleanupMarket>) -> Result<()> {
+        instructions::cleanup_market::handle_cleanup_market(ctx)
     }
 }

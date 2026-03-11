@@ -4,6 +4,23 @@ pub const fn expiry_day(market_close_unix: i64) -> u32 {
     (market_close_unix / 86400) as u32
 }
 
+/// Constructs the config PDA signer seeds from a GlobalConfig reference.
+///
+/// # Usage
+/// ```ignore
+/// let config = &ctx.accounts.config;
+/// config_signer_seeds!(config => bump_byte, seeds, signer_seeds);
+/// // Now `signer_seeds` is ready for CpiContext::new_with_signer(...)
+/// ```
+#[macro_export]
+macro_rules! config_signer_seeds {
+    ($config:expr => $bump_byte:ident, $seeds:ident, $signer_seeds:ident) => {
+        let $bump_byte = [$config.bump];
+        let $seeds: &[&[u8]] = &[crate::state::GlobalConfig::SEED_PREFIX, &$bump_byte];
+        let $signer_seeds = &[$seeds];
+    };
+}
+
 /// Constructs the market PDA signer seeds from a StrikeMarket reference.
 ///
 /// This macro eliminates the duplicated 6-line seed construction block that

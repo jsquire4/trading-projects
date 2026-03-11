@@ -7,7 +7,9 @@ import { BN } from "@coral-xyz/anchor";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useAnchorProgram } from "@/hooks/useAnchorProgram";
 import { useTransaction } from "@/hooks/useTransaction";
+import { useNetwork } from "@/hooks/useNetwork";
 import { USDC_MINT } from "@/hooks/useWalletState";
+import { TradeConfirmationModal } from "@/components/TradeConfirmationModal";
 import {
   findGlobalConfig,
   findOrderBook,
@@ -55,10 +57,12 @@ export function OrderForm({ marketKey, ticker, strikePrice }: OrderFormProps) {
   const [price, setPrice] = useState<string>("50");
   const [quantity, setQuantity] = useState<string>("1");
   const [submitting, setSubmitting] = useState(false);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
 
   const { program } = useAnchorProgram();
   const { sendTransaction } = useTransaction();
   const { publicKey: walletPublicKey } = useWallet();
+  const { isMainnet } = useNetwork();
 
   const marketPubkey = useMemo(() => new PublicKey(marketKey), [marketKey]);
 
@@ -88,7 +92,7 @@ export function OrderForm({ marketKey, ticker, strikePrice }: OrderFormProps) {
     return true;
   }, [quantityLamports, effectivePrice, orderType, walletPublicKey]);
 
-  const handleSubmit = useCallback(async () => {
+  const handleSubmitDirect = useCallback(async () => {
     if (!isValid || !program || !walletPublicKey || submitting) return;
     setSubmitting(true);
 
@@ -160,6 +164,19 @@ export function OrderForm({ marketKey, ticker, strikePrice }: OrderFormProps) {
     quantityLamports,
     sendTransaction,
   ]);
+
+  const handleSubmit = useCallback(() => {
+    if (isMainnet) {
+      setShowConfirmModal(true);
+    } else {
+      handleSubmitDirect();
+    }
+  }, [isMainnet, handleSubmitDirect]);
+
+  const handleConfirmMainnet = useCallback(() => {
+    setShowConfirmModal(false);
+    handleSubmitDirect();
+  }, [handleSubmitDirect]);
 
   const isBuying = side === "buy-yes" || side === "buy-no";
 
@@ -284,6 +301,19 @@ export function OrderForm({ marketKey, ticker, strikePrice }: OrderFormProps) {
           ? "Submitting..."
           : `${isBuying ? "Buy" : "Sell"} ${side.includes("yes") ? "Yes" : "No"}`}
       </button>
+
+      {isMainnet && (
+        <TradeConfirmationModal
+          isOpen={showConfirmModal}
+          onConfirm={handleConfirmMainnet}
+          onCancel={() => setShowConfirmModal(false)}
+          ticker={ticker}
+          side={side.replace("-", " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+          price={effectivePrice ?? 50}
+          quantity={parseFloat(quantity) || 0}
+          estimatedCost={estimatedCost ?? 0}
+        />
+      )}
     </div>
   );
 }

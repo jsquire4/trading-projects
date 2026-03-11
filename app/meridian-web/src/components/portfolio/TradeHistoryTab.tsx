@@ -5,6 +5,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { useIndexedEvents } from "@/hooks/useAnalyticsData";
 import { parseFillEvent } from "@/lib/eventParsers";
 import { buildCsv, downloadCsv } from "@/lib/csv";
+import { getExplorerUrl } from "@/lib/network";
 
 const TAKER_SIDE_LABELS: Record<number, string> = {
   0: "Buy Yes",
@@ -106,7 +107,7 @@ export function TradeHistoryTab() {
                   <td className="py-2 px-2">
                     {f.signature && (
                       <a
-                        href={`https://explorer.solana.com/tx/${f.signature}?cluster=devnet`}
+                        href={getExplorerUrl(f.signature)}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-accent hover:text-accent/80 transition-colors"

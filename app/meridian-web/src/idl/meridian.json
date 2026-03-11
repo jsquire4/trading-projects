@@ -225,6 +225,173 @@
       ]
     },
     {
+      "name": "cleanup_market",
+      "discriminator": [
+        124,
+        83,
+        231,
+        13,
+        231,
+        181,
+        155,
+        4
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "yes_mint",
+          "docs": [
+            "Yes mint — checked for zero supply but NOT closed (owned by Token program)"
+          ],
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "no_mint",
+          "docs": [
+            "No mint — checked for zero supply but NOT closed (owned by Token program)"
+          ],
+          "relations": [
+            "market"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_market",
+      "discriminator": [
+        88,
+        154,
+        248,
+        186,
+        48,
+        14,
+        123,
+        244
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "order_book",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "usdc_vault",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "escrow_vault",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "yes_escrow",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "no_escrow",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "yes_mint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "no_mint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Treasury USDC account (config PDA authority, seeds=[b\"treasury\"])"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "crank_cancel",
       "discriminator": [
         157,
@@ -858,7 +1025,7 @@
         {
           "name": "user_no_ata",
           "docs": [
-            "User's No token account — created if needed. NOT checked for balance (Buy No flow needs this)."
+            "User's No token account — created if needed. Must have zero balance (checked in handler)."
           ],
           "writable": true,
           "pda": {
@@ -1324,6 +1491,100 @@
       "args": []
     },
     {
+      "name": "treasury_redeem",
+      "discriminator": [
+        154,
+        179,
+        45,
+        198,
+        243,
+        135,
+        180,
+        77
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "yes_mint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "no_mint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Treasury USDC account (config PDA authority)"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_usdc_ata",
+          "docs": [
+            "User's USDC ATA"
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_yes_ata",
+          "docs": [
+            "User's Yes token ATA"
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_no_ata",
+          "docs": [
+            "User's No token ATA"
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "unpause",
       "discriminator": [
         169,
@@ -1570,6 +1831,11 @@
       "msg": "Not enough remaining_accounts for fill settlement"
     },
     {
+      "code": 6038,
+      "name": "InvalidMakerAccount",
+      "msg": "Maker token account owner does not match fill maker"
+    },
+    {
       "code": 6040,
       "name": "OracleStale",
       "msg": "Oracle price is stale — exceeds staleness threshold"
@@ -1593,6 +1859,11 @@
       "code": 6044,
       "name": "OracleProgramMismatch",
       "msg": "Oracle program ID doesn't match GlobalConfig"
+    },
+    {
+      "code": 6045,
+      "name": "InvalidOracleDiscriminator",
+      "msg": "Oracle account discriminator does not match PriceFeed"
     },
     {
       "code": 6050,

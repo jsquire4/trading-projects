@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Providers } from "./providers";
 import { WalletButton } from "@/components/WalletButton";
 import { NavPnl } from "@/components/NavPnl";
+import { NetworkBadge } from "@/components/NetworkBadge";
 import { Toaster } from "sonner";
 import "./globals.css";
 
@@ -33,6 +34,7 @@ export default function RootLayout({
               <Link href="/" className="text-lg sm:text-xl font-bold tracking-tight text-gradient shrink-0">
                 Meridian
               </Link>
+              <NetworkBadge />
               <nav className="flex gap-3 sm:gap-6 overflow-x-auto scrollbar-hide">
                 {navLinks.map((link) => (
                   <Link
@@ -51,6 +53,9 @@ export default function RootLayout({
             </div>
           </header>
           <main className="max-w-7xl mx-auto px-3 sm:px-6 py-6 sm:py-8">{children}</main>
+          <footer className="border-t border-white/5 px-3 sm:px-6 py-3 text-center text-[10px] text-white/20">
+            Meridian is experimental software. Trading binary outcomes involves risk of loss. Not financial advice.
+          </footer>
           <Toaster theme="dark" position="bottom-right" />
         </Providers>
       </body>

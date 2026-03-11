@@ -27,6 +27,7 @@ import {
 
 import { settleMarkets, MarketInfo, tickerFromBytes } from "./settler.js";
 import { crankCancelAll } from "./cranker.js";
+import { closeEligibleMarkets } from "./closer.js";
 
 const log = createLogger("settlement");
 
@@ -265,7 +266,19 @@ async function main(): Promise<void> {
       log.info("No settled markets to crank");
     }
 
-    // ---- Step 5: Summary ----
+    // ---- Step 5: Close eligible markets ----
+    log.info("Checking for markets eligible to close");
+    const closeResult = await closeEligibleMarkets(meridianProgram, adminKeypair, connection);
+    if (closeResult.closed.length > 0) {
+      log.info(`Closed ${closeResult.closed.length} markets: ${closeResult.closed.join(", ")}`);
+    }
+    if (closeResult.failed.length > 0) {
+      log.error(`Failed to close ${closeResult.failed.length} markets`, {
+        failed: closeResult.failed,
+      });
+    }
+
+    // ---- Step 6: Summary ----
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     const summary = {
       elapsed: `${elapsed}s`,

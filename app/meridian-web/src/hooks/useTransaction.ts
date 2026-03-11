@@ -43,6 +43,27 @@ function shortenSig(sig: string): string {
 }
 
 function extractErrorMessage(err: unknown): string {
+  if (err && typeof err === "object" && "logs" in err) {
+    // SendTransactionError — extract program logs for actionable debugging
+    const logs = (err as any).logs as string[] | undefined;
+    if (logs && logs.length > 0) {
+      const programError = logs.find(
+        (l: string) => l.includes("Error") || l.includes("failed") || l.includes("insufficient"),
+      );
+      if (programError) {
+        return `${(err as unknown as Error).message}\n\nLog: ${programError}`;
+      }
+    }
+    // If logs exist on the error but are empty, try getLogs()
+    if (typeof (err as any).getLogs === "function") {
+      try {
+        const fullLogs = (err as any).getLogs();
+        if (fullLogs?.length) {
+          return `${(err as unknown as Error).message}\n\nLog: ${fullLogs[fullLogs.length - 1]}`;
+        }
+      } catch { /* ignore */ }
+    }
+  }
   if (err instanceof Error) return err.message;
   if (typeof err === "string") return err;
   return "Unknown error";

@@ -65,6 +65,23 @@ export async function POST(request: Request) {
   try {
     const connection = new Connection(RPC_URL, "confirmed");
 
+    // Airdrop SOL if the user has none (local validator and devnet support requestAirdrop)
+    const solBalance = await connection.getBalance(wallet);
+    let solAirdropped = false;
+    let solAirdropFailed = false;
+    const isDevnet = RPC_URL.includes("devnet");
+    if (solBalance < 0.1 * 1_000_000_000) {
+      try {
+        const airdropSig = await connection.requestAirdrop(wallet, 2 * 1_000_000_000); // 2 SOL
+        await connection.confirmTransaction(airdropSig, "confirmed");
+        solAirdropped = true;
+      } catch {
+        // Devnet rate-limits SOL airdrops.
+        // Local validator has unlimited airdrops — this typically only fails on devnet.
+        solAirdropFailed = true;
+      }
+    }
+
     // Ensure the user's USDC ATA exists
     const userAta = await getAssociatedTokenAddress(USDC_MINT, wallet);
     const tx = new Transaction().add(
@@ -88,7 +105,13 @@ export async function POST(request: Request) {
       FAUCET_AMOUNT,
     );
 
-    return NextResponse.json({ signature, amount: FAUCET_AMOUNT / 1_000_000 });
+    return NextResponse.json({
+      signature,
+      amount: FAUCET_AMOUNT / 1_000_000,
+      solAirdropped,
+      solAirdropFailed,
+      isDevnet,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

@@ -110,17 +110,28 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
     return () => clearInterval(interval);
   }, [wallet]);
 
+  // Compute current portfolio value from positions directly (avoids cold start)
+  const liveValue = positions.reduce((sum, p) => {
+    const marketKey = p.market.publicKey.toBase58();
+    const mid = midPrices?.get(marketKey);
+    const yesMid = mid ?? 0.5;
+    const noMid = 1 - yesMid;
+    return sum + (Number(p.yesBal) / 1_000_000) * yesMid + (Number(p.noBal) / 1_000_000) * noMid;
+  }, 0);
+
   // Compute current total P&L from today's data
   const todayPnl =
     intradayData.length >= 2
       ? intradayData[intradayData.length - 1].totalValue -
         intradayData[0].totalValue
-      : 0;
+      : intradayData.length === 1
+        ? liveValue - intradayData[0].totalValue
+        : 0;
 
   const currentValue =
     intradayData.length > 0
       ? intradayData[intradayData.length - 1].totalValue
-      : 0;
+      : liveValue;
 
   // Find top and bottom performers from latest snapshot
   const latestSnapshot =

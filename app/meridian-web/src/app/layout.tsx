@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Providers } from "./providers";
 import { WalletButton } from "@/components/WalletButton";
 import { NavPnl } from "@/components/NavPnl";
+import { NavBalance } from "@/components/NavBalance";
 import { NetworkBadge } from "@/components/NetworkBadge";
 import { Toaster } from "sonner";
 import "./globals.css";
@@ -49,6 +50,7 @@ export default function RootLayout({
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <NavPnl />
+              <NavBalance />
               <WalletButton />
             </div>
           </header>

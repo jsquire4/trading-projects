@@ -7,6 +7,7 @@
 import { Keypair, PublicKey, TransactionInstruction, SystemProgram } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import { createHash } from "crypto";
@@ -165,6 +166,53 @@ export function buildPlaceOrderIx(
     { pubkey: walletYesAta, isSigner: false, isWritable: true },
     { pubkey: walletNoAta, isSigner: false, isWritable: true },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+  ];
+
+  return new TransactionInstruction({ programId: MERIDIAN_PROGRAM_ID, keys, data });
+}
+
+// ---------------------------------------------------------------------------
+// Mint pair instruction builder (for scripts)
+// ---------------------------------------------------------------------------
+
+export interface MintPairAddresses {
+  market: PublicKey;
+  yesMint: PublicKey;
+  noMint: PublicKey;
+  usdcVault: PublicKey;
+  configPda: PublicKey;
+  usdcMint: PublicKey;
+}
+
+/**
+ * Build a mint_pair TransactionInstruction.
+ * Mints equal quantities of Yes + No tokens by depositing USDC.
+ */
+export function buildMintPairIx(
+  wallet: Keypair,
+  m: MintPairAddresses,
+  quantity: number, // in lamports (1 token = 1_000_000)
+): TransactionInstruction {
+  const disc = anchorDiscriminator("mint_pair");
+  const data = Buffer.concat([disc, new BN(quantity).toArrayLike(Buffer, "le", 8)]);
+
+  const walletUsdcAta = getAssociatedTokenAddressSync(m.usdcMint, wallet.publicKey);
+  const walletYesAta = getAssociatedTokenAddressSync(m.yesMint, wallet.publicKey);
+  const walletNoAta = getAssociatedTokenAddressSync(m.noMint, wallet.publicKey);
+
+  const keys = [
+    { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
+    { pubkey: m.configPda, isSigner: false, isWritable: false },
+    { pubkey: m.market, isSigner: false, isWritable: true },
+    { pubkey: m.yesMint, isSigner: false, isWritable: true },
+    { pubkey: m.noMint, isSigner: false, isWritable: true },
+    { pubkey: walletUsdcAta, isSigner: false, isWritable: true },
+    { pubkey: walletYesAta, isSigner: false, isWritable: true },
+    { pubkey: walletNoAta, isSigner: false, isWritable: true },
+    { pubkey: m.usdcVault, isSigner: false, isWritable: true },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
   ];
 

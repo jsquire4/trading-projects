@@ -5,7 +5,11 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { toast } from "sonner";
 import { useNetwork } from "@/hooks/useNetwork";
 
-export function FaucetButton() {
+interface FaucetButtonProps {
+  className?: string;
+}
+
+export function FaucetButton({ className }: FaucetButtonProps) {
   const { isMainnet } = useNetwork();
   const { publicKey } = useWallet();
   const [loading, setLoading] = useState(false);
@@ -36,10 +40,19 @@ export function FaucetButton() {
         return;
       }
 
-      toast.success("Test USDC sent!", {
-        description: `Signature: ${data.signature?.slice(0, 16)}...`,
-        duration: 5000,
-      });
+      if (data.solAirdropFailed) {
+        toast.warning(`${data.amount} USDC sent, but SOL airdrop failed`, {
+          description: data.isDevnet
+            ? "Solana devnet rate-limits SOL airdrops. This is a Solana network limitation, not a Meridian issue. Visit faucet.solana.com to request devnet SOL manually."
+            : "SOL airdrop failed unexpectedly. Try again in a moment.",
+          duration: 10000,
+        });
+      } else {
+        toast.success(data.solAirdropped ? "SOL + USDC sent!" : "Test USDC sent!", {
+          description: `${data.solAirdropped ? "2 SOL + " : ""}${data.amount} USDC`,
+          duration: 5000,
+        });
+      }
     } catch (err) {
       toast.error("Faucet request failed", {
         description: err instanceof Error ? err.message : "Network error",
@@ -53,9 +66,9 @@ export function FaucetButton() {
     <button
       onClick={handleClick}
       disabled={loading || !publicKey}
-      className="rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-1.5 text-xs font-medium text-blue-400 hover:bg-blue-500/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+      className={className ?? "rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-1.5 text-xs font-medium text-blue-400 hover:bg-blue-500/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"}
     >
-      {loading ? "Requesting..." : "Get Test USDC"}
+      {loading ? "Requesting..." : "Get Test Funds"}
     </button>
   );
 }

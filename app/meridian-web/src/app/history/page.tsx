@@ -3,6 +3,7 @@
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { TradeHistoryTab } from "@/components/portfolio/TradeHistoryTab";
+import { EventIndexerBanner } from "@/components/EventIndexerBanner";
 
 export default function HistoryPage() {
   const { connected } = useWallet();
@@ -34,6 +35,7 @@ export default function HistoryPage() {
           Your completed fills across all markets.
         </p>
       </div>
+      <EventIndexerBanner />
       <TradeHistoryTab />
     </div>
   );

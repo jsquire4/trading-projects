@@ -1,9 +1,21 @@
 /**
- * create-test-markets.ts — Create a test AAPL strike market for today,
- * then create and attach an Address Lookup Table (ALT).
+ * create-test-markets.ts — Create strike markets for all 7 MAG7 stocks,
+ * mint pairs, and seed initial liquidity using Black-Scholes pricing.
  *
- * Idempotent: skips if the market PDA already exists on-chain.
- * Builds all instructions manually using Anchor discriminator convention.
+ * Generates strikes at ±3%, ±6%, ±9% from each stock's reference price,
+ * rounded to nearest $10 (or $5 for stocks <$100). Deduplicates overlapping
+ * strikes. Creates ~35-42 markets total.
+ *
+ * After creation, seeds two-sided liquidity in three passes:
+ *   Pass 1: Create markets (idempotent — skips existing)
+ *   Pass 2: Post USDC-backed bids (side=0) — must happen before minting
+ *            to avoid position conflicts (side=0 requires No balance=0)
+ *   Pass 3: Mint Yes/No pairs, then post Yes asks (side=1)
+ *
+ * Prices are computed via Black-Scholes N(d2) with 5% half-spread.
+ *
+ * Idempotent: skips markets that already exist on-chain.
+ * Each market requires ~127KB OrderBook allocation (~3 batched txns) + ALT.
  *
  * Run:  npx ts-node scripts/create-test-markets.ts
  */
@@ -19,7 +31,12 @@ import {
   Transaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import {
+  TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccountIdempotentInstruction,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
 import BN from "bn.js";
 import * as path from "path";
 
@@ -29,238 +46,73 @@ import {
   padTicker,
   anchorDiscriminator,
   todayMarketCloseUnix,
+  buildPlaceOrderIx,
+  buildMintPairIx,
   MERIDIAN_PROGRAM_ID,
   MOCK_ORACLE_PROGRAM_ID,
 } from "./shared";
+import { binaryCallPrice, probToCents } from "../services/amm-bot/src/pricer";
+import { generateQuotes } from "../services/amm-bot/src/quoter";
+
+// ---------------------------------------------------------------------------
+// MAG7 reference prices (approximate — used for strike generation only)
+// ---------------------------------------------------------------------------
+
+const MAG7_PRICES: Record<string, { price: number }> = {
+  AAPL:  { price: 198 },
+  MSFT:  { price: 420 },
+  GOOGL: { price: 175 },
+  AMZN:  { price: 200 },
+  NVDA:  { price: 130 },
+  META:  { price: 600 },
+  TSLA:  { price: 250 },
+};
+
+// ---------------------------------------------------------------------------
+// Strike generation (same algorithm as services/shared/src/strikes.ts)
+// ---------------------------------------------------------------------------
+
+function roundToNearest(value: number, nearest: number): number {
+  return Math.round(value / nearest) * nearest;
+}
+
+function generateStrikes(previousClose: number): number[] {
+  const offsets = [-0.09, -0.06, -0.03, 0.03, 0.06, 0.09];
+  const increment = previousClose >= 100 ? 10 : 5;
+  const rawStrikes = offsets.map((pct) =>
+    roundToNearest(previousClose * (1 + pct), increment),
+  );
+  return [...new Set(rawStrikes)].sort((a, b) => a - b);
+}
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
 const DEVNET_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
 const ENV_PATH = path.resolve(__dirname, "..", ".env");
 const ADMIN_KEYPAIR_PATH = path.resolve(
   process.env.HOME || "~",
-  ".config/solana/id.json"
+  ".config/solana/id.json",
 );
 
-/** Compute expiry_day as floor(unix / 86400) — Unix day number, matching Rust PDA seeds. */
+const ORDER_BOOK_TOTAL_SPACE = 8 + 127_560; // 127,568 bytes
+const MAX_GROWTH = 10_240;
+const BATCH_SIZE = 6;
+const QUOTE_QTY = 50; // Post 50-token bid orders per market
+const DEFAULT_VOL = 0.35; // 35% annualized volatility for seed pricing
+
 function expiryDayFromUnix(unix: number): number {
   return Math.floor(unix / 86400);
 }
 
-/** Sleep for ms milliseconds. */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-(async () => {
-  const connection = new Connection(DEVNET_URL, "confirmed");
-  const admin = loadKeypair(ADMIN_KEYPAIR_PATH);
-  console.log(`Admin: ${admin.publicKey.toBase58()}`);
-
-  // ── Read USDC_MINT from .env ───────────────────────────────────────────────
-  const env = readEnv(ENV_PATH);
-  if (!env["USDC_MINT"]) {
-    console.error("ERROR: USDC_MINT not found in .env. Run create-mock-usdc.ts first.");
-    process.exit(1);
-  }
-  const usdcMint = new PublicKey(env["USDC_MINT"]);
-  console.log(`USDC Mint: ${usdcMint.toBase58()}`);
-
-  // ── Market parameters ──────────────────────────────────────────────────────
-  const ticker = "AAPL";
-  const tBytes = padTicker(ticker);
-  const strikePrice = new BN(200_000_000);     // $200.00
-  const previousClose = new BN(198_000_000);   // $198.00
-  const marketCloseUnix = todayMarketCloseUnix();
-  const expiryDay = expiryDayFromUnix(marketCloseUnix);
-
-  console.log(`\nMarket parameters:`);
-  console.log(`  Ticker:         ${ticker}`);
-  console.log(`  Strike:         $${strikePrice.toNumber() / 1_000_000}`);
-  console.log(`  Previous close: $${previousClose.toNumber() / 1_000_000}`);
-  console.log(`  Market close:   ${new Date(marketCloseUnix * 1000).toISOString()}`);
-  console.log(`  Expiry day:     ${expiryDay}`);
-
-  // ── Derive all PDAs ────────────────────────────────────────────────────────
-  const [configPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("config")],
-    MERIDIAN_PROGRAM_ID
-  );
-
-  const [marketPda] = PublicKey.findProgramAddressSync(
-    [
-      Buffer.from("market"),
-      tBytes,
-      strikePrice.toArrayLike(Buffer, "le", 8),
-      new BN(expiryDay).toArrayLike(Buffer, "le", 4),
-    ],
-    MERIDIAN_PROGRAM_ID
-  );
-
-  // All child PDAs are seeded off market's pubkey
-  const mkSeed = marketPda.toBuffer();
-
-  const [yesMint] = PublicKey.findProgramAddressSync(
-    [Buffer.from("yes_mint"), mkSeed], MERIDIAN_PROGRAM_ID
-  );
-  const [noMint] = PublicKey.findProgramAddressSync(
-    [Buffer.from("no_mint"), mkSeed], MERIDIAN_PROGRAM_ID
-  );
-  const [usdcVault] = PublicKey.findProgramAddressSync(
-    [Buffer.from("vault"), mkSeed], MERIDIAN_PROGRAM_ID
-  );
-  const [escrowVault] = PublicKey.findProgramAddressSync(
-    [Buffer.from("escrow"), mkSeed], MERIDIAN_PROGRAM_ID
-  );
-  const [yesEscrow] = PublicKey.findProgramAddressSync(
-    [Buffer.from("yes_escrow"), mkSeed], MERIDIAN_PROGRAM_ID
-  );
-  const [noEscrow] = PublicKey.findProgramAddressSync(
-    [Buffer.from("no_escrow"), mkSeed], MERIDIAN_PROGRAM_ID
-  );
-  const [orderBook] = PublicKey.findProgramAddressSync(
-    [Buffer.from("order_book"), mkSeed], MERIDIAN_PROGRAM_ID
-  );
-
-  // Oracle feed PDA (on mock_oracle program)
-  const [oracleFeed] = PublicKey.findProgramAddressSync(
-    [Buffer.from("price_feed"), tBytes],
-    MOCK_ORACLE_PROGRAM_ID
-  );
-
-  console.log(`\nDerived PDAs:`);
-  console.log(`  Config:      ${configPda.toBase58()}`);
-  console.log(`  Market:      ${marketPda.toBase58()}`);
-  console.log(`  Yes Mint:    ${yesMint.toBase58()}`);
-  console.log(`  No Mint:     ${noMint.toBase58()}`);
-  console.log(`  USDC Vault:  ${usdcVault.toBase58()}`);
-  console.log(`  Escrow:      ${escrowVault.toBase58()}`);
-  console.log(`  Yes Escrow:  ${yesEscrow.toBase58()}`);
-  console.log(`  No Escrow:   ${noEscrow.toBase58()}`);
-  console.log(`  Order Book:  ${orderBook.toBase58()}`);
-  console.log(`  Oracle Feed: ${oracleFeed.toBase58()}`);
-
-  // ── Idempotency check ─────────────────────────────────────────────────────
-  const existingMarket = await connection.getAccountInfo(marketPda);
-  if (existingMarket) {
-    console.log("\nMarket already exists on-chain. Skipping creation.");
-    // Still check if ALT needs to be set
-    await maybeSetAlt(connection, admin, configPda, marketPda, existingMarket.data, {
-      yesMint, noMint, usdcVault, escrowVault, yesEscrow, noEscrow, orderBook,
-      oracleFeed, usdcMint, configPda, marketPda,
-    });
-    return;
-  }
-
-  // ── Pre-allocate OrderBook PDA (>10KB, requires incremental allocation) ───
-  const ORDER_BOOK_TOTAL_SPACE = 8 + 127_560; // 127,568 bytes
-  const MAX_GROWTH = 10_240;
-  const allocCalls = Math.ceil(ORDER_BOOK_TOTAL_SPACE / MAX_GROWTH); // ~13
-
-  const existingOB = await connection.getAccountInfo(orderBook);
-  const currentOBLen = existingOB?.data.length ?? 0;
-
-  if (currentOBLen < ORDER_BOOK_TOTAL_SPACE) {
-    console.log(`\nPre-allocating OrderBook PDA (${ORDER_BOOK_TOTAL_SPACE} bytes, ~${allocCalls} calls)...`);
-    console.log(`  Current size: ${currentOBLen} bytes`);
-
-    // Build allocate_order_book instructions and batch into transactions
-    const allocDisc = anchorDiscriminator("allocate_order_book");
-    const allocData = Buffer.concat([allocDisc, marketPda.toBuffer()]);
-
-    const allocKeys = [
-      { pubkey: admin.publicKey, isSigner: true, isWritable: true },
-      { pubkey: orderBook, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ];
-
-    const allocIx = new TransactionInstruction({
-      programId: MERIDIAN_PROGRAM_ID,
-      keys: allocKeys,
-      data: allocData,
-    });
-
-    // Each instruction grows the account by up to 10KB.
-    // Batch multiple instructions per transaction (limited by tx size).
-    const BATCH_SIZE = 6; // ~6 alloc instructions per tx fits within 1232 byte limit
-    const remainingCalls = Math.ceil((ORDER_BOOK_TOTAL_SPACE - currentOBLen) / MAX_GROWTH);
-
-    for (let i = 0; i < remainingCalls; i += BATCH_SIZE) {
-      const batchCount = Math.min(BATCH_SIZE, remainingCalls - i);
-      const batchTx = new Transaction();
-      for (let j = 0; j < batchCount; j++) {
-        batchTx.add(allocIx);
-      }
-      const allocSig = await sendAndConfirmTransaction(connection, batchTx, [admin], {
-        commitment: "confirmed",
-      });
-      const progress = Math.min((i + batchCount) * MAX_GROWTH + currentOBLen, ORDER_BOOK_TOTAL_SPACE);
-      console.log(`  Batch ${Math.floor(i / BATCH_SIZE) + 1}: ${progress}/${ORDER_BOOK_TOTAL_SPACE} bytes (sig: ${allocSig.slice(0, 16)}...)`);
-    }
-
-    console.log("OrderBook PDA fully allocated.");
-  } else {
-    console.log("\nOrderBook PDA already at full size.");
-  }
-
-  // ── Build create_strike_market instruction ─────────────────────────────────
-  const disc = anchorDiscriminator("create_strike_market");
-
-  // Data: disc(8) + ticker(8) + strike_price(8) + expiry_day(4) + market_close_unix(8) + previous_close(8)
-  const data = Buffer.concat([
-    disc,
-    tBytes,
-    strikePrice.toArrayLike(Buffer, "le", 8),
-    new BN(expiryDay).toArrayLike(Buffer, "le", 4),
-    new BN(marketCloseUnix).toArrayLike(Buffer, "le", 8),
-    previousClose.toArrayLike(Buffer, "le", 8),
-  ]);
-
-  // Accounts must match CreateStrikeMarket struct order
-  const keys = [
-    { pubkey: admin.publicKey, isSigner: true, isWritable: true },     // admin
-    { pubkey: configPda, isSigner: false, isWritable: false },          // config
-    { pubkey: marketPda, isSigner: false, isWritable: true },           // market
-    { pubkey: yesMint, isSigner: false, isWritable: true },             // yes_mint
-    { pubkey: noMint, isSigner: false, isWritable: true },              // no_mint
-    { pubkey: usdcVault, isSigner: false, isWritable: true },           // usdc_vault
-    { pubkey: escrowVault, isSigner: false, isWritable: true },         // escrow_vault
-    { pubkey: yesEscrow, isSigner: false, isWritable: true },           // yes_escrow
-    { pubkey: noEscrow, isSigner: false, isWritable: true },            // no_escrow
-    { pubkey: orderBook, isSigner: false, isWritable: true },           // order_book
-    { pubkey: oracleFeed, isSigner: false, isWritable: false },         // oracle_feed
-    { pubkey: usdcMint, isSigner: false, isWritable: false },           // usdc_mint
-    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },   // token_program
-    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
-    { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false }, // rent
-  ];
-
-  const ix = new TransactionInstruction({
-    programId: MERIDIAN_PROGRAM_ID,
-    keys,
-    data,
-  });
-
-  console.log("\nSending create_strike_market transaction...");
-  const tx = new Transaction().add(ix);
-  const sig = await sendAndConfirmTransaction(connection, tx, [admin], {
-    commitment: "confirmed",
-  });
-  console.log(`Market created! Signature: ${sig}`);
-
-  // ── Create and attach ALT ──────────────────────────────────────────────────
-  await createAndSetAlt(connection, admin, configPda, marketPda, {
-    yesMint, noMint, usdcVault, escrowVault, yesEscrow, noEscrow, orderBook,
-    oracleFeed, usdcMint, configPda, marketPda,
-  });
-
-  console.log("\n=== Test market creation complete ===");
-})().catch((err) => {
-  console.error("FATAL:", err);
-  process.exit(1);
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// ALT helpers
-// ═══════════════════════════════════════════════════════════════════════════════
+// ---------------------------------------------------------------------------
+// Market creation helpers
+// ---------------------------------------------------------------------------
 
 interface MarketAddresses {
   yesMint: PublicKey;
@@ -276,141 +128,390 @@ interface MarketAddresses {
   marketPda: PublicKey;
 }
 
-/** Check if the market's ALT is already set; if not, create and set it. */
-async function maybeSetAlt(
-  connection: Connection,
-  admin: Keypair,
+function deriveMarketPDAs(
+  ticker: string,
+  strikeLamports: BN,
+  expiryDay: number,
+  usdcMint: PublicKey,
   configPda: PublicKey,
-  marketPda: PublicKey,
-  marketData: Buffer,
-  addrs: MarketAddresses
-): Promise<void> {
-  // The alt_address field is at offset: 8 (discriminator) + 9*32 (pubkeys before alt_address)
-  // + 8*8 (u64/i64 fields) = 8 + 288 + 64 = 360
-  const altOffset = 8 + (9 * 32) + (8 * 8); // 360
-  const altBytes = marketData.subarray(altOffset, altOffset + 32);
-  const altPubkey = new PublicKey(altBytes);
+): MarketAddresses {
+  const tBytes = padTicker(ticker);
 
-  if (!altPubkey.equals(PublicKey.default)) {
-    console.log(`ALT already set: ${altPubkey.toBase58()}`);
-    return;
-  }
+  const [marketPda] = PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("market"),
+      tBytes,
+      strikeLamports.toArrayLike(Buffer, "le", 8),
+      new BN(expiryDay).toArrayLike(Buffer, "le", 4),
+    ],
+    MERIDIAN_PROGRAM_ID,
+  );
 
-  console.log("ALT not yet set. Creating...");
-  await createAndSetAlt(connection, admin, configPda, marketPda, addrs);
+  const mkSeed = marketPda.toBuffer();
+  const [yesMint] = PublicKey.findProgramAddressSync([Buffer.from("yes_mint"), mkSeed], MERIDIAN_PROGRAM_ID);
+  const [noMint] = PublicKey.findProgramAddressSync([Buffer.from("no_mint"), mkSeed], MERIDIAN_PROGRAM_ID);
+  const [usdcVault] = PublicKey.findProgramAddressSync([Buffer.from("vault"), mkSeed], MERIDIAN_PROGRAM_ID);
+  const [escrowVault] = PublicKey.findProgramAddressSync([Buffer.from("escrow"), mkSeed], MERIDIAN_PROGRAM_ID);
+  const [yesEscrow] = PublicKey.findProgramAddressSync([Buffer.from("yes_escrow"), mkSeed], MERIDIAN_PROGRAM_ID);
+  const [noEscrow] = PublicKey.findProgramAddressSync([Buffer.from("no_escrow"), mkSeed], MERIDIAN_PROGRAM_ID);
+  const [orderBook] = PublicKey.findProgramAddressSync([Buffer.from("order_book"), mkSeed], MERIDIAN_PROGRAM_ID);
+  const [oracleFeed] = PublicKey.findProgramAddressSync([Buffer.from("price_feed"), tBytes], MOCK_ORACLE_PROGRAM_ID);
+
+  return {
+    marketPda, yesMint, noMint, usdcVault, escrowVault,
+    yesEscrow, noEscrow, orderBook, oracleFeed, usdcMint, configPda,
+  };
 }
 
-/** Create an ALT, populate it with all market addresses, and call set_market_alt. */
+async function allocateOrderBook(
+  connection: Connection,
+  admin: Keypair,
+  marketPda: PublicKey,
+  orderBook: PublicKey,
+): Promise<void> {
+  const existingOB = await connection.getAccountInfo(orderBook);
+  const currentLen = existingOB?.data.length ?? 0;
+  if (currentLen >= ORDER_BOOK_TOTAL_SPACE) return;
+
+  const allocDisc = anchorDiscriminator("allocate_order_book");
+  const allocData = Buffer.concat([allocDisc, marketPda.toBuffer()]);
+  const allocIx = new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys: [
+      { pubkey: admin.publicKey, isSigner: true, isWritable: true },
+      { pubkey: orderBook, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: allocData,
+  });
+
+  const remainingCalls = Math.ceil((ORDER_BOOK_TOTAL_SPACE - currentLen) / MAX_GROWTH);
+  for (let i = 0; i < remainingCalls; i += BATCH_SIZE) {
+    const batchCount = Math.min(BATCH_SIZE, remainingCalls - i);
+    const batchTx = new Transaction();
+    for (let j = 0; j < batchCount; j++) batchTx.add(allocIx);
+    await sendAndConfirmTransaction(connection, batchTx, [admin], { commitment: "confirmed" });
+  }
+}
+
+async function createMarket(
+  connection: Connection,
+  admin: Keypair,
+  ticker: string,
+  strikeLamports: BN,
+  previousCloseLamports: BN,
+  marketCloseUnix: number,
+  addrs: MarketAddresses,
+): Promise<void> {
+  const tBytes = padTicker(ticker);
+  const expiryDay = expiryDayFromUnix(marketCloseUnix);
+  const disc = anchorDiscriminator("create_strike_market");
+
+  const data = Buffer.concat([
+    disc,
+    tBytes,
+    strikeLamports.toArrayLike(Buffer, "le", 8),
+    new BN(expiryDay).toArrayLike(Buffer, "le", 4),
+    new BN(marketCloseUnix).toArrayLike(Buffer, "le", 8),
+    previousCloseLamports.toArrayLike(Buffer, "le", 8),
+  ]);
+
+  const keys = [
+    { pubkey: admin.publicKey, isSigner: true, isWritable: true },
+    { pubkey: addrs.configPda, isSigner: false, isWritable: false },
+    { pubkey: addrs.marketPda, isSigner: false, isWritable: true },
+    { pubkey: addrs.yesMint, isSigner: false, isWritable: true },
+    { pubkey: addrs.noMint, isSigner: false, isWritable: true },
+    { pubkey: addrs.usdcVault, isSigner: false, isWritable: true },
+    { pubkey: addrs.escrowVault, isSigner: false, isWritable: true },
+    { pubkey: addrs.yesEscrow, isSigner: false, isWritable: true },
+    { pubkey: addrs.noEscrow, isSigner: false, isWritable: true },
+    { pubkey: addrs.orderBook, isSigner: false, isWritable: true },
+    { pubkey: addrs.oracleFeed, isSigner: false, isWritable: false },
+    { pubkey: addrs.usdcMint, isSigner: false, isWritable: false },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+  ];
+
+  const tx = new Transaction().add(new TransactionInstruction({ programId: MERIDIAN_PROGRAM_ID, keys, data }));
+  await sendAndConfirmTransaction(connection, tx, [admin], { commitment: "confirmed" });
+}
+
 async function createAndSetAlt(
   connection: Connection,
   admin: Keypair,
-  configPda: PublicKey,
-  marketPda: PublicKey,
-  addrs: MarketAddresses
+  addrs: MarketAddresses,
 ): Promise<void> {
-  // On local test validators, most slots don't have blocks (blocks are only
-  // produced when transactions arrive). We need a slot that actually has a block
-  // hash in the SlotHashes sysvar. Send a dummy transfer first to guarantee a
-  // recent block, then use that slot.
+  // Warmup tx to guarantee a recent slot with a block
   const warmupSig = await sendAndConfirmTransaction(
     connection,
-    new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: admin.publicKey,
-        toPubkey: admin.publicKey,
-        lamports: 1,
-      }),
-    ),
+    new Transaction().add(SystemProgram.transfer({ fromPubkey: admin.publicKey, toPubkey: admin.publicKey, lamports: 1 })),
     [admin],
     { commitment: "confirmed" },
   );
-  const warmupTx = await connection.getTransaction(warmupSig, {
-    commitment: "confirmed",
-    maxSupportedTransactionVersion: 0,
-  });
+  const warmupTx = await connection.getTransaction(warmupSig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
   const slot = warmupTx?.slot ?? (await connection.getSlot("confirmed"));
 
-  // ── Step 1: Create ALT ─────────────────────────────────────────────────────
   const [createIx, altAddress] = AddressLookupTableProgram.createLookupTable({
     authority: admin.publicKey,
     payer: admin.publicKey,
     recentSlot: slot,
   });
 
-  console.log(`\nCreating ALT: ${altAddress.toBase58()} (using slot ${slot})`);
-
-  const createTx = new Transaction().add(createIx);
-  const createSig = await sendAndConfirmTransaction(connection, createTx, [admin], {
+  await sendAndConfirmTransaction(connection, new Transaction().add(createIx), [admin], {
     commitment: "confirmed",
-    skipPreflight: true, // Skip preflight — SlotHashes lookup can fail in simulation on test validators
+    skipPreflight: true,
   });
-  console.log(`ALT created. Signature: ${createSig}`);
 
-  // ── Step 2: Extend ALT with all market-related addresses ───────────────────
   const addressesToAdd = [
-    addrs.configPda,
-    addrs.marketPda,
-    addrs.yesMint,
-    addrs.noMint,
-    addrs.usdcVault,
-    addrs.escrowVault,
-    addrs.yesEscrow,
-    addrs.noEscrow,
-    addrs.orderBook,
-    addrs.oracleFeed,
-    addrs.usdcMint,
-    MERIDIAN_PROGRAM_ID,
-    MOCK_ORACLE_PROGRAM_ID,
-    TOKEN_PROGRAM_ID,
-    ASSOCIATED_TOKEN_PROGRAM_ID,
-    SystemProgram.programId,
-    SYSVAR_RENT_PUBKEY,
+    addrs.configPda, addrs.marketPda, addrs.yesMint, addrs.noMint,
+    addrs.usdcVault, addrs.escrowVault, addrs.yesEscrow, addrs.noEscrow,
+    addrs.orderBook, addrs.oracleFeed, addrs.usdcMint,
+    MERIDIAN_PROGRAM_ID, MOCK_ORACLE_PROGRAM_ID,
+    TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID,
+    SystemProgram.programId, SYSVAR_RENT_PUBKEY,
   ];
 
-  const extendIx = AddressLookupTableProgram.extendLookupTable({
-    payer: admin.publicKey,
-    authority: admin.publicKey,
-    lookupTable: altAddress,
-    addresses: addressesToAdd,
-  });
+  await sendAndConfirmTransaction(
+    connection,
+    new Transaction().add(AddressLookupTableProgram.extendLookupTable({
+      payer: admin.publicKey,
+      authority: admin.publicKey,
+      lookupTable: altAddress,
+      addresses: addressesToAdd,
+    })),
+    [admin],
+    { commitment: "confirmed" },
+  );
 
-  const extendTx = new Transaction().add(extendIx);
-  const extendSig = await sendAndConfirmTransaction(connection, extendTx, [admin], {
-    commitment: "confirmed",
-  });
-  console.log(`ALT extended with ${addressesToAdd.length} addresses. Signature: ${extendSig}`);
-
-  // ── Step 3: Wait for ALT activation (needs 1 slot to become usable) ────────
-  console.log("Waiting for ALT activation (1 slot)...");
   await sleep(500);
-  // Confirm ALT is populated
-  const altAccount = await connection.getAddressLookupTable(altAddress);
-  if (altAccount.value) {
-    console.log(`ALT active with ${altAccount.value.state.addresses.length} addresses.`);
-  } else {
-    console.log("WARNING: ALT not yet active. set_market_alt may need retry.");
-  }
 
-  // ── Step 4: Call set_market_alt on meridian ────────────────────────────────
   const setAltDisc = anchorDiscriminator("set_market_alt");
   const setAltData = Buffer.concat([setAltDisc, altAddress.toBuffer()]);
-
-  const setAltKeys = [
-    { pubkey: admin.publicKey, isSigner: true, isWritable: false },  // admin
-    { pubkey: configPda, isSigner: false, isWritable: false },        // config
-    { pubkey: marketPda, isSigner: false, isWritable: true },         // market
-  ];
-
-  const setAltIx = new TransactionInstruction({
-    programId: MERIDIAN_PROGRAM_ID,
-    keys: setAltKeys,
-    data: setAltData,
-  });
-
-  const setAltTx = new Transaction().add(setAltIx);
-  const setAltSig = await sendAndConfirmTransaction(connection, setAltTx, [admin], {
-    commitment: "confirmed",
-  });
-  console.log(`set_market_alt done. Signature: ${setAltSig}`);
-  console.log(`Market ALT set to: ${altAddress.toBase58()}`);
+  await sendAndConfirmTransaction(
+    connection,
+    new Transaction().add(new TransactionInstruction({
+      programId: MERIDIAN_PROGRAM_ID,
+      keys: [
+        { pubkey: admin.publicKey, isSigner: true, isWritable: false },
+        { pubkey: addrs.configPda, isSigner: false, isWritable: false },
+        { pubkey: addrs.marketPda, isSigner: false, isWritable: true },
+      ],
+      data: setAltData,
+    })),
+    [admin],
+    { commitment: "confirmed" },
+  );
 }
+
+// ---------------------------------------------------------------------------
+// Seed liquidity helpers
+// ---------------------------------------------------------------------------
+
+function computeQuote(spotPrice: number, strikeDollars: number, marketCloseUnix: number) {
+  const nowUnix = Math.floor(Date.now() / 1000);
+  const hoursToExpiry = Math.max(0.1, (marketCloseUnix - nowUnix) / 3600);
+  const T = hoursToExpiry / 8760; // years
+  const fairProb = binaryCallPrice(spotPrice, strikeDollars, DEFAULT_VOL, T);
+  const quote = generateQuotes(fairProb, 0); // zero inventory
+  return { fairProb, quote, fairCents: probToCents(fairProb) };
+}
+
+/** Ensure admin ATAs exist for a market's mints. */
+async function ensureATAs(
+  connection: Connection,
+  admin: Keypair,
+  addrs: MarketAddresses,
+): Promise<void> {
+  const adminUsdcAta = getAssociatedTokenAddressSync(addrs.usdcMint, admin.publicKey);
+  const adminYesAta = getAssociatedTokenAddressSync(addrs.yesMint, admin.publicKey);
+  const adminNoAta = getAssociatedTokenAddressSync(addrs.noMint, admin.publicKey);
+
+  const tx = new Transaction();
+  tx.add(createAssociatedTokenAccountIdempotentInstruction(admin.publicKey, adminUsdcAta, admin.publicKey, addrs.usdcMint));
+  tx.add(createAssociatedTokenAccountIdempotentInstruction(admin.publicKey, adminYesAta, admin.publicKey, addrs.yesMint));
+  tx.add(createAssociatedTokenAccountIdempotentInstruction(admin.publicKey, adminNoAta, admin.publicKey, addrs.noMint));
+  await sendAndConfirmTransaction(connection, tx, [admin], { commitment: "confirmed" });
+}
+
+function toScriptMarketAddrs(addrs: MarketAddresses) {
+  return {
+    market: addrs.marketPda,
+    yesMint: addrs.yesMint,
+    noMint: addrs.noMint,
+    usdcVault: addrs.usdcVault,
+    escrowVault: addrs.escrowVault,
+    yesEscrow: addrs.yesEscrow,
+    noEscrow: addrs.noEscrow,
+    orderBook: addrs.orderBook,
+    oracleFeed: addrs.oracleFeed,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+(async () => {
+  const connection = new Connection(DEVNET_URL, "confirmed");
+  const admin = loadKeypair(ADMIN_KEYPAIR_PATH);
+  console.log(`Admin: ${admin.publicKey.toBase58()}`);
+
+  const env = readEnv(ENV_PATH);
+  if (!env["USDC_MINT"]) {
+    console.error("ERROR: USDC_MINT not found in .env. Run create-mock-usdc.ts first.");
+    process.exit(1);
+  }
+  const usdcMint = new PublicKey(env["USDC_MINT"]);
+  console.log(`USDC Mint: ${usdcMint.toBase58()}`);
+
+  const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], MERIDIAN_PROGRAM_ID);
+  const marketCloseUnix = todayMarketCloseUnix();
+  const expiryDay = expiryDayFromUnix(marketCloseUnix);
+
+  console.log(`Market close: ${new Date(marketCloseUnix * 1000).toISOString()}`);
+  console.log(`Expiry day:   ${expiryDay}`);
+
+  // Build full market list
+  interface MarketSpec {
+    ticker: string;
+    strikeDollars: number;
+    previousClose: number;
+  }
+
+  const specs: MarketSpec[] = [];
+  for (const [ticker, { price }] of Object.entries(MAG7_PRICES)) {
+    const strikes = generateStrikes(price);
+    for (const strike of strikes) {
+      specs.push({ ticker, strikeDollars: strike, previousClose: price });
+    }
+  }
+
+  console.log(`\nWill create ${specs.length} markets across ${Object.keys(MAG7_PRICES).length} tickers:`);
+  for (const [ticker, { price }] of Object.entries(MAG7_PRICES)) {
+    const strikes = generateStrikes(price);
+    console.log(`  ${ticker} ($${price}): strikes ${strikes.map((s) => `$${s}`).join(", ")}`);
+  }
+
+  let created = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  // ── Pass 1: Create markets ──────────────────────────────────────────────
+  console.log(`\n── Pass 1: Creating markets ──`);
+  interface MarketEntry {
+    spec: MarketSpec;
+    addrs: MarketAddresses;
+    needsSeed: boolean;
+  }
+  const entries: MarketEntry[] = [];
+
+  for (const spec of specs) {
+    const strikeLamports = new BN(spec.strikeDollars * 1_000_000);
+    const prevCloseLamports = new BN(spec.previousClose * 1_000_000);
+    const addrs = deriveMarketPDAs(spec.ticker, strikeLamports, expiryDay, usdcMint, configPda);
+    const label = `${spec.ticker} $${spec.strikeDollars}`;
+
+    try {
+      const existing = await connection.getAccountInfo(addrs.marketPda);
+      if (!existing) {
+        await allocateOrderBook(connection, admin, addrs.marketPda, addrs.orderBook);
+        await createMarket(connection, admin, spec.ticker, strikeLamports, prevCloseLamports, marketCloseUnix, addrs);
+        await createAndSetAlt(connection, admin, addrs);
+        created++;
+        console.log(`  [${created + skipped}/${specs.length}] Created: ${label}`);
+      } else {
+        skipped++;
+      }
+
+      // Check if seeding needed
+      const obAccount = await connection.getAccountInfo(addrs.orderBook);
+      const nextOrderIdOffset = 8 + 32; // discriminator + market pubkey
+      const hasOrders = obAccount && obAccount.data.length > nextOrderIdOffset + 8
+        && obAccount.data.readBigUInt64LE(nextOrderIdOffset) > BigInt(0);
+
+      entries.push({ spec, addrs, needsSeed: !hasOrders });
+
+      if (hasOrders) {
+        console.log(`  [${created + skipped}/${specs.length}] Exists+seeded: ${label} (skipped)`);
+      }
+    } catch (err: any) {
+      failed++;
+      const logs = err?.logs ?? [];
+      const progErr = logs.find((l: string) => l.includes("Error") || l.includes("failed"));
+      console.error(`  FAILED: ${label} — ${err.message?.slice(0, 120)}`);
+      if (progErr) console.error(`    Log: ${progErr}`);
+    }
+  }
+
+  const toSeed = entries.filter((e) => e.needsSeed);
+  if (toSeed.length === 0) {
+    console.log(`\nAll markets already seeded.`);
+  } else {
+    // ── Pass 2: Seed USDC bids (side=0) — admin has no tokens yet ───────
+    console.log(`\n── Pass 2: Posting USDC bids for ${toSeed.length} markets ──`);
+    const quoteLamports = QUOTE_QTY * 1_000_000;
+    let bidCount = 0;
+
+    for (const entry of toSeed) {
+      const { spec, addrs } = entry;
+      const label = `${spec.ticker} $${spec.strikeDollars}`;
+      try {
+        await ensureATAs(connection, admin, addrs);
+        const { quote, fairCents } = computeQuote(spec.previousClose, spec.strikeDollars, marketCloseUnix);
+        const bidIx = buildPlaceOrderIx(addrs.configPda, admin, toScriptMarketAddrs(addrs), addrs.usdcMint, 0, quote.bidPrice, quoteLamports, 1, 0);
+        await sendAndConfirmTransaction(connection, new Transaction().add(bidIx), [admin], { commitment: "confirmed" });
+        bidCount++;
+        console.log(`  [${bidCount}/${toSeed.length}] Bid: ${label}  (fair=${fairCents}c  bid=${quote.bidPrice}c)`);
+      } catch (err: any) {
+        console.error(`  Bid FAILED: ${label} — ${err.message?.slice(0, 120)}`);
+      }
+    }
+
+    // ── Pass 3: Mint pairs + post Yes asks (side=1) ──────────────────────
+    console.log(`\n── Pass 3: Minting pairs + posting asks for ${toSeed.length} markets ──`);
+    const MINT_QTY = QUOTE_QTY; // Mint same qty as bid size
+    const mintLamports = MINT_QTY * 1_000_000;
+    let askCount = 0;
+
+    for (const entry of toSeed) {
+      const { spec, addrs } = entry;
+      const label = `${spec.ticker} $${spec.strikeDollars}`;
+      try {
+        // Mint pairs — admin gets Yes + No tokens
+        const mintIx = buildMintPairIx(admin, {
+          market: addrs.marketPda,
+          yesMint: addrs.yesMint,
+          noMint: addrs.noMint,
+          usdcVault: addrs.usdcVault,
+          configPda: addrs.configPda,
+          usdcMint: addrs.usdcMint,
+        }, mintLamports);
+        await sendAndConfirmTransaction(connection, new Transaction().add(mintIx), [admin], { commitment: "confirmed" });
+
+        // Post Yes ask (side=1) — admin has Yes tokens from minting
+        const { quote, fairCents } = computeQuote(spec.previousClose, spec.strikeDollars, marketCloseUnix);
+        const askIx = buildPlaceOrderIx(addrs.configPda, admin, toScriptMarketAddrs(addrs), addrs.usdcMint, 1, quote.askPrice, quoteLamports, 1, 0);
+        await sendAndConfirmTransaction(connection, new Transaction().add(askIx), [admin], { commitment: "confirmed" });
+        askCount++;
+        console.log(`  [${askCount}/${toSeed.length}] Mint+Ask: ${label}  (fair=${fairCents}c  ask=${quote.askPrice}c)`);
+      } catch (err: any) {
+        console.error(`  Mint/Ask FAILED: ${label} — ${err.message?.slice(0, 120)}`);
+        const logs = err?.logs ?? [];
+        const progErr = logs.find((l: string) => l.includes("Error") || l.includes("failed"));
+        if (progErr) console.error(`    Log: ${progErr}`);
+      }
+    }
+  }
+
+  console.log(`\n=== Test market creation complete ===`);
+  console.log(`  Created: ${created}`);
+  console.log(`  Skipped: ${skipped} (already existed)`);
+  console.log(`  Seeded:  ${toSeed.length} (bids + asks)`);
+  console.log(`  Failed:  ${failed}`);
+  console.log(`  Total:   ${specs.length}`);
+})().catch((err) => {
+  console.error("FATAL:", err);
+  process.exit(1);
+});

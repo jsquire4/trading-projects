@@ -7,6 +7,7 @@ import { useAnchorProgram } from "@/hooks/useAnchorProgram";
 import { useWalletState } from "@/hooks/useWalletState";
 import { QuoteTable } from "@/components/mm/QuoteTable";
 import { AggregateStats } from "@/components/mm/AggregateStats";
+import { MintAndQuote } from "@/components/mm/MintAndQuote";
 import { CreateMarketForm } from "@/components/admin/CreateMarketForm";
 import { MarketActions } from "@/components/admin/MarketActions";
 import { findGlobalConfig } from "@/lib/pda";
@@ -100,6 +101,19 @@ export default function MarketMakerPage() {
             totalMarkets={markets.length}
             usdcBalance={usdcBalance}
           />
+
+          {/* Mint & Quote */}
+          {activeMarkets.length > 0 && (
+            <div>
+              <h3 className="text-sm font-semibold text-white/80 mb-3">Mint & Quote</h3>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {activeMarkets.map((m) => (
+                  <MintAndQuote key={m.publicKey.toBase58()} market={m} />
+                ))}
+              </div>
+            </div>
+          )}
+
           <QuoteTable markets={activeMarkets} />
         </div>
       ) : isAdmin ? (

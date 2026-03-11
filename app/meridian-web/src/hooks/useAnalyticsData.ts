@@ -174,3 +174,39 @@ export function useFillEvents(market: string | null, limit: number = 200) {
     limit,
   });
 }
+
+// ---------------------------------------------------------------------------
+// Event indexer health check
+// ---------------------------------------------------------------------------
+
+/**
+ * Pings the event indexer health endpoint every 30s.
+ * Returns { isOnline, lastChecked }.
+ */
+export function useEventIndexerStatus() {
+  const { data, isError } = useQuery<boolean>({
+    queryKey: ["event-indexer-status"],
+    queryFn: async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000);
+      try {
+        const res = await fetch(`${EVENT_INDEXER_URL}/api/health`, {
+          signal: controller.signal,
+        });
+        return res.ok;
+      } catch {
+        return false;
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+    retry: false,
+  });
+
+  return {
+    isOnline: data === true && !isError,
+    isOffline: data === false || isError,
+  };
+}

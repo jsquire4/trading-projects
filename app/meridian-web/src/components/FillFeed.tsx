@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { useFillEvents } from "@/hooks/useAnalyticsData";
+import { useFillEvents, useEventIndexerStatus } from "@/hooks/useAnalyticsData";
 import { parseFillEvent } from "@/lib/eventParsers";
 
 interface FillFeedProps {
@@ -11,6 +11,7 @@ interface FillFeedProps {
 
 export function FillFeed({ marketKey, limit = 20 }: FillFeedProps) {
   const { data: events = [], isLoading } = useFillEvents(marketKey, limit);
+  const { isOffline } = useEventIndexerStatus();
 
   const fills = useMemo(() => {
     return events
@@ -35,7 +36,12 @@ export function FillFeed({ marketKey, limit = 20 }: FillFeedProps) {
   return (
     <div className="rounded-lg border border-white/10 bg-white/5 p-4">
       <h3 className="text-sm font-semibold text-white/80 mb-2">Recent Fills</h3>
-      {fills.length === 0 ? (
+      {isOffline ? (
+        <div className="flex items-center gap-2 text-[11px] text-amber-400">
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />
+          Event indexer offline
+        </div>
+      ) : fills.length === 0 ? (
         <p className="text-xs text-white/30">No fills yet</p>
       ) : (
         <div className="space-y-1 max-h-48 overflow-y-auto">

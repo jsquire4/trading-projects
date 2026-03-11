@@ -103,11 +103,18 @@ export function MarketCard({ market }: MarketCardProps) {
             {impliedProb !== null ? `${impliedProb}%` : "--"}
           </span>
         </span>
-        {activeOrders !== undefined && (
-          <span>
-            {activeOrders} active order{activeOrders !== 1 ? "s" : ""}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {bestBid !== null && bestAsk !== null && (
+            <span className="text-white/40">
+              Spread: <span className="text-white/60">{bestAsk - bestBid}c</span>
+            </span>
+          )}
+          {activeOrders !== undefined && (
+            <span>
+              {activeOrders} order{activeOrders !== 1 ? "s" : ""}
+            </span>
+          )}
+        </div>
       </div>
     </Link>
   );

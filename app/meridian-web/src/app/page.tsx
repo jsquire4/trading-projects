@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useMemo } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
 import { useMarkets } from "@/hooks/useMarkets";
 import { useNetwork } from "@/hooks/useNetwork";
 import { WalletButton } from "@/components/WalletButton";
@@ -95,6 +96,7 @@ function StatCard({ label, value, sub }: StatCardProps) {
 export default function HomePage() {
   const { data: markets = [], isLoading } = useMarkets();
   const { isMainnet, isDevnet, isLocalnet } = useNetwork();
+  const { connected } = useWallet();
 
   // Derive per-ticker summaries from active (unsettled) markets
   const tickerSummaries = useMemo(() => {
@@ -162,8 +164,11 @@ export default function HomePage() {
           >
             View Markets
           </Link>
-          <WalletButton />
-          {!isMainnet && <FaucetButton />}
+          {connected && !isMainnet ? (
+            <FaucetButton className="bg-blue-500 hover:bg-blue-400 text-white font-semibold rounded-lg px-6 py-2.5 transition-all text-sm shadow-lg shadow-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed" />
+          ) : (
+            <WalletButton />
+          )}
         </div>
       </section>
 
@@ -283,7 +288,11 @@ export default function HomePage() {
           >
             Browse Markets
           </Link>
-          <WalletButton />
+          {connected && !isMainnet ? (
+            <FaucetButton className="bg-white/10 hover:bg-white/20 text-white rounded-lg px-4 py-2 text-sm transition-colors" />
+          ) : (
+            <WalletButton />
+          )}
         </div>
       </section>
 

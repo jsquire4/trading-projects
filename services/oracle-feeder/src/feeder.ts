@@ -79,13 +79,14 @@ export async function startFeeder(
   // Rate-limit tracking: last update timestamp per ticker
   const lastUpdate = new Map<string, number>();
 
-  // Tradier client for session creation
+  // Tradier client for session creation AND REST fallback
   const tradierClient = new TradierClient();
 
   let ws: WebSocket | null = null;
   let stopped = false;
   let connecting = false;
   let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
 
   // ------ On-chain update with retry ------
 
@@ -137,6 +138,31 @@ export async function startFeeder(
       }
     }
   }
+
+  // ------ REST-based price fetch (initial seed + polling fallback) ------
+
+  async function fetchAndUpdateViaREST(): Promise<void> {
+    try {
+      const quotes = await tradierClient.getQuotes(tickers);
+      for (const q of quotes) {
+        if (q.last > 0) {
+          await updateOnChain(q.symbol, q.last);
+        }
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn("REST quote fetch failed", { error: msg });
+    }
+  }
+
+  // Seed prices immediately via REST so feeds aren't stale on startup
+  log.info("Seeding initial prices via REST API...");
+  await fetchAndUpdateViaREST();
+
+  // Poll every 30s as a fallback when WebSocket is idle (e.g. outside market hours)
+  pollInterval = setInterval(() => {
+    fetchAndUpdateViaREST().catch(() => {});
+  }, 30_000);
 
   // ------ WebSocket streaming ------
 
@@ -217,6 +243,7 @@ export async function startFeeder(
     stop() {
       stopped = true;
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (pollInterval) clearInterval(pollInterval);
       if (ws) {
         ws.removeAllListeners();
         ws.close();

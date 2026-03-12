@@ -122,7 +122,7 @@ describe("Fee System", () => {
       await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), ix), [ctx.admin]);
       expect.fail("Should have rejected fee_bps > 1000");
     } catch (e: any) {
-      expect(e.message).to.match(/0x1982|FeeBpsOutOfRange|6130|custom program error/i);
+      expect(e.message).to.match(/0x17f2|FeeBpsOutOfRange|6130|custom program error/i);
     }
   });
 

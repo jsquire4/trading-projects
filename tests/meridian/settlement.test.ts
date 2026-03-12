@@ -31,6 +31,7 @@ import {
   createTestMarket,
   MarketAccounts,
   findGlobalConfig,
+  findFeeVault,
   MOCK_ORACLE_PROGRAM_ID,
   mintTestUsdc,
   createAta,
@@ -70,6 +71,7 @@ describe("Settlement Lifecycle", () => {
   let ctx: BankrunContext;
   let usdcMint: PublicKey;
   let config: PublicKey;
+  let feeVault: PublicKey;
   let oracleFeed: PublicKey;
 
   // Market 1: oracle-settled market (for settle_market + admin_override tests)
@@ -98,6 +100,7 @@ describe("Settlement Lifecycle", () => {
     usdcMint = await createMockUsdc(ctx.context, ctx.admin);
     await initializeConfig(ctx.context, ctx.admin, usdcMint, MOCK_ORACLE_PROGRAM_ID);
     [config] = findGlobalConfig();
+    [feeVault] = findFeeVault();
     oracleFeed = await initializeOracleFeed(ctx.context, ctx.admin, TICKER);
 
     // Set oracle price at $205 (above strike) with current timestamp
@@ -709,6 +712,7 @@ describe("Settlement Lifecycle", () => {
         userUsdcAta: orderUserUsdcAta,
         userYesAta: orderUserYesAta,
         userNoAta: orderUserNoAta,
+        feeVault,
         side: 0, // USDC bid
         price: 50,
         quantity: new BN(10 * ONE_TOKEN),
@@ -1372,6 +1376,7 @@ describe("Settlement Lifecycle", () => {
         userUsdcAta: crankUserUsdcAta,
         userYesAta: crankUserYesAta,
         userNoAta: crankUserNoAta,
+        feeVault,
         side: 0,     // USDC bid
         price: 50,
         quantity: new BN(5 * ONE_TOKEN),
@@ -2341,6 +2346,7 @@ describe("Settlement Lifecycle", () => {
         userUsdcAta: cancelUserUsdcAta,
         userYesAta: cancelUserYesAta,
         userNoAta: cancelUserNoAta,
+        feeVault,
         side: 0,     // USDC bid
         price: 40,
         quantity: new BN(10 * ONE_TOKEN),
@@ -2471,6 +2477,7 @@ describe("Settlement Lifecycle", () => {
         userUsdcAta,
         userYesAta: makerYesAta,
         userNoAta: makerNoAta,
+        feeVault,
         side: 1,     // Yes ask (sell Yes)
         price: 60,
         quantity: new BN(20 * ONE_TOKEN),
@@ -2494,6 +2501,7 @@ describe("Settlement Lifecycle", () => {
         userUsdcAta: takerUsdcAta,
         userYesAta: takerYesAta,
         userNoAta: takerNoAta,
+        feeVault,
         side: 0,     // USDC bid (buy Yes)
         price: 60,
         quantity: new BN(10 * ONE_TOKEN),
@@ -2518,6 +2526,7 @@ describe("Settlement Lifecycle", () => {
         userUsdcAta: takerUsdcAta,
         userYesAta: takerYesAta,
         userNoAta: takerNoAta,
+        feeVault,
         side: 0,     // USDC bid
         price: 30,
         quantity: new BN(5 * ONE_TOKEN),
@@ -2683,6 +2692,7 @@ describe("Settlement Lifecycle", () => {
         userUsdcAta,
         userYesAta: makerYesAta,
         userNoAta: makerNoAta,
+        feeVault,
         side: 1,     // Yes ask
         price: 55,
         quantity: new BN(30 * ONE_TOKEN),
@@ -2706,6 +2716,7 @@ describe("Settlement Lifecycle", () => {
         userUsdcAta: takerUsdcAta,
         userYesAta: takerYesAta,
         userNoAta: takerNoAta,
+        feeVault,
         side: 0,     // USDC bid
         price: 55,
         quantity: new BN(30 * ONE_TOKEN),

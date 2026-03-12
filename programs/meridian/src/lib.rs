@@ -27,6 +27,7 @@ pub use instructions::crank_cancel::*;
 pub use instructions::close_market::*;
 pub use instructions::treasury_redeem::*;
 pub use instructions::cleanup_market::*;
+pub use instructions::update_fee_bps::*;
 
 declare_id!("7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth");
 
@@ -150,5 +151,9 @@ pub mod meridian {
 
     pub fn cleanup_market(ctx: Context<CleanupMarket>) -> Result<()> {
         instructions::cleanup_market::handle_cleanup_market(ctx)
+    }
+
+    pub fn update_fee_bps(ctx: Context<UpdateFeeBps>, new_fee_bps: u16) -> Result<()> {
+        instructions::update_fee_bps::handle_update_fee_bps(ctx, new_fee_bps)
     }
 }

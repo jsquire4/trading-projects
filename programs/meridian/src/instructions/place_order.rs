@@ -85,6 +85,15 @@ pub struct PlaceOrder<'info> {
     )]
     pub user_no_ata: Box<Account<'info, TokenAccount>>,
 
+    /// Fee vault — collects protocol fees from fills
+    #[account(
+        mut,
+        seeds = [GlobalConfig::FEE_VAULT_SEED],
+        bump,
+        constraint = fee_vault.mint == config.usdc_mint @ MeridianError::InvalidMint,
+    )]
+    pub fee_vault: Box<Account<'info, TokenAccount>>,
+
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     // remaining_accounts: maker USDC/Yes ATAs passed dynamically per fill
@@ -152,6 +161,8 @@ pub fn handle_place_order<'info>(
     let no_mint_ai = ctx.accounts.no_mint.to_account_info();
     let user_usdc_ai = ctx.accounts.user_usdc_ata.to_account_info();
     let user_yes_ai = ctx.accounts.user_yes_ata.to_account_info();
+    let fee_vault_ai = ctx.accounts.fee_vault.to_account_info();
+    let fee_bps = ctx.accounts.config.fee_bps;
 
     let price_improvement_refund = process_fills(
         &match_result,
@@ -171,6 +182,8 @@ pub fn handle_place_order<'info>(
         &no_mint_ai,
         &user_usdc_ai,
         &user_yes_ai,
+        &fee_vault_ai,
+        fee_bps,
         signer_seeds,
     )?;
 
@@ -374,6 +387,46 @@ fn escrow_taker_assets(
     Ok(())
 }
 
+/// Compute per-side fee using u128 intermediate to prevent overflow.
+/// Returns floor(gross * fee_bps / 10_000).
+fn compute_fee(gross: u64, fee_bps: u16) -> Result<u64> {
+    if fee_bps == 0 {
+        return Ok(0);
+    }
+    let fee = ((gross as u128)
+        .checked_mul(fee_bps as u128)
+        .ok_or(MeridianError::ArithmeticOverflow)?
+        / 10_000u128) as u64;
+    Ok(fee)
+}
+
+/// Transfer fee to fee_vault if amount > 0. Skips CPI when zero.
+fn transfer_fee<'info>(
+    amount: u64,
+    tp: &AccountInfo<'info>,
+    from: &AccountInfo<'info>,
+    fee_vault_ai: &AccountInfo<'info>,
+    authority: &AccountInfo<'info>,
+    signer_seeds: &[&[&[u8]]],
+) -> Result<()> {
+    if amount == 0 {
+        return Ok(());
+    }
+    token::transfer(
+        CpiContext::new_with_signer(
+            tp.clone(),
+            Transfer {
+                from: from.clone(),
+                to: fee_vault_ai.clone(),
+                authority: authority.clone(),
+            },
+            signer_seeds,
+        ),
+        amount,
+    )?;
+    Ok(())
+}
+
 /// Processes all fills from the matching engine, executing token transfers/burns
 /// and emitting FillEvents. Returns the accumulated price improvement refund amount.
 #[allow(clippy::too_many_arguments)]
@@ -395,16 +448,21 @@ fn process_fills<'info>(
     no_mint_ai: &AccountInfo<'info>,
     user_usdc_ai: &AccountInfo<'info>,
     user_yes_ai: &AccountInfo<'info>,
+    fee_vault_ai: &AccountInfo<'info>,
+    fee_bps: u16,
     signer_seeds: &[&[&[u8]]],
 ) -> Result<u64> {
     let mut rem_idx: usize = 0;
     let mut price_improvement_refund: u64 = 0;
 
     for fill in &match_result.fills {
+        let fill_fee;
+
         if fill.is_merge {
-            process_merge_fill(
+            fill_fee = process_merge_fill(
                 fill,
                 side,
+                fee_bps,
                 remaining_accounts,
                 &mut rem_idx,
                 tp,
@@ -415,13 +473,15 @@ fn process_fills<'info>(
                 yes_mint_ai,
                 no_mint_ai,
                 user_usdc_ai,
+                fee_vault_ai,
                 signer_seeds,
             )?;
         } else {
-            let improvement = process_swap_fill(
+            let (improvement, fee) = process_swap_fill(
                 fill,
                 side,
                 price,
+                fee_bps,
                 remaining_accounts,
                 &mut rem_idx,
                 tp,
@@ -430,8 +490,10 @@ fn process_fills<'info>(
                 yes_escrow_ai,
                 user_usdc_ai,
                 user_yes_ai,
+                fee_vault_ai,
                 signer_seeds,
             )?;
+            fill_fee = fee;
             price_improvement_refund = price_improvement_refund
                 .checked_add(improvement)
                 .ok_or(MeridianError::ArithmeticOverflow)?;
@@ -449,6 +511,7 @@ fn process_fills<'info>(
             is_merge: fill.is_merge,
             maker_order_id: fill.maker_order_id,
             timestamp,
+            fee: fill_fee,
         });
     }
 
@@ -456,11 +519,13 @@ fn process_fills<'info>(
 }
 
 /// Processes a single merge/burn fill: burns Yes and No tokens from escrow,
-/// then distributes USDC payouts to taker and maker.
+/// then distributes USDC payouts to taker and maker (minus fees).
+/// Returns the total fee collected.
 #[allow(clippy::too_many_arguments)]
 fn process_merge_fill<'info>(
     fill: &Fill,
     side: u8,
+    fee_bps: u16,
     remaining_accounts: &[AccountInfo<'info>],
     rem_idx: &mut usize,
     tp: &AccountInfo<'info>,
@@ -471,8 +536,17 @@ fn process_merge_fill<'info>(
     yes_mint_ai: &AccountInfo<'info>,
     no_mint_ai: &AccountInfo<'info>,
     user_usdc_ai: &AccountInfo<'info>,
+    fee_vault_ai: &AccountInfo<'info>,
     signer_seeds: &[&[&[u8]]],
-) -> Result<()> {
+) -> Result<u64> {
+    // Gross payout = fill.quantity ($1 per token pair from vault)
+    // Fee is off the top: total_fee = floor(gross_payout * fee_bps / 10_000)
+    let total_fee = compute_fee(fill.quantity, fee_bps)?;
+
+    let net_payout = fill.quantity
+        .checked_sub(total_fee)
+        .ok_or(MeridianError::ArithmeticOverflow)?;
+
     let yes_payout_per_unit = (fill.price as u64)
         .checked_mul(PRICE_TO_USDC_LAMPORTS)
         .ok_or(MeridianError::ArithmeticOverflow)?;
@@ -480,20 +554,22 @@ fn process_merge_fill<'info>(
         .checked_sub(yes_payout_per_unit)
         .ok_or(MeridianError::ArithmeticOverflow)?;
 
-    let mut yes_payout = (fill.quantity as u128)
+    let mut yes_payout = (net_payout as u128)
         .checked_mul(yes_payout_per_unit as u128)
         .ok_or(MeridianError::ArithmeticOverflow)?
         .checked_div(USDC_LAMPORTS_PER_DOLLAR as u128)
         .ok_or(MeridianError::DivisionByZero)? as u64;
-    let no_payout = (fill.quantity as u128)
+    let no_payout = (net_payout as u128)
         .checked_mul(no_payout_per_unit as u128)
         .ok_or(MeridianError::ArithmeticOverflow)?
         .checked_div(USDC_LAMPORTS_PER_DOLLAR as u128)
         .ok_or(MeridianError::DivisionByZero)? as u64;
 
     // Assign any truncation dust to yes_payout so no USDC is trapped in vault
-    let total_payout = yes_payout.checked_add(no_payout).ok_or(MeridianError::ArithmeticOverflow)?;
-    let dust = fill.quantity.checked_sub(total_payout).unwrap_or(0);
+    let total_distributed = yes_payout
+        .checked_add(no_payout)
+        .ok_or(MeridianError::ArithmeticOverflow)?;
+    let dust = net_payout.checked_sub(total_distributed).unwrap_or(0);
     if dust > 0 {
         yes_payout = yes_payout.checked_add(dust).ok_or(MeridianError::ArithmeticOverflow)?;
     }
@@ -526,6 +602,9 @@ fn process_merge_fill<'info>(
         fill.quantity,
     )?;
 
+    // Transfer fee to fee_vault (from usdc_vault which holds the $1)
+    transfer_fee(total_fee, tp, vault_ai, fee_vault_ai, market_ai, signer_seeds)?;
+
     if side == SIDE_NO_BID {
         // Taker = No seller -> gets no_payout from vault
         token::transfer(
@@ -548,7 +627,6 @@ fn process_merge_fill<'info>(
         );
         let maker_usdc = &remaining_accounts[*rem_idx];
         *rem_idx += 1;
-        // Validate maker account ownership: SPL token account authority (bytes 32-64) must match fill.maker
         require!(
             maker_usdc.owner == &token::ID && {
                 let data = maker_usdc.try_borrow_data()?;
@@ -570,8 +648,7 @@ fn process_merge_fill<'info>(
         )?;
     } else {
         // taker_side == SIDE_YES_ASK, maker_side == SIDE_NO_BID
-        // fill.price = No bid price (P). Yes seller gets (100-P), No seller gets P.
-        // Taker = Yes seller -> gets no_payout (= 100-P) from vault
+        // Taker = Yes seller -> gets no_payout from vault
         token::transfer(
             CpiContext::new_with_signer(
                 tp.clone(),
@@ -585,14 +662,13 @@ fn process_merge_fill<'info>(
             no_payout,
         )?;
 
-        // Maker = No seller -> gets yes_payout (= P)
+        // Maker = No seller -> gets yes_payout
         require!(
             *rem_idx < remaining_accounts.len(),
             MeridianError::InsufficientAccounts
         );
         let maker_usdc = &remaining_accounts[*rem_idx];
         *rem_idx += 1;
-        // Validate maker account ownership: SPL token account authority (bytes 32-64) must match fill.maker
         require!(
             maker_usdc.owner == &token::ID && {
                 let data = maker_usdc.try_borrow_data()?;
@@ -614,16 +690,16 @@ fn process_merge_fill<'info>(
         )?;
     }
 
-    Ok(())
+    Ok(total_fee)
 }
 
-/// Processes a single standard swap fill. Returns the price improvement amount
-/// (non-zero only for USDC bid fills at a better price than the taker's limit).
+/// Processes a single standard swap fill. Returns (price_improvement, fee).
 #[allow(clippy::too_many_arguments)]
 fn process_swap_fill<'info>(
     fill: &Fill,
     side: u8,
     price: u8,
+    fee_bps: u16,
     remaining_accounts: &[AccountInfo<'info>],
     rem_idx: &mut usize,
     tp: &AccountInfo<'info>,
@@ -632,8 +708,9 @@ fn process_swap_fill<'info>(
     yes_escrow_ai: &AccountInfo<'info>,
     user_usdc_ai: &AccountInfo<'info>,
     user_yes_ai: &AccountInfo<'info>,
+    fee_vault_ai: &AccountInfo<'info>,
     signer_seeds: &[&[&[u8]]],
-) -> Result<u64> {
+) -> Result<(u64, u64)> {
     let fill_usdc = (fill.quantity as u128)
         .checked_mul(fill.price as u128)
         .ok_or(MeridianError::ArithmeticOverflow)?
@@ -641,6 +718,12 @@ fn process_swap_fill<'info>(
         .ok_or(MeridianError::ArithmeticOverflow)?
         .checked_div(USDC_LAMPORTS_PER_DOLLAR as u128)
         .ok_or(MeridianError::DivisionByZero)? as u64;
+
+    // Fee: single fee on the gross USDC amount, deducted from USDC flow
+    let total_fee = compute_fee(fill_usdc, fee_bps)?;
+    let net_usdc = fill_usdc
+        .checked_sub(total_fee)
+        .ok_or(MeridianError::ArithmeticOverflow)?;
 
     let mut improvement: u64 = 0;
 
@@ -660,14 +743,13 @@ fn process_swap_fill<'info>(
             fill.quantity,
         )?;
 
-        // USDC from escrow_vault -> maker
+        // USDC from escrow_vault -> maker (net of fee)
         require!(
             *rem_idx < remaining_accounts.len(),
             MeridianError::InsufficientAccounts
         );
         let maker_usdc = &remaining_accounts[*rem_idx];
         *rem_idx += 1;
-        // Validate maker account ownership: SPL token account authority (bytes 32-64) must match fill.maker
         require!(
             maker_usdc.owner == &token::ID && {
                 let data = maker_usdc.try_borrow_data()?;
@@ -685,8 +767,11 @@ fn process_swap_fill<'info>(
                 },
                 signer_seeds,
             ),
-            fill_usdc,
+            net_usdc,
         )?;
+
+        // Transfer fee from escrow to fee_vault
+        transfer_fee(total_fee, tp, escrow_ai, fee_vault_ai, market_ai, signer_seeds)?;
 
         // Price improvement: taker escrowed at `price` but filled at `fill.price`
         if fill.price < price {
@@ -700,7 +785,7 @@ fn process_swap_fill<'info>(
         }
     } else if side == SIDE_YES_ASK {
         // Taker sells Yes. Maker had USDC bid in escrow_vault.
-        // USDC from escrow -> taker
+        // USDC from escrow -> taker (net of fee)
         token::transfer(
             CpiContext::new_with_signer(
                 tp.clone(),
@@ -711,8 +796,11 @@ fn process_swap_fill<'info>(
                 },
                 signer_seeds,
             ),
-            fill_usdc,
+            net_usdc,
         )?;
+
+        // Transfer fee from escrow to fee_vault
+        transfer_fee(total_fee, tp, escrow_ai, fee_vault_ai, market_ai, signer_seeds)?;
 
         // Yes from yes_escrow -> maker
         require!(
@@ -721,7 +809,6 @@ fn process_swap_fill<'info>(
         );
         let maker_yes = &remaining_accounts[*rem_idx];
         *rem_idx += 1;
-        // Validate maker account ownership: SPL token account authority (bytes 32-64) must match fill.maker
         require!(
             maker_yes.owner == &token::ID && {
                 let data = maker_yes.try_borrow_data()?;
@@ -743,7 +830,7 @@ fn process_swap_fill<'info>(
         )?;
     }
 
-    Ok(improvement)
+    Ok((improvement, total_fee))
 }
 
 /// Refunds unfilled escrow amounts back to the taker for market orders

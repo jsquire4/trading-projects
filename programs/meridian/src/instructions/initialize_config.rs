@@ -31,6 +31,17 @@ pub struct InitializeConfig<'info> {
     )]
     pub treasury: Account<'info, TokenAccount>,
 
+    /// Fee vault USDC account owned by config PDA — receives protocol fees from fills
+    #[account(
+        init,
+        payer = admin,
+        token::mint = usdc_mint,
+        token::authority = config,
+        seeds = [GlobalConfig::FEE_VAULT_SEED],
+        bump,
+    )]
+    pub fee_vault: Account<'info, TokenAccount>,
+
     /// CHECK: Oracle program ID — validated by admin, stored for future CPI checks
     pub oracle_program: UncheckedAccount<'info>,
 
@@ -68,6 +79,8 @@ pub fn handle_initialize_config(
     config.tickers = tickers;
     config.ticker_count = ticker_count;
     config.bump = ctx.bumps.config;
+    config.fee_bps = 0;
+    config._padding = [0; 2];
 
     msg!(
         "GlobalConfig initialized: admin={}, usdc_mint={}, oracle_program={}, tickers={}",

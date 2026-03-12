@@ -15,8 +15,9 @@ import BN from "bn.js";
 import * as fs from "fs";
 import * as path from "path";
 
-// Re-export padTicker from the canonical source
-export { padTicker } from "../services/shared/src/pda";
+// Re-export padTicker and findFeeVault from the canonical source
+export { padTicker, findFeeVault } from "../services/shared/src/pda";
+import { findFeeVault } from "../services/shared/src/pda";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -150,6 +151,7 @@ export function buildPlaceOrderIx(
   const walletUsdcAta = getAssociatedTokenAddressSync(usdcMint, wallet.publicKey);
   const walletYesAta = getAssociatedTokenAddressSync(m.yesMint, wallet.publicKey);
   const walletNoAta = getAssociatedTokenAddressSync(m.noMint, wallet.publicKey);
+  const [feeVaultPda] = findFeeVault();
 
   const keys = [
     { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
@@ -165,6 +167,7 @@ export function buildPlaceOrderIx(
     { pubkey: walletUsdcAta, isSigner: false, isWritable: true },
     { pubkey: walletYesAta, isSigner: false, isWritable: true },
     { pubkey: walletNoAta, isSigner: false, isWritable: true },
+    { pubkey: feeVaultPda, isSigner: false, isWritable: true },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
   ];

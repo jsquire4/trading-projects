@@ -96,6 +96,12 @@ function anchorDiscriminator(instructionName: string): Buffer {
   );
   console.log(`Treasury PDA: ${treasuryPda.toBase58()} (bump ${treasuryBump})`);
 
+  const [feeVaultPda, feeVaultBump] = PublicKey.findProgramAddressSync(
+    [Buffer.from("fee_vault")],
+    MERIDIAN_PROGRAM_ID
+  );
+  console.log(`Fee Vault PDA: ${feeVaultPda.toBase58()} (bump ${feeVaultBump})`);
+
   // ── Idempotency check ─────────────────────────────────────────────────────
   const existingAccount = await connection.getAccountInfo(configPda);
   if (existingAccount) {
@@ -134,6 +140,7 @@ function anchorDiscriminator(instructionName: string): Buffer {
     { pubkey: configPda, isSigner: false, isWritable: true },         // config
     { pubkey: usdcMint, isSigner: false, isWritable: false },         // usdc_mint
     { pubkey: treasuryPda, isSigner: false, isWritable: true },       // treasury
+    { pubkey: feeVaultPda, isSigner: false, isWritable: true },       // fee_vault
     { pubkey: MOCK_ORACLE_PROGRAM_ID, isSigner: false, isWritable: false }, // oracle_program
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // token_program
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program

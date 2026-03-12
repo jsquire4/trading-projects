@@ -129,6 +129,13 @@ export function findOrderBook(market: PublicKey): [PublicKey, number] {
 // Mock Oracle PDAs
 // ---------------------------------------------------------------------------
 
+export function findFeeVault(): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("fee_vault")],
+    MERIDIAN_PROGRAM_ID,
+  );
+}
+
 export function findPriceFeed(ticker: string): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("price_feed"), padTicker(ticker)],

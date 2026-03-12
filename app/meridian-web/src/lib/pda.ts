@@ -14,5 +14,6 @@ export {
   findYesEscrow,
   findNoEscrow,
   findOrderBook,
+  findFeeVault,
   findPriceFeed,
 } from "@shared/pda";

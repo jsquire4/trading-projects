@@ -64,6 +64,7 @@ export interface InitializeConfigParams {
   config: PublicKey;
   usdcMint: PublicKey;
   treasury: PublicKey;
+  feeVault: PublicKey;
   oracleProgram: PublicKey;
   /** 7-element array of ticker strings (e.g. ["AAPL", "MSFT", ...]) */
   tickers: string[];
@@ -103,13 +104,14 @@ export function buildInitializeConfigIx(
   ]);
 
   // Account order matches InitializeConfig struct:
-  //   admin, config, usdc_mint, treasury, oracle_program,
+  //   admin, config, usdc_mint, treasury, fee_vault, oracle_program,
   //   token_program, system_program, rent
   const keys = [
     { pubkey: params.admin, isSigner: true, isWritable: true },
     { pubkey: params.config, isSigner: false, isWritable: true },
     { pubkey: params.usdcMint, isSigner: false, isWritable: false },
     { pubkey: params.treasury, isSigner: false, isWritable: true },
+    { pubkey: params.feeVault, isSigner: false, isWritable: true },
     { pubkey: params.oracleProgram, isSigner: false, isWritable: false },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
@@ -414,6 +416,7 @@ export interface PlaceOrderParams {
   userUsdcAta: PublicKey;
   userYesAta: PublicKey;
   userNoAta: PublicKey;
+  feeVault: PublicKey;
   /** 0=USDC bid (Buy Yes), 1=Yes ask (Sell Yes), 2=No-backed bid (Sell No) */
   side: number;
   /** Price 1-99 */
@@ -446,8 +449,8 @@ export function buildPlaceOrderIx(
   // Account order matches PlaceOrder struct:
   //   user, config, market, order_book, usdc_vault, escrow_vault,
   //   yes_escrow, no_escrow, yes_mint, no_mint,
-  //   user_usdc_ata, user_yes_ata, user_no_ata,
-  //   token_program, associated_token_program, system_program
+  //   user_usdc_ata, user_yes_ata, user_no_ata, fee_vault,
+  //   token_program, system_program
   const keys = [
     { pubkey: params.user, isSigner: true, isWritable: true },
     { pubkey: params.config, isSigner: false, isWritable: false },
@@ -462,6 +465,7 @@ export function buildPlaceOrderIx(
     { pubkey: params.userUsdcAta, isSigner: false, isWritable: true },
     { pubkey: params.userYesAta, isSigner: false, isWritable: true },
     { pubkey: params.userNoAta, isSigner: false, isWritable: true },
+    { pubkey: params.feeVault, isSigner: false, isWritable: true },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
   ];
@@ -927,5 +931,40 @@ export function buildCleanupMarketIx(
     programId: MERIDIAN_PROGRAM_ID,
     keys,
     data: disc,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Meridian: update_fee_bps
+// ---------------------------------------------------------------------------
+
+export interface UpdateFeeBpsParams {
+  admin: PublicKey;
+  config: PublicKey;
+  newFeeBps: number;
+}
+
+export function buildUpdateFeeBpsIx(
+  params: UpdateFeeBpsParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("update_fee_bps");
+
+  // Data: disc(8) + new_fee_bps(2, u16 LE)
+  const feeBuf = Buffer.alloc(2);
+  feeBuf.writeUInt16LE(params.newFeeBps);
+
+  const data = Buffer.concat([disc, feeBuf]);
+
+  // Account order matches UpdateFeeBps struct:
+  //   admin, config
+  const keys = [
+    { pubkey: params.admin, isSigner: true, isWritable: false },
+    { pubkey: params.config, isSigner: false, isWritable: true },
+  ];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data,
   });
 }

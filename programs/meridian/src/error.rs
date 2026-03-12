@@ -168,4 +168,10 @@ pub enum MeridianError {
     // === ALT Management (on-chain: 6120) ===
     #[msg("Market ALT address has already been set")]
     AltAlreadySet = 120,
+
+    // === Protocol Fees (on-chain: 6130-6131) ===
+    #[msg("Fee basis points exceeds maximum (1000 = 10%)")]
+    FeeBpsOutOfRange = 130,
+    #[msg("Fee vault CPI transfer failed")]
+    FeeTransferFailed = 131,
 }

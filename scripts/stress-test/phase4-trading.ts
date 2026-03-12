@@ -24,6 +24,7 @@ import {
 } from "./config";
 import {
   findGlobalConfig,
+  findFeeVault,
   sendTx,
   parseOrderBook,
   type MarketAddresses,
@@ -77,6 +78,7 @@ async function placeOrder(
       userUsdcAta: getAssociatedTokenAddressSync(usdcMint, wallet.publicKey),
       userYesAta: getAssociatedTokenAddressSync(m.yesMint, wallet.publicKey),
       userNoAta: getAssociatedTokenAddressSync(m.noMint, wallet.publicKey),
+      feeVault: findFeeVault()[0],
       side,
       price,
       quantity: new BN(quantity),

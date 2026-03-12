@@ -25,6 +25,7 @@ import {
   MarketAccounts,
   findGlobalConfig,
   findTreasury,
+  findFeeVault,
   MOCK_ORACLE_PROGRAM_ID,
   mintTestUsdc,
   createAta,
@@ -68,6 +69,7 @@ describe("Market Closure", () => {
   let provider: BankrunProvider;
   let usdcMint: PublicKey;
   let config: PublicKey;
+  let feeVault: PublicKey;
   let treasury: PublicKey;
   let oracleFeed: PublicKey;
 
@@ -108,6 +110,7 @@ describe("Market Closure", () => {
     usdcMint = await createMockUsdc(ctx.context, ctx.admin);
     await initializeConfig(ctx.context, ctx.admin, usdcMint, MOCK_ORACLE_PROGRAM_ID);
     [config] = findGlobalConfig();
+    [feeVault] = findFeeVault();
     [treasury] = findTreasury();
     oracleFeed = await initializeOracleFeed(ctx.context, ctx.admin, TICKER);
 
@@ -437,6 +440,7 @@ describe("Market Closure", () => {
             userUsdcAta: adminUsdcAta,
             userYesAta: adminYesOb,
             userNoAta: adminNoOb,
+            feeVault,
             side: 1, // Yes ask (Sell Yes) — avoids ConflictingPosition
             price: 50,
             quantity: new BN(5 * ONE_TOKEN),

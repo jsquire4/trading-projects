@@ -15,6 +15,7 @@ pub mod crank_cancel;
 pub mod close_market;
 pub mod treasury_redeem;
 pub mod cleanup_market;
+pub mod update_fee_bps;
 
 pub use allocate_order_book::*;
 pub use initialize_config::*;
@@ -33,3 +34,4 @@ pub use crank_cancel::*;
 pub use close_market::*;
 pub use treasury_redeem::*;
 pub use cleanup_market::*;
+pub use update_fee_bps::*;

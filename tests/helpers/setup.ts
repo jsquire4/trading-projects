@@ -49,6 +49,7 @@ import {
   findYesEscrow as _findYesEscrow,
   findNoEscrow as _findNoEscrow,
   findOrderBook as _findOrderBook,
+  findFeeVault as _findFeeVault,
   findPriceFeed as _findPriceFeed,
   expiryDayBuffer,
   strikeToBuffer,
@@ -96,6 +97,7 @@ export const findEscrowVault = _findEscrowVault;
 export const findYesEscrow = _findYesEscrow;
 export const findNoEscrow = _findNoEscrow;
 export const findOrderBook = _findOrderBook;
+export const findFeeVault = _findFeeVault;
 export const findPriceFeed = _findPriceFeed;
 
 /**
@@ -216,12 +218,14 @@ export async function initializeConfig(
 
   const [config] = findGlobalConfig();
   const [treasury] = findTreasury();
+  const [feeVault] = findFeeVault();
 
   const ix = buildInitializeConfigIx({
     admin: admin.publicKey,
     config,
     usdcMint,
     treasury,
+    feeVault,
     oracleProgram,
     tickers: MAG7_TICKERS,
     tickerCount: MAG7_TICKERS.length,

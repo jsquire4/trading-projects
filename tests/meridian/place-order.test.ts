@@ -19,6 +19,7 @@ import {
   createAta,
   MarketAccounts,
   findGlobalConfig,
+  findFeeVault,
   MOCK_ORACLE_PROGRAM_ID,
   MERIDIAN_PROGRAM_ID,
   readOrderSlot,
@@ -44,6 +45,7 @@ describe("Place Order", () => {
   let ctx: BankrunContext;
   let usdcMint: PublicKey;
   let config: PublicKey;
+  let feeVault: PublicKey;
   let oracleFeed: PublicKey;
   let ma: MarketAccounts; // market accounts
 
@@ -69,6 +71,7 @@ describe("Place Order", () => {
     usdcMint = await createMockUsdc(ctx.context, ctx.admin);
     await initializeConfig(ctx.context, ctx.admin, usdcMint, MOCK_ORACLE_PROGRAM_ID);
     [config] = findGlobalConfig();
+    [feeVault] = findFeeVault();
     oracleFeed = await initializeOracleFeed(ctx.context, ctx.admin, TICKER);
     await updateOraclePrice(ctx.context, ctx.admin, oracleFeed, 198_000_000, 500_000);
 
@@ -128,6 +131,7 @@ describe("Place Order", () => {
       userUsdcAta: uAta,
       userYesAta: yAta,
       userNoAta: nAta,
+      feeVault,
       side,
       price,
       quantity: new BN(quantity),
@@ -161,6 +165,7 @@ describe("Place Order", () => {
       userUsdcAta: buyerUsdcAta,
       userYesAta: buyerYesAta,
       userNoAta: buyerNoAta,
+      feeVault,
       side: SIDE_USDC_BID,
       price: 50,
       quantity: new BN(TEN_TOKENS),
@@ -273,6 +278,7 @@ describe("Place Order", () => {
       userUsdcAta: takerUsdcAta,
       userYesAta: takerYesAta,
       userNoAta: takerNoAta,
+      feeVault,
       side: SIDE_USDC_BID,
       price: 60,
       quantity: new BN(5 * ONE_TOKEN),
@@ -313,6 +319,7 @@ describe("Place Order", () => {
       userUsdcAta: uAta,
       userYesAta: yAta,
       userNoAta: nAta,
+      feeVault,
       side: SIDE_USDC_BID,
       price: 40,
       quantity: new BN(TEN_TOKENS),
@@ -460,6 +467,7 @@ describe("Place Order", () => {
       userUsdcAta: buyerUsdcAta,
       userYesAta: buyerYesAta,
       userNoAta: buyerNoAta,
+      feeVault,
       side: SIDE_USDC_BID,
       price: 75,
       quantity: new BN(3 * ONE_TOKEN),
@@ -504,6 +512,7 @@ describe("Place Order", () => {
       userUsdcAta: sellerUsdcAta,
       userYesAta: sellerYesAta,
       userNoAta: sellerNoAta,
+      feeVault,
       side: SIDE_YES_ASK,
       price: 75,
       quantity: new BN(3 * ONE_TOKEN),
@@ -560,6 +569,7 @@ describe("Place Order", () => {
       userUsdcAta: makerUsdcAta,
       userYesAta: makerYesAta,
       userNoAta: makerNoAta,
+      feeVault,
       side: SIDE_YES_ASK,
       price: 40,
       quantity: new BN(5 * ONE_TOKEN),
@@ -602,6 +612,7 @@ describe("Place Order", () => {
       userUsdcAta: sellerUsdcAta,
       userYesAta: sellerYesAta,
       userNoAta: sellerNoAta,
+      feeVault,
       side: SIDE_YES_ASK,
       price: 99,
       quantity: new BN(5 * ONE_TOKEN),
@@ -635,6 +646,7 @@ describe("Place Order", () => {
       userUsdcAta: sellerUsdcAta,
       userYesAta: sellerYesAta,
       userNoAta: sellerNoAta,
+      feeVault,
       side: SIDE_NO_BID,
       price: 1,
       quantity: new BN(5 * ONE_TOKEN),

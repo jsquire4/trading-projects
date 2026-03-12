@@ -30,6 +30,7 @@ import {
   findPriceFeed,
   findGlobalConfig,
   findTreasury,
+  findFeeVault,
   MERIDIAN_PROGRAM_ID,
 } from "../../services/shared/src/pda";
 import type { MarketDef } from "./config";
@@ -38,6 +39,7 @@ import type { MarketDef } from "./config";
 export {
   findGlobalConfig,
   findTreasury,
+  findFeeVault,
   findPriceFeed,
   padTicker,
   MERIDIAN_PROGRAM_ID,

@@ -8,8 +8,8 @@ const ANCHOR_DISCRIMINATOR_SIZE = 8;
 const PUBKEY_SIZE = 32;
 
 const ORDER_SLOT_SIZE = 80;
-const ORDERS_PER_LEVEL = 16;
-const PRICE_LEVEL_SIZE = 1288; // 16 * 80 + 1 + 7
+const ORDERS_PER_LEVEL = 32;
+const PRICE_LEVEL_SIZE = 2568; // 32 * 80 + 1 + 7
 const NUM_LEVELS = 99;
 
 // Offsets within the account data (after discriminator)
@@ -104,7 +104,7 @@ export function deserializeOrderBook(buffer: Buffer): DeserializedOrderBook {
   for (let level = 0; level < NUM_LEVELS; level++) {
     const levelBase = base + LEVELS_OFFSET + level * PRICE_LEVEL_SIZE;
 
-    // count is at offset (16 * 80) = 1280 within the PriceLevel
+    // count is at offset (32 * 80) = 2560 within the PriceLevel
     const count = data.getUint8(levelBase + ORDERS_PER_LEVEL * ORDER_SLOT_SIZE);
 
     // Skip empty levels entirely

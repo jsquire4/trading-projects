@@ -45,7 +45,7 @@ import {
 } from "./instructions";
 import { TICKERS, SETTLEMENT_PRICES, type Ticker } from "./config";
 
-const ORDER_BOOK_TOTAL_SPACE = 8 + 127_560; // 127,568 bytes
+const ORDER_BOOK_TOTAL_SPACE = 8 + 254_280; // 254,288 bytes
 const MAX_GROWTH = 10_240;
 const ALLOC_BATCH_SIZE = 6; // instructions per tx
 

@@ -229,7 +229,7 @@ export interface ParsedOrder {
  * Layout (after 8-byte Anchor discriminator):
  *   market:        32 bytes
  *   next_order_id: 8 bytes
- *   levels[99]:    each = 16 × OrderSlot(80 bytes) + count(1) + padding(7) = 1288 bytes
+ *   levels[99]:    each = 32 × OrderSlot(80 bytes) + count(1) + padding(7) = 2568 bytes
  *   bump:          1 byte
  *   padding:       7 bytes
  *
@@ -241,8 +241,8 @@ export function parseOrderBook(data: Buffer): ParsedOrder[] {
   const orders: ParsedOrder[] = [];
   const HEADER = 8 + 32 + 8; // disc + market + next_order_id = 48
   const SLOT_SIZE = 80;
-  const SLOTS_PER_LEVEL = 16;
-  const LEVEL_SIZE = SLOTS_PER_LEVEL * SLOT_SIZE + 1 + 7; // 1288
+  const SLOTS_PER_LEVEL = 32;
+  const LEVEL_SIZE = SLOTS_PER_LEVEL * SLOT_SIZE + 1 + 7; // 2568
 
   for (let lvl = 0; lvl < 99; lvl++) {
     const levelOffset = HEADER + lvl * LEVEL_SIZE;

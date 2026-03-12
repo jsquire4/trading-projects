@@ -227,11 +227,11 @@ function check(name: string, passed: boolean, detail: string) {
     let hasAsks = false;
 
     for (let lvl = 0; lvl < 99 && (!hasBids || !hasAsks); lvl++) {
-      const levelBase = levelsOffset + lvl * 1288;
-      const count = data[levelBase + 16 * 80]; // count field
+      const levelBase = levelsOffset + lvl * 2568;
+      const count = data[levelBase + 32 * 80]; // count field
       if (count === 0) continue;
 
-      for (let slot = 0; slot < 16; slot++) {
+      for (let slot = 0; slot < 32; slot++) {
         const slotBase = levelBase + slot * 80;
         const isActive = data[slotBase + 72];
         if (!isActive) continue;
@@ -339,9 +339,9 @@ function check(name: string, passed: boolean, detail: string) {
           const data = obAcct.data;
           const levelsOffset = 8 + 32 + 8;
           // Check price level 24 (index = bidPrice - 1)
-          const levelBase = levelsOffset + (bidPrice - 1) * 1288;
+          const levelBase = levelsOffset + (bidPrice - 1) * 2568;
           let foundOrder = false;
-          for (let slot = 0; slot < 16; slot++) {
+          for (let slot = 0; slot < 32; slot++) {
             const slotBase = levelBase + slot * 80;
             const isActive = data[slotBase + 72];
             if (!isActive) continue;

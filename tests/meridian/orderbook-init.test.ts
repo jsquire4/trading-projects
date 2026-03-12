@@ -19,19 +19,19 @@ import {
  *   market:        Pubkey  (32 bytes)  offset 8
  *   next_order_id: u64     (8 bytes)   offset 40
  *   levels:        [PriceLevel; 99]    offset 48
- *     each PriceLevel: 1,288 bytes
- *       orders: [OrderSlot; 16] (16 * 80 = 1,280 bytes)
+ *     each PriceLevel: 2,568 bytes
+ *       orders: [OrderSlot; 32] (32 * 80 = 2,560 bytes)
  *       count:  u8 (1 byte)
  *       _padding: [u8; 7]
  *   bump:          u8      (1 byte)
  *   _padding:      [u8; 7]
  *
- * Total: 32 + 8 + 99*1288 + 1 + 7 = 127,560 bytes (+ 8 disc = 127,568)
+ * Total: 32 + 8 + 99*2568 + 1 + 7 = 254,280 bytes (+ 8 disc = 254,288)
  */
 
 const DISCRIMINATOR_SIZE = 8;
-const ORDERBOOK_LEN = 127_560;
-const PRICE_LEVEL_SIZE = 1_288;
+const ORDERBOOK_LEN = 254_280;
+const PRICE_LEVEL_SIZE = 2_568;
 const LEVELS_OFFSET = DISCRIMINATOR_SIZE + 32 + 8; // 48
 
 describe("OrderBook Initialization", () => {
@@ -96,8 +96,8 @@ describe("OrderBook Initialization", () => {
     const levelsToCheck = [0, 49, 98];
     for (const levelIdx of levelsToCheck) {
       // count byte is at the end of the OrderSlot array within each PriceLevel
-      // offset = LEVELS_OFFSET + levelIdx * PRICE_LEVEL_SIZE + 16*80
-      const countOffset = LEVELS_OFFSET + levelIdx * PRICE_LEVEL_SIZE + 16 * 80;
+      // offset = LEVELS_OFFSET + levelIdx * PRICE_LEVEL_SIZE + 32*80
+      const countOffset = LEVELS_OFFSET + levelIdx * PRICE_LEVEL_SIZE + 32 * 80;
       const count = data[countOffset];
       expect(count, `level ${levelIdx} count should be 0`).to.equal(0);
     }

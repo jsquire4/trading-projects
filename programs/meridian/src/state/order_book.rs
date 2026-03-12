@@ -3,7 +3,7 @@ use anchor_lang::prelude::*;
 /// Maximum price levels (1-99 cents)
 pub const MAX_PRICE_LEVELS: usize = 99;
 /// Maximum orders per price level
-pub const MAX_ORDERS_PER_LEVEL: usize = 16;
+pub const MAX_ORDERS_PER_LEVEL: usize = 32;
 /// Minimum order size in token lamports (1 token = 1_000_000)
 pub const MIN_ORDER_SIZE: u64 = 1_000_000;
 /// USDC lamports per dollar
@@ -94,7 +94,7 @@ pub struct PriceLevel {
     /// Trailing alignment padding
     pub _padding: [u8; 7],
 }
-// Size: 16 × 80 + 1 + 7 = 1,288 bytes
+// Size: 32 × 80 + 1 + 7 = 2,568 bytes
 
 /// The full order book — one per market. ZeroCopy for efficient on-chain access.
 ///
@@ -113,13 +113,13 @@ pub struct OrderBook {
     /// Trailing alignment padding
     pub _padding: [u8; 7],
 }
-// Size: 32 + 8 + 99 × 1,288 + 1 + 7 = 127,560 bytes
+// Size: 32 + 8 + 99 × 2,568 + 1 + 7 = 254,280 bytes
 
 impl OrderBook {
     pub const SEED_PREFIX: &'static [u8] = b"order_book";
 
-    // OrderSlot: 80 bytes. PriceLevel: 16 × 80 + 1 + 7 = 1,288 bytes.
-    // OrderBook: 32 + 8 + 99 × 1,288 + 1 + 7 = 127,560 bytes.
+    // OrderSlot: 80 bytes. PriceLevel: 32 × 80 + 1 + 7 = 2,568 bytes.
+    // OrderBook: 32 + 8 + 99 × 2,568 + 1 + 7 = 254,280 bytes.
     pub const ORDER_SLOT_SIZE: usize = 80;
     pub const PRICE_LEVEL_SIZE: usize = MAX_ORDERS_PER_LEVEL * Self::ORDER_SLOT_SIZE + 1 + 7;
     pub const LEN: usize = 32 + 8 + (MAX_PRICE_LEVELS * Self::PRICE_LEVEL_SIZE) + 1 + 7;
@@ -127,8 +127,8 @@ impl OrderBook {
 
 // Compile-time size verification for ZeroCopy (repr(C)) types
 const _: () = assert!(std::mem::size_of::<OrderSlot>() == 80);
-const _: () = assert!(std::mem::size_of::<PriceLevel>() == 1_288);
-const _: () = assert!(std::mem::size_of::<OrderBook>() == 127_560);
+const _: () = assert!(std::mem::size_of::<PriceLevel>() == 2_568);
+const _: () = assert!(std::mem::size_of::<OrderBook>() == 254_280);
 const _: () = assert!(OrderBook::ORDER_SLOT_SIZE == std::mem::size_of::<OrderSlot>());
 const _: () = assert!(OrderBook::PRICE_LEVEL_SIZE == std::mem::size_of::<PriceLevel>());
 const _: () = assert!(OrderBook::LEN == std::mem::size_of::<OrderBook>());

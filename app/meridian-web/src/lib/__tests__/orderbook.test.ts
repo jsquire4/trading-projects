@@ -15,8 +15,8 @@ import {
 const ANCHOR_DISCRIMINATOR_SIZE = 8;
 const PUBKEY_SIZE = 32;
 const ORDER_SLOT_SIZE = 80;
-const ORDERS_PER_LEVEL = 16;
-const PRICE_LEVEL_SIZE = 1288; // 16 * 80 + 1 + 7
+const ORDERS_PER_LEVEL = 32;
+const PRICE_LEVEL_SIZE = 2568; // 32 * 80 + 1 + 7
 const NUM_LEVELS = 99;
 
 const TOTAL_SIZE =
@@ -72,7 +72,7 @@ function writeOrder(
   // is_active (u8 at offset 72)
   dv.setUint8(slotBase + 72, opts.isActive !== false ? 1 : 0);
 
-  // Update the count at the end of the price level (offset 16*80 = 1280)
+  // Update the count at the end of the price level (offset 32*80 = 2560)
   const countOffset = levelBase + ORDERS_PER_LEVEL * ORDER_SLOT_SIZE;
   const currentCount = dv.getUint8(countOffset);
   if (slotIndex >= currentCount) {

@@ -92,7 +92,7 @@ const ADMIN_KEYPAIR_PATH = path.resolve(
   ".config/solana/id.json",
 );
 
-const ORDER_BOOK_TOTAL_SPACE = 8 + 127_560; // 127,568 bytes
+const ORDER_BOOK_TOTAL_SPACE = 8 + 254_280; // 254,288 bytes
 const MAX_GROWTH = 10_240;
 const BATCH_SIZE = 6;
 const QUOTE_QTY = 200; // Post 200-token orders per price level per market

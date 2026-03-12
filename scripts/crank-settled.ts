@@ -162,11 +162,11 @@ function expiryDayFromUnix(unix: number): number {
       const activeOrders: ActiveOrder[] = [];
 
       for (let lvl = 0; lvl < 99; lvl++) {
-        const levelBase = levelsOffset + lvl * 1288;
-        const count = data[levelBase + 16 * 80];
+        const levelBase = levelsOffset + lvl * 2568;
+        const count = data[levelBase + 32 * 80];
         if (count === 0) continue;
 
-        for (let slot = 0; slot < 16; slot++) {
+        for (let slot = 0; slot < 32; slot++) {
           const slotBase = levelBase + slot * 80;
           const isActive = data[slotBase + 72];
           if (!isActive) continue;

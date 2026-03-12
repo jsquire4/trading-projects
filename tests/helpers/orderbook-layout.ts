@@ -12,7 +12,7 @@ import BN from "bn.js";
 
 export const OB_DISCRIMINATOR_SIZE = 8;
 export const OB_ORDER_SLOT_SIZE = 80;
-export const OB_PRICE_LEVEL_SIZE = 1288;
+export const OB_PRICE_LEVEL_SIZE = 2568;
 /** Offset to the first price level: discriminator(8) + market_key(32) + next_order_id(8) = 48 */
 export const OB_LEVELS_OFFSET = OB_DISCRIMINATOR_SIZE + 32 + 8; // 48
 
@@ -44,7 +44,7 @@ export interface OrderSlot {
  *
  * @param data      Raw account data buffer
  * @param levelIdx  Price level index (0-based)
- * @param slotIdx   Slot index within the level (0-15)
+ * @param slotIdx   Slot index within the level (0-31)
  */
 export function readOrderSlot(
   data: Buffer,
@@ -83,12 +83,12 @@ export function readOrderSlot(
 
 /**
  * Read the order count for a price level.
- * Count byte is located after the 16 order slots at the end of each level.
+ * Count byte is located after the 32 order slots at the end of each level.
  */
 export function readLevelCount(data: Buffer, levelIdx: number): number {
   const countOffset =
     OB_LEVELS_OFFSET +
     levelIdx * OB_PRICE_LEVEL_SIZE +
-    16 * OB_ORDER_SLOT_SIZE;
+    32 * OB_ORDER_SLOT_SIZE;
   return data[countOffset];
 }

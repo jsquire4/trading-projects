@@ -37,6 +37,7 @@ import {
 } from "../helpers/instructions";
 
 import { getTokenBalance } from "../helpers/market-layout";
+import { createFundedUserWithMarketAtas } from "../helpers/mint-helpers";
 
 
 describe("Place Order", () => {
@@ -142,24 +143,9 @@ describe("Place Order", () => {
     // position constraint: side=0 requires No balance == 0
     // So we need a user with no No tokens.
     // Let's use a fresh user that only has USDC.
-    const buyer = Keypair.generate();
+    const { user: buyer, userUsdcAta: buyerUsdcAta, userYesAta: buyerYesAta, userNoAta: buyerNoAta } =
+      await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 100_000_000);
     const provider = new BankrunProvider(ctx.context);
-
-    // Fund buyer with SOL
-    const bankrunCtx = ctx.context;
-    bankrunCtx.setAccount(buyer.publicKey, {
-      lamports: 10_000_000_000,
-      data: Buffer.alloc(0),
-      owner: new PublicKey("11111111111111111111111111111111"),
-      executable: false,
-    });
-
-    // Create buyer's USDC ATA and fund
-    const buyerUsdcAta = await createAta(bankrunCtx, buyer, usdcMint, buyer.publicKey);
-    await mintTestUsdc(bankrunCtx, usdcMint, ctx.admin, buyerUsdcAta, 100_000_000); // $100
-
-    const buyerYesAta = await createAta(bankrunCtx, buyer, ma.yesMint, buyer.publicKey);
-    const buyerNoAta = await createAta(bankrunCtx, buyer, ma.noMint, buyer.publicKey);
 
     const ix = buildPlaceOrderIx({
       user: buyer.publicKey,
@@ -185,7 +171,7 @@ describe("Place Order", () => {
     await provider.sendAndConfirm!(new Transaction().add(ix), [buyer]);
 
     // Verify order is on the book at price level 49 (price 50 → index 49)
-    const obAcct = await bankrunCtx.banksClient.getAccount(ma.orderBook);
+    const obAcct = await ctx.context.banksClient.getAccount(ma.orderBook);
     const obData = Buffer.from(obAcct!.data);
     const slot = readOrderSlot(obData, 49, 0);
 
@@ -265,23 +251,9 @@ describe("Place Order", () => {
   it("matches a USDC bid against a resting Yes ask (swap fill)", async () => {
     // Setup: fresh user places a USDC bid at price 60, which should match
     // the Yes ask at price 60 placed earlier by admin.
-    const taker = Keypair.generate();
+    const { user: taker, userUsdcAta: takerUsdcAta, userYesAta: takerYesAta, userNoAta: takerNoAta } =
+      await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 100_000_000);
     const provider = new BankrunProvider(ctx.context);
-    const bankrunCtx = ctx.context;
-
-    // Fund taker
-    bankrunCtx.setAccount(taker.publicKey, {
-      lamports: 10_000_000_000,
-      data: Buffer.alloc(0),
-      owner: new PublicKey("11111111111111111111111111111111"),
-      executable: false,
-    });
-
-    const takerUsdcAta = await createAta(bankrunCtx, taker, usdcMint, taker.publicKey);
-    await mintTestUsdc(bankrunCtx, usdcMint, ctx.admin, takerUsdcAta, 100_000_000);
-
-    const takerYesAta = await createAta(bankrunCtx, taker, ma.yesMint, taker.publicKey);
-    const takerNoAta = await createAta(bankrunCtx, taker, ma.noMint, taker.publicKey);
 
     // Maker (admin) needs a USDC ATA to receive payment
     // Admin already has userUsdcAta
@@ -322,21 +294,9 @@ describe("Place Order", () => {
 
   it("cancels a resting USDC bid order and refunds escrow", async () => {
     // Place a USDC bid order with a fresh user, then cancel it
-    const user = Keypair.generate();
+    const { user, userUsdcAta: uAta, userYesAta: yAta, userNoAta: nAta } =
+      await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 50_000_000);
     const provider = new BankrunProvider(ctx.context);
-
-    ctx.context.setAccount(user.publicKey, {
-      lamports: 10_000_000_000,
-      data: Buffer.alloc(0),
-      owner: new PublicKey("11111111111111111111111111111111"),
-      executable: false,
-    });
-
-    const uAta = await createAta(ctx.context, user, usdcMint, user.publicKey);
-    await mintTestUsdc(ctx.context, usdcMint, ctx.admin, uAta, 50_000_000);
-
-    const yAta = await createAta(ctx.context, user, ma.yesMint, user.publicKey);
-    const nAta = await createAta(ctx.context, user, ma.noMint, user.publicKey);
 
     // Place limit bid at price 40
     const placeIx = buildPlaceOrderIx({
@@ -421,20 +381,8 @@ describe("Place Order", () => {
     }
 
     // Different user tries to cancel
-    const attacker = Keypair.generate();
-    ctx.context.setAccount(attacker.publicKey, {
-      lamports: 10_000_000_000,
-      data: Buffer.alloc(0),
-      owner: new PublicKey("11111111111111111111111111111111"),
-      executable: false,
-    });
-
-    const aUsdcAta = await createAta(ctx.context, attacker, usdcMint, attacker.publicKey);
-    const aYesAta = getAssociatedTokenAddressSync(ma.yesMint, attacker.publicKey);
-    const aNoAta = getAssociatedTokenAddressSync(ma.noMint, attacker.publicKey);
-    // Need to create these ATAs for the cancel instruction
-    await createAta(ctx.context, attacker, ma.yesMint, attacker.publicKey);
-    await createAta(ctx.context, attacker, ma.noMint, attacker.publicKey);
+    const { user: attacker, userUsdcAta: aUsdcAta, userYesAta: aYesAta, userNoAta: aNoAta } =
+      await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 0);
 
     const cancelIx = buildCancelOrderIx({
       user: attacker.publicKey,
@@ -492,21 +440,9 @@ describe("Place Order", () => {
   // ---------------------------------------------------------------------------
   it("matches a Sell Yes market order against a resting USDC bid (swap fill)", async () => {
     // Use fresh users — admin's Yes tokens were consumed by prior tests
-    const buyer = Keypair.generate();
-    const seller = Keypair.generate();
+    const { user: buyer, userUsdcAta: buyerUsdcAta, userYesAta: buyerYesAta, userNoAta: buyerNoAta } =
+      await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 100_000_000);
     const provider = new BankrunProvider(ctx.context);
-
-    // Fund buyer (places resting USDC bid)
-    ctx.context.setAccount(buyer.publicKey, {
-      lamports: 10_000_000_000,
-      data: Buffer.alloc(0),
-      owner: new PublicKey("11111111111111111111111111111111"),
-      executable: false,
-    });
-    const buyerUsdcAta = await createAta(ctx.context, buyer, usdcMint, buyer.publicKey);
-    await mintTestUsdc(ctx.context, usdcMint, ctx.admin, buyerUsdcAta, 100_000_000);
-    const buyerYesAta = await createAta(ctx.context, buyer, ma.yesMint, buyer.publicKey);
-    const buyerNoAta = await createAta(ctx.context, buyer, ma.noMint, buyer.publicKey);
 
     // Buyer places resting USDC bid at price 75 (limit, no fills)
     // Use price 75 to avoid matching stale bids at 50 from earlier tests
@@ -533,16 +469,8 @@ describe("Place Order", () => {
     await provider.sendAndConfirm!(new Transaction().add(bidIx), [buyer]);
 
     // Fund seller — mint pairs to get Yes tokens
-    ctx.context.setAccount(seller.publicKey, {
-      lamports: 10_000_000_000,
-      data: Buffer.alloc(0),
-      owner: new PublicKey("11111111111111111111111111111111"),
-      executable: false,
-    });
-    const sellerUsdcAta = await createAta(ctx.context, seller, usdcMint, seller.publicKey);
-    await mintTestUsdc(ctx.context, usdcMint, ctx.admin, sellerUsdcAta, 100_000_000);
-    const sellerYesAta = await createAta(ctx.context, seller, ma.yesMint, seller.publicKey);
-    const sellerNoAta = await createAta(ctx.context, seller, ma.noMint, seller.publicKey);
+    const { user: seller, userUsdcAta: sellerUsdcAta, userYesAta: sellerYesAta, userNoAta: sellerNoAta } =
+      await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 100_000_000);
 
     const mintIx = buildMintPairIx({
       user: seller.publicKey,
@@ -599,21 +527,9 @@ describe("Place Order", () => {
   // ---------------------------------------------------------------------------
   it("matches a Sell No market order against a resting Yes ask (merge fill)", async () => {
     // Setup: fresh maker places a resting Yes ask, then a No holder sells into it
-    const maker = Keypair.generate();
-    const seller = Keypair.generate();
+    const { user: maker, userUsdcAta: makerUsdcAta, userYesAta: makerYesAta, userNoAta: makerNoAta } =
+      await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 100_000_000);
     const provider = new BankrunProvider(ctx.context);
-
-    // Fund maker
-    ctx.context.setAccount(maker.publicKey, {
-      lamports: 10_000_000_000,
-      data: Buffer.alloc(0),
-      owner: new PublicKey("11111111111111111111111111111111"),
-      executable: false,
-    });
-    const makerUsdcAta = await createAta(ctx.context, maker, usdcMint, maker.publicKey);
-    await mintTestUsdc(ctx.context, usdcMint, ctx.admin, makerUsdcAta, 100_000_000);
-    const makerYesAta = await createAta(ctx.context, maker, ma.yesMint, maker.publicKey);
-    const makerNoAta = await createAta(ctx.context, maker, ma.noMint, maker.publicKey);
 
     // Maker mints pairs and lists Yes ask at price 40
     const mintIx = buildMintPairIx({
@@ -653,16 +569,8 @@ describe("Place Order", () => {
     await provider.sendAndConfirm!(new Transaction().add(askIx), [maker]);
 
     // Fund seller — needs No tokens but NOT Yes tokens (ConflictingPosition constraint)
-    ctx.context.setAccount(seller.publicKey, {
-      lamports: 10_000_000_000,
-      data: Buffer.alloc(0),
-      owner: new PublicKey("11111111111111111111111111111111"),
-      executable: false,
-    });
-    const sellerUsdcAta = await createAta(ctx.context, seller, usdcMint, seller.publicKey);
-    await mintTestUsdc(ctx.context, usdcMint, ctx.admin, sellerUsdcAta, 100_000_000);
-    const sellerYesAta = await createAta(ctx.context, seller, ma.yesMint, seller.publicKey);
-    const sellerNoAta = await createAta(ctx.context, seller, ma.noMint, seller.publicKey);
+    const { user: seller, userUsdcAta: sellerUsdcAta, userYesAta: sellerYesAta, userNoAta: sellerNoAta } =
+      await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 100_000_000);
 
     // Seller mints pairs then sells all Yes tokens via limit (to clear ConflictingPosition)
     const sellerMintIx = buildMintPairIx({

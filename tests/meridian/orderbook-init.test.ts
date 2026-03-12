@@ -12,27 +12,11 @@ import {
   MarketAccounts,
   findGlobalConfig,
   MOCK_ORACLE_PROGRAM_ID,
+  OB_DISCRIMINATOR_SIZE,
+  OB_TOTAL_LEN,
+  OB_PRICE_LEVEL_SIZE,
+  OB_LEVELS_OFFSET,
 } from "../helpers";
-
-/**
- * OrderBook ZeroCopy layout (after 8-byte Anchor discriminator):
- *   market:        Pubkey  (32 bytes)  offset 8
- *   next_order_id: u64     (8 bytes)   offset 40
- *   levels:        [PriceLevel; 99]    offset 48
- *     each PriceLevel: 2,568 bytes
- *       orders: [OrderSlot; 32] (32 * 80 = 2,560 bytes)
- *       count:  u8 (1 byte)
- *       _padding: [u8; 7]
- *   bump:          u8      (1 byte)
- *   _padding:      [u8; 7]
- *
- * Total: 32 + 8 + 99*2568 + 1 + 7 = 254,280 bytes (+ 8 disc = 254,288)
- */
-
-const DISCRIMINATOR_SIZE = 8;
-const ORDERBOOK_LEN = 254_280;
-const PRICE_LEVEL_SIZE = 2_568;
-const LEVELS_OFFSET = DISCRIMINATOR_SIZE + 32 + 8; // 48
 
 describe("OrderBook Initialization", () => {
   let ctx: BankrunContext;
@@ -74,7 +58,7 @@ describe("OrderBook Initialization", () => {
     const acctInfo = await ctx.context.banksClient.getAccount(marketAccounts.orderBook);
     expect(acctInfo).to.not.be.null;
     const data = Buffer.from(acctInfo!.data);
-    expect(data.length).to.equal(DISCRIMINATOR_SIZE + ORDERBOOK_LEN);
+    expect(data.length).to.equal(OB_DISCRIMINATOR_SIZE + OB_TOTAL_LEN);
   });
 
   it("initializes next_order_id to 0", async () => {
@@ -96,8 +80,8 @@ describe("OrderBook Initialization", () => {
     const levelsToCheck = [0, 49, 98];
     for (const levelIdx of levelsToCheck) {
       // count byte is at the end of the OrderSlot array within each PriceLevel
-      // offset = LEVELS_OFFSET + levelIdx * PRICE_LEVEL_SIZE + 32*80
-      const countOffset = LEVELS_OFFSET + levelIdx * PRICE_LEVEL_SIZE + 32 * 80;
+      // offset = OB_LEVELS_OFFSET + levelIdx * OB_PRICE_LEVEL_SIZE + 32*80
+      const countOffset = OB_LEVELS_OFFSET + levelIdx * OB_PRICE_LEVEL_SIZE + 32 * 80;
       const count = data[countOffset];
       expect(count, `level ${levelIdx} count should be 0`).to.equal(0);
     }

@@ -15,6 +15,8 @@ export const OB_ORDER_SLOT_SIZE = 80;
 export const OB_PRICE_LEVEL_SIZE = 2568;
 /** Offset to the first price level: discriminator(8) + market_key(32) + next_order_id(8) = 48 */
 export const OB_LEVELS_OFFSET = OB_DISCRIMINATOR_SIZE + 32 + 8; // 48
+/** Total OrderBook data length (excluding discriminator): 32 + 8 + 99*2568 + 1 + 7 = 254,280 */
+export const OB_TOTAL_LEN = 254_280;
 
 // Side constants
 export const SIDE_USDC_BID = 0;

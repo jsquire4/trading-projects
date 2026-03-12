@@ -9,7 +9,6 @@ import {
   PublicKey,
   Keypair,
   Transaction,
-  ComputeBudgetProgram,
 } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { BankrunProvider } from "anchor-bankrun";
@@ -47,65 +46,18 @@ import {
   readMarket,
   getTokenBalance,
   advanceClock,
+  getMintSupply,
+  tryCrankCancel,
 } from "../helpers/market-layout";
 
 import { createFundedUser, executeMintPair } from "../helpers/mint-helpers";
+import { makeUniqueCuIxFactory } from "../helpers/tx-helpers";
 
-// Monotonically increasing CU limit to differentiate transactions and avoid
-// bankrun's "already processed" deduplication.
-let cuNonce = 500_000;
-function uniqueCuIx() {
-  cuNonce += 1;
-  return ComputeBudgetProgram.setComputeUnitLimit({ units: cuNonce });
-}
-
-/** Read mint supply from raw SPL Mint account data (offset 36, u64 LE). */
-async function getMintSupply(
-  ctx: BankrunContext,
-  mint: PublicKey,
-): Promise<bigint> {
-  const acct = await ctx.context.banksClient.getAccount(mint);
-  if (!acct) return 0n;
-  const data = Buffer.from(acct.data);
-  return data.readBigUInt64LE(36);
-}
+const uniqueCuIx = makeUniqueCuIxFactory(500_000);
 
 // Override window = 3600s, Grace period = 7_776_000s (90 days)
 const OVERRIDE_WINDOW_SECS = 3600;
 const CLOSE_GRACE_PERIOD_SECS = 7_776_000;
-
-/**
- * Attempt crank_cancel; ignore CrankNotNeeded (0x17ca) when book is already empty.
- */
-async function tryCrankCancel(
-  prov: BankrunProvider,
-  params: {
-    caller: PublicKey;
-    config: PublicKey;
-    market: PublicKey;
-    orderBook: PublicKey;
-    escrowVault: PublicKey;
-    yesEscrow: PublicKey;
-    noEscrow: PublicKey;
-  },
-  signers: Keypair[],
-): Promise<void> {
-  try {
-    await prov.sendAndConfirm!(
-      new Transaction().add(
-        uniqueCuIx(),
-        buildCrankCancelIx({
-          ...params,
-          caller: params.caller,
-          batchSize: 32,
-        }),
-      ),
-      signers,
-    );
-  } catch (e: any) {
-    if (!e.toString().includes("0x17ca")) throw e;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Test Suite
@@ -270,13 +222,13 @@ describe("Market Closure", () => {
       caller: ctx.admin.publicKey, config,
       market: maClean.market, orderBook: maClean.orderBook,
       escrowVault: maClean.escrowVault, yesEscrow: maClean.yesEscrow, noEscrow: maClean.noEscrow,
-    }, [ctx.admin]);
+    }, [ctx.admin], uniqueCuIx);
 
     await tryCrankCancel(provider, {
       caller: ctx.admin.publicKey, config,
       market: maDirty.market, orderBook: maDirty.orderBook,
       escrowVault: maDirty.escrowVault, yesEscrow: maDirty.yesEscrow, noEscrow: maDirty.noEscrow,
-    }, [ctx.admin]);
+    }, [ctx.admin], uniqueCuIx);
 
     // ── Redeem ALL tokens on clean market (pair burn) ──
     await provider.sendAndConfirm!(
@@ -694,7 +646,7 @@ describe("Market Closure", () => {
         caller: ctx.admin.publicKey, config,
         market: maGate.market, orderBook: maGate.orderBook,
         escrowVault: maGate.escrowVault, yesEscrow: maGate.yesEscrow, noEscrow: maGate.noEscrow,
-      }, [ctx.admin]);
+      }, [ctx.admin], uniqueCuIx);
 
       // Partial close (tokens remain)
       await provider.sendAndConfirm!(
@@ -1147,7 +1099,7 @@ describe("Market Closure", () => {
         caller: ctx.admin.publicKey, config,
         market: maW.market, orderBook: maW.orderBook,
         escrowVault: maW.escrowVault, yesEscrow: maW.yesEscrow, noEscrow: maW.noEscrow,
-      }, [ctx.admin]);
+      }, [ctx.admin], uniqueCuIx);
 
       // Holder redeems their No tokens via pair burn (keep only Yes unredeemed)
       const holderYesAta = getAssociatedTokenAddressSync(maW.yesMint, holder.user.publicKey);
@@ -1509,7 +1461,7 @@ describe("Market Closure", () => {
         caller: ctx.admin.publicKey, config,
         market: maFL.market, orderBook: maFL.orderBook,
         escrowVault: maFL.escrowVault, yesEscrow: maFL.yesEscrow, noEscrow: maFL.noEscrow,
-      }, [ctx.admin]);
+      }, [ctx.admin], uniqueCuIx);
 
       // 6. Alice redeems all her tokens (pair burn)
       const aliceYesAta = getAssociatedTokenAddressSync(maFL.yesMint, alice.user.publicKey);
@@ -1696,7 +1648,7 @@ describe("Market Closure", () => {
           caller: ctx.admin.publicKey, config,
           market: ma.market, orderBook: ma.orderBook,
           escrowVault: ma.escrowVault, yesEscrow: ma.yesEscrow, noEscrow: ma.noEscrow,
-        }, [ctx.admin]);
+        }, [ctx.admin], uniqueCuIx);
 
         await provider.sendAndConfirm!(
           new Transaction().add(
@@ -1867,7 +1819,7 @@ describe("Market Closure", () => {
         caller: ctx.admin.publicKey, config,
         market: maNW.market, orderBook: maNW.orderBook,
         escrowVault: maNW.escrowVault, yesEscrow: maNW.yesEscrow, noEscrow: maNW.noEscrow,
-      }, [ctx.admin]);
+      }, [ctx.admin], uniqueCuIx);
 
       await provider.sendAndConfirm!(
         new Transaction().add(
@@ -2073,7 +2025,7 @@ describe("Market Closure", () => {
         caller: ctx.admin.publicKey, config,
         market: maWR.market, orderBook: maWR.orderBook,
         escrowVault: maWR.escrowVault, yesEscrow: maWR.yesEscrow, noEscrow: maWR.noEscrow,
-      }, [ctx.admin]);
+      }, [ctx.admin], uniqueCuIx);
 
       await provider.sendAndConfirm!(
         new Transaction().add(
@@ -2191,7 +2143,7 @@ describe("Market Closure", () => {
           caller: ctx.admin.publicKey, config,
           market: ma.market, orderBook: ma.orderBook,
           escrowVault: ma.escrowVault, yesEscrow: ma.yesEscrow, noEscrow: ma.noEscrow,
-        }, [ctx.admin]);
+        }, [ctx.admin], uniqueCuIx);
 
         await provider.sendAndConfirm!(
           new Transaction().add(
@@ -2298,7 +2250,7 @@ describe("Market Closure", () => {
         caller: ctx.admin.publicKey, config,
         market: maTR.market, orderBook: maTR.orderBook,
         escrowVault: maTR.escrowVault, yesEscrow: maTR.yesEscrow, noEscrow: maTR.noEscrow,
-      }, [ctx.admin]);
+      }, [ctx.admin], uniqueCuIx);
 
       await provider.sendAndConfirm!(
         new Transaction().add(

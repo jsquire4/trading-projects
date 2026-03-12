@@ -10,7 +10,7 @@ import BN from "bn.js";
 import { ProgramTestContext } from "solana-bankrun";
 
 import { buildMintPairIx } from "./instructions";
-import { createAta, mintTestUsdc, MarketAccounts } from "./setup";
+import { createAta, mintTestUsdc, MarketAccounts, findYesMint, findNoMint } from "./setup";
 
 // ---------------------------------------------------------------------------
 // createFundedUser
@@ -48,6 +48,33 @@ export async function createFundedUser(
   }
 
   return { user, userUsdcAta };
+}
+
+// ---------------------------------------------------------------------------
+// createFundedUserWithMarketAtas
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a fresh keypair funded with SOL and USDC, plus Yes/No ATAs for a market.
+ *
+ * Consolidates the 6-step inline pattern used across place-order and settlement tests:
+ *   1. Generate keypair
+ *   2. Fund with SOL
+ *   3. Create USDC ATA + mint USDC
+ *   4. Create Yes ATA
+ *   5. Create No ATA
+ */
+export async function createFundedUserWithMarketAtas(
+  context: ProgramTestContext,
+  admin: Keypair,
+  usdcMint: PublicKey,
+  marketAccounts: MarketAccounts,
+  usdcAmount: number,
+): Promise<{ user: Keypair; userUsdcAta: PublicKey; userYesAta: PublicKey; userNoAta: PublicKey }> {
+  const { user, userUsdcAta } = await createFundedUser(context, admin, usdcMint, usdcAmount);
+  const userYesAta = await createAta(context, admin, marketAccounts.yesMint, user.publicKey);
+  const userNoAta = await createAta(context, admin, marketAccounts.noMint, user.publicKey);
+  return { user, userUsdcAta, userYesAta, userNoAta };
 }
 
 // ---------------------------------------------------------------------------

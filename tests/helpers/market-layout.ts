@@ -3,10 +3,12 @@
  * and token balances in bankrun tests.
  */
 
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, Keypair, Transaction, TransactionInstruction } from "@solana/web3.js";
+import { BankrunProvider } from "anchor-bankrun";
 import BN from "bn.js";
 import { Clock } from "solana-bankrun";
 import { BankrunContext } from "./setup";
+import { buildCrankCancelIx } from "./instructions";
 
 // ---------------------------------------------------------------------------
 // StrikeMarket byte offsets (after 8-byte Anchor discriminator)
@@ -124,4 +126,59 @@ export async function advanceClock(
       BigInt(unixTimestamp),
     ),
   );
+}
+
+// ---------------------------------------------------------------------------
+// Mint supply reader
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the total supply of an SPL Mint account.
+ * Returns 0n if the account doesn't exist.
+ */
+export async function getMintSupply(
+  ctx: BankrunContext,
+  mint: PublicKey,
+): Promise<bigint> {
+  const acct = await ctx.context.banksClient.getAccount(mint);
+  if (!acct) return 0n;
+  const data = Buffer.from(acct.data);
+  // SPL Mint account: supply is at offset 36, u64 LE
+  return data.readBigUInt64LE(36);
+}
+
+// ---------------------------------------------------------------------------
+// Crank cancel helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Attempt crank_cancel; ignore CrankNotNeeded (0x17ca) when the book is already empty.
+ */
+export async function tryCrankCancel(
+  prov: BankrunProvider,
+  params: {
+    caller: PublicKey;
+    config: PublicKey;
+    market: PublicKey;
+    orderBook: PublicKey;
+    escrowVault: PublicKey;
+    yesEscrow: PublicKey;
+    noEscrow: PublicKey;
+  },
+  signers: Keypair[],
+  uniqueCuIx?: () => TransactionInstruction,
+): Promise<void> {
+  try {
+    const ixs: TransactionInstruction[] = [];
+    if (uniqueCuIx) ixs.push(uniqueCuIx());
+    ixs.push(
+      buildCrankCancelIx({
+        ...params,
+        batchSize: 32,
+      }),
+    );
+    await prov.sendAndConfirm!(new Transaction().add(...ixs), signers);
+  } catch (e: any) {
+    if (!e.toString().includes("0x17ca")) throw e;
+  }
 }

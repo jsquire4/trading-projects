@@ -57,14 +57,10 @@ import {
   getTokenBalance,
   advanceClock,
 } from "../helpers/market-layout";
+import { createFundedUserWithMarketAtas } from "../helpers/mint-helpers";
+import { makeUniqueCuIxFactory } from "../helpers/tx-helpers";
 
-// Monotonically increasing CU limit to differentiate transactions and avoid
-// bankrun's "already processed" deduplication.
-let cuNonce = 200_000;
-function uniqueCuIx() {
-  cuNonce += 1;
-  return ComputeBudgetProgram.setComputeUnitLimit({ units: cuNonce });
-}
+const uniqueCuIx = makeUniqueCuIxFactory(200_000);
 
 // ---------------------------------------------------------------------------
 // Test Suite
@@ -695,18 +691,8 @@ describe("Settlement Lifecycle", () => {
       await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), mintIx), [ctx.admin]);
 
       // Create a fresh user for placing orders (needs only USDC, no Yes/No)
-      orderUser = Keypair.generate();
-      ctx.context.setAccount(orderUser.publicKey, {
-        lamports: 10_000_000_000,
-        data: Buffer.alloc(0),
-        owner: new PublicKey("11111111111111111111111111111111"),
-        executable: false,
-      });
-
-      orderUserUsdcAta = await createAta(ctx.context, orderUser, usdcMint, orderUser.publicKey);
-      await mintTestUsdc(ctx.context, usdcMint, ctx.admin, orderUserUsdcAta, 1_000_000_000);
-      orderUserYesAta = await createAta(ctx.context, orderUser, ma4.yesMint, orderUser.publicKey);
-      orderUserNoAta = await createAta(ctx.context, orderUser, ma4.noMint, orderUser.publicKey);
+      ({ user: orderUser, userUsdcAta: orderUserUsdcAta, userYesAta: orderUserYesAta, userNoAta: orderUserNoAta } =
+        await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma4, 1_000_000_000));
 
       // Place a resting USDC bid order at price 50
       const placeIx = buildPlaceOrderIx({
@@ -1368,17 +1354,8 @@ describe("Settlement Lifecycle", () => {
       );
 
       // Create a user to place a resting order
-      const crankUser = Keypair.generate();
-      ctx.context.setAccount(crankUser.publicKey, {
-        lamports: 10_000_000_000,
-        data: Buffer.alloc(0),
-        owner: new PublicKey("11111111111111111111111111111111"),
-        executable: false,
-      });
-      const crankUserUsdcAta = await createAta(ctx.context, crankUser, usdcMint, crankUser.publicKey);
-      await mintTestUsdc(ctx.context, usdcMint, ctx.admin, crankUserUsdcAta, 1_000_000_000);
-      const crankUserYesAta = await createAta(ctx.context, crankUser, ma.yesMint, crankUser.publicKey);
-      const crankUserNoAta = await createAta(ctx.context, crankUser, ma.noMint, crankUser.publicKey);
+      const { user: crankUser, userUsdcAta: crankUserUsdcAta, userYesAta: crankUserYesAta, userNoAta: crankUserNoAta } =
+        await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 1_000_000_000);
 
       // Place a resting limit bid
       const placeIx = buildPlaceOrderIx({
@@ -2346,17 +2323,8 @@ describe("Settlement Lifecycle", () => {
       );
 
       // Create a user with USDC for placing orders
-      const cancelUser = Keypair.generate();
-      ctx.context.setAccount(cancelUser.publicKey, {
-        lamports: 10_000_000_000,
-        data: Buffer.alloc(0),
-        owner: new PublicKey("11111111111111111111111111111111"),
-        executable: false,
-      });
-      const cancelUserUsdcAta = await createAta(ctx.context, cancelUser, usdcMint, cancelUser.publicKey);
-      await mintTestUsdc(ctx.context, usdcMint, ctx.admin, cancelUserUsdcAta, 1_000_000_000);
-      const cancelUserYesAta = await createAta(ctx.context, cancelUser, ma.yesMint, cancelUser.publicKey);
-      const cancelUserNoAta = await createAta(ctx.context, cancelUser, ma.noMint, cancelUser.publicKey);
+      const { user: cancelUser, userUsdcAta: cancelUserUsdcAta, userYesAta: cancelUserYesAta, userNoAta: cancelUserNoAta } =
+        await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 1_000_000_000);
 
       // Place a resting limit USDC bid at price 40
       const placeIx = buildPlaceOrderIx({
@@ -2485,17 +2453,8 @@ describe("Settlement Lifecycle", () => {
       await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), mintIx), [ctx.admin]);
 
       // --- Taker setup ---
-      const e2eTaker = Keypair.generate();
-      ctx.context.setAccount(e2eTaker.publicKey, {
-        lamports: 10_000_000_000,
-        data: Buffer.alloc(0),
-        owner: new PublicKey("11111111111111111111111111111111"),
-        executable: false,
-      });
-      const takerUsdcAta = await createAta(ctx.context, e2eTaker, usdcMint, e2eTaker.publicKey);
-      await mintTestUsdc(ctx.context, usdcMint, ctx.admin, takerUsdcAta, 5_000_000_000);
-      const takerYesAta = await createAta(ctx.context, e2eTaker, ma.yesMint, e2eTaker.publicKey);
-      const takerNoAta = await createAta(ctx.context, e2eTaker, ma.noMint, e2eTaker.publicKey);
+      const { user: e2eTaker, userUsdcAta: takerUsdcAta, userYesAta: takerYesAta, userNoAta: takerNoAta } =
+        await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 5_000_000_000);
 
       // Step 3: Maker places a limit Yes ask at price 60 for 20 tokens
       const askIx = buildPlaceOrderIx({
@@ -2706,17 +2665,8 @@ describe("Settlement Lifecycle", () => {
       await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), mintIx), [ctx.admin]);
 
       // --- Taker setup ---
-      const taker = Keypair.generate();
-      ctx.context.setAccount(taker.publicKey, {
-        lamports: 10_000_000_000,
-        data: Buffer.alloc(0),
-        owner: new PublicKey("11111111111111111111111111111111"),
-        executable: false,
-      });
-      const takerUsdcAta = await createAta(ctx.context, taker, usdcMint, taker.publicKey);
-      await mintTestUsdc(ctx.context, usdcMint, ctx.admin, takerUsdcAta, 5_000_000_000);
-      const takerYesAta = await createAta(ctx.context, taker, ma.yesMint, taker.publicKey);
-      const takerNoAta = await createAta(ctx.context, taker, ma.noMint, taker.publicKey);
+      const { user: taker, userUsdcAta: takerUsdcAta, userYesAta: takerYesAta, userNoAta: takerNoAta } =
+        await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 5_000_000_000);
 
       // Maker posts Yes ask at price 55 for 30 tokens (selling 30 Yes at 55 cents)
       const makerAskIx = buildPlaceOrderIx({

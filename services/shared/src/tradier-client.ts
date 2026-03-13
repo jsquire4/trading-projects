@@ -9,7 +9,7 @@ export interface Quote {
   last: number;
   bid: number;
   ask: number;
-  prevclose: number;
+  prevclose: number | null;
   volume: number;
   change: number;
   change_percentage: number;
@@ -234,7 +234,7 @@ export class TradierClient {
       last: q.last ?? 0,
       bid: q.bid ?? 0,
       ask: q.ask ?? 0,
-      prevclose: q.prevclose ?? 0,
+      prevclose: q.prevclose ?? null,
       volume: q.volume ?? 0,
       change: q.change ?? 0,
       change_percentage: q.change_percentage ?? 0,

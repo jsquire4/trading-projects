@@ -7,9 +7,10 @@
  *
  * Startup sequence:
  *   1. Initialize SQLite database
- *   2. Run backfill from last checkpoint
- *   3. Start live event listener via connection.onLogs
- *   4. Start REST API server
+ *   2. Connect to Solana
+ *   3. Start live event listener (before backfill — dedup via signatureExists)
+ *   4. Run backfill from last checkpoint
+ *   5. Start REST API server
  */
 
 import { Connection, PublicKey } from "@solana/web3.js";

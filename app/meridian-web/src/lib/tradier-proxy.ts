@@ -106,7 +106,6 @@ async function waitForToken(): Promise<void> {
   refillBucket();
   if (tokens >= 1) {
     tokens -= 1;
-    tokens = Math.max(0, tokens);
     return;
   }
   // Wait until a token is available

@@ -27,10 +27,6 @@ const log = createLogger("event-indexer:backfill");
 const BATCH_SIZE = 100; // max signatures per getSignaturesForAddress call
 const TX_FETCH_CONCURRENCY = 10;
 
-/**
- * Fetches a batch of transactions and parses events from their logs.
- * Uses concurrent fetching for throughput.
- */
 interface BatchResult {
   totalEvents: number;
   failedSigs: ConfirmedSignatureInfo[];
@@ -157,7 +153,7 @@ export async function runBackfill(
 
     if (signatures.length === 0) {
       backfillComplete = true;
-      done = true;
+      break;
     }
 
     totalSignatures += signatures.length;

@@ -335,9 +335,10 @@ describe("Database Layer", () => {
           taker: wallet,
           maker: "OtherWallet",
           takerSide: 0,
+          makerSide: 0,
           price: 65,
           quantity: 1000000,
-          orderId: "100",
+          makerOrderId: "100",
         }),
       }));
 
@@ -346,7 +347,8 @@ describe("Database Layer", () => {
       expect(fills[0].viewerIntent).toBe("buy_yes");
     });
 
-    it("returns stored intent when available", () => {
+    it("returns stored intent when available (maker side)", () => {
+      // Store intent for the maker's order
       insertOrderIntent({
         order_id: "200",
         market,
@@ -355,16 +357,18 @@ describe("Database Layer", () => {
         display_price: 35,
       });
 
+      // Fill where wallet is the maker (makerOrderId matches stored intent)
       insertEvent(makeEvent({
         market,
         signature: "fill_sig_2",
         data: JSON.stringify({
-          taker: wallet,
-          maker: "OtherWallet",
+          taker: "OtherWallet",
+          maker: wallet,
           takerSide: 1,
+          makerSide: 0,
           price: 65,
           quantity: 1000000,
-          orderId: "200",
+          makerOrderId: "200",
         }),
       }));
 
@@ -374,9 +378,8 @@ describe("Database Layer", () => {
       expect(fills[0].display_price).toBe(35);
     });
 
-    it("derives maker perspective correctly", () => {
+    it("derives maker perspective from makerSide (side 0 = Buy Yes)", () => {
       const maker = "MakerWalletAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-      // Taker side 0 (Buy Yes) → maker is Sell Yes
       insertEvent(makeEvent({
         market,
         signature: "fill_sig_3",
@@ -384,15 +387,81 @@ describe("Database Layer", () => {
           taker: "OtherWallet",
           maker,
           takerSide: 0,
+          makerSide: 0,
           price: 65,
           quantity: 1000000,
-          orderId: "300",
+          makerOrderId: "300",
         }),
       }));
 
       const fills = queryFillsWithIntent(maker);
       expect(fills).toHaveLength(1);
+      // Maker's resting side is 0 (USDC_BID) → Buy Yes
+      expect(fills[0].viewerIntent).toBe("buy_yes");
+    });
+
+    it("derives taker perspective for takerSide=1 (Sell Yes)", () => {
+      insertEvent(makeEvent({
+        market,
+        signature: "fill_sig_4",
+        data: JSON.stringify({
+          taker: wallet,
+          maker: "OtherWallet",
+          takerSide: 1,
+          makerSide: 0,
+          price: 65,
+          quantity: 1000000,
+          makerOrderId: "400",
+        }),
+      }));
+
+      const fills = queryFillsWithIntent(wallet);
+      expect(fills).toHaveLength(1);
       expect(fills[0].viewerIntent).toBe("sell_yes");
+    });
+
+    it("derives taker perspective for takerSide=2 (Sell No)", () => {
+      insertEvent(makeEvent({
+        market,
+        signature: "fill_sig_5",
+        data: JSON.stringify({
+          taker: wallet,
+          maker: "OtherWallet",
+          takerSide: 2,
+          makerSide: 1,
+          price: 40,
+          quantity: 500000,
+          makerOrderId: "500",
+        }),
+      }));
+
+      const fills = queryFillsWithIntent(wallet);
+      expect(fills).toHaveLength(1);
+      expect(fills[0].viewerIntent).toBe("sell_no");
+    });
+
+    it("derives maker perspective for merge fill (makerSide=2 = Sell No)", () => {
+      const maker = "MergeMakerAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+      // takerSide=1 (Sell Yes) matched by makerSide=2 (No-backed bid)
+      insertEvent(makeEvent({
+        market,
+        signature: "fill_sig_6",
+        data: JSON.stringify({
+          taker: "OtherWallet",
+          maker,
+          takerSide: 1,
+          makerSide: 2,
+          price: 65,
+          quantity: 1000000,
+          makerOrderId: "600",
+          isMerge: true,
+        }),
+      }));
+
+      const fills = queryFillsWithIntent(maker);
+      expect(fills).toHaveLength(1);
+      // Maker's resting side is 2 (NO_BID) → Sell No
+      expect(fills[0].viewerIntent).toBe("sell_no");
     });
   });
 });

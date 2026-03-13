@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { usePositions } from "@/hooks/usePositions";
 import {
@@ -32,6 +32,12 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
   const consolidatedRef = useRef(false);
 
   const wallet = publicKey?.toBase58() ?? "";
+
+  // Stable string key for midPrices Map — avoids JSON.stringify on every render
+  const midPricesKey = useMemo(
+    () => midPrices ? [...midPrices.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([k, v]) => `${k}:${v}`).join(",") : "",
+    [midPrices],
+  );
 
   // Consolidate old data on mount (once per session)
   useEffect(() => {
@@ -89,9 +95,8 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
     };
 
     writeSnapshot(snapshot).catch(() => {});
-  // Stabilize midPrices dependency — Map identity changes every render
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wallet, positions, JSON.stringify(midPrices ? [...midPrices.entries()].sort((a, b) => a[0].localeCompare(b[0])) : null)]);
+  }, [wallet, positions, midPricesKey]);
 
   // Load intraday data and daily summaries (clear on wallet disconnect)
   useEffect(() => {
@@ -105,14 +110,29 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
     let cancelled = false;
 
     async function load() {
-      // Use ET midnight for day boundary (markets are ET-based)
+      // Use ET midnight for day boundary (markets are ET-based).
+      // Derive actual UTC offset from Intl (handles EST/EDT automatically).
+      const now = new Date();
       const etDate = new Intl.DateTimeFormat("en-CA", {
         timeZone: "America/New_York",
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
-      }).format(new Date());
-      const todayMs = new Date(`${etDate}T00:00:00-05:00`).getTime();
+      }).format(now);
+      // Create a Date at midnight in ET by parsing the ET date as UTC then
+      // adjusting by the actual ET offset (derived from the local/UTC delta).
+      const etMidnightUtc = new Date(`${etDate}T00:00:00Z`);
+      // Intl gives us the ET time for 'now'; the offset is (UTCtime - ETtime)
+      const etNowStr = new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/New_York",
+        hour: "numeric", minute: "numeric", hour12: false,
+      }).formatToParts(now);
+      const etH = parseInt(etNowStr.find(p => p.type === "hour")?.value ?? "0", 10);
+      const etM = parseInt(etNowStr.find(p => p.type === "minute")?.value ?? "0", 10);
+      const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+      const etMinutes = (etH % 24) * 60 + etM;
+      const offsetMs = (utcMinutes - etMinutes) * 60_000;
+      const todayMs = etMidnightUtc.getTime() + offsetMs;
 
       const [intraday, summaries] = await Promise.all([
         getIntradaySnapshots(wallet, todayMs),

@@ -26,8 +26,8 @@ function normalPdf(x: number): number {
  * Phi(x) = 1 - Q(x) for x >= 0, Q(-x) for x < 0
  */
 export function normalCdf(x: number): number {
-  if (x < -8) return 0;
-  if (x > 8) return 1;
+  if (x <= -8) return 0;
+  if (x >= 8) return 1;
 
   const p = 0.2316419;
   const b1 = 0.319381530;

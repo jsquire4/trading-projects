@@ -56,9 +56,12 @@ export function generateQuotes(
   inventory: number,
   config: QuoteConfig = DEFAULT_CONFIG,
 ): Quote {
-  // Half-spread in probability units, with absolute floor of 0.5 cents
-  // to prevent zero-width or sub-cent spreads at extreme fair prices
-  const halfSpread = Math.max((fairPrice * config.spreadBps) / 10_000, 0.005);
+  // Half-spread in probability units. Floor ensures at least 1 cent spread
+  // when converted to cents: halfSpread * 100 >= 0.5 → rounds to at least 1c.
+  // At extreme fair prices (e.g. 0.01), the bps-based spread is tiny;
+  // the floor prevents zero-width quotes after rounding to integer cents.
+  const rawHalfSpread = (fairPrice * config.spreadBps) / 10_000;
+  const halfSpread = Math.max(rawHalfSpread, 0.005);
 
   // Inventory skew: shifts both bid and ask in the same direction.
   //   Positive inventory (long) → negative skew → lower bid, lower ask (try to sell)

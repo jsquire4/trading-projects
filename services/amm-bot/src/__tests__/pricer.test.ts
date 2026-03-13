@@ -25,6 +25,11 @@ describe("normalCdf", () => {
     expect(normalCdf(10)).toBe(1);
   });
 
+  it("boundary clamp: cdf(-8) = 0, cdf(8) = 1", () => {
+    expect(normalCdf(-8)).toBe(0);
+    expect(normalCdf(8)).toBe(1);
+  });
+
   it("beyond extreme: cdf(-15) = 0, cdf(15) = 1", () => {
     expect(normalCdf(-15)).toBe(0);
     expect(normalCdf(15)).toBe(1);

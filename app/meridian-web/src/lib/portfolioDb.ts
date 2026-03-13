@@ -84,10 +84,25 @@ export async function getIntradaySnapshots(
 export async function consolidateOldSnapshots(wallet: string): Promise<void> {
   const db = await getDb();
 
-  // Get today's date at market open (9:30 AM ET approximation — use midnight UTC for simplicity)
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
-  const todayMs = today.getTime();
+  // Use ET midnight for day boundary (consistent with usePortfolioSnapshot)
+  const now = new Date();
+  const etDate = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+  const etMidnightUtc = new Date(`${etDate}T00:00:00Z`);
+  const etNowStr = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "numeric", minute: "numeric", hour12: false,
+  }).formatToParts(now);
+  const etH = parseInt(etNowStr.find(p => p.type === "hour")?.value ?? "0", 10);
+  const etM = parseInt(etNowStr.find(p => p.type === "minute")?.value ?? "0", 10);
+  const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const etMinutes = (etH % 24) * 60 + etM;
+  const offsetMs = (utcMinutes - etMinutes) * 60_000;
+  const todayMs = etMidnightUtc.getTime() + offsetMs;
 
   // Get all snapshots before today for this wallet
   const range = IDBKeyRange.bound([wallet, 0], [wallet, todayMs], false, true);

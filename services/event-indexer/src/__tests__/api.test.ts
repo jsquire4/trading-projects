@@ -5,6 +5,7 @@ import {
   closeDb,
   insertEventsBatch,
   upsertCheckpoint,
+  insertOrderIntent,
   getDb,
 } from "../db.ts";
 import { startApiServer } from "../api.ts";
@@ -35,6 +36,31 @@ async function get(path: string): Promise<{
       });
       res.on("error", reject);
     });
+  });
+}
+
+/** Helper: make a POST request and return parsed JSON + status. */
+async function post(baseUrl: string, path: string, body: unknown): Promise<{
+  status: number;
+  body: any;
+}> {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(body);
+    const req = http.request(`${baseUrl}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) },
+    }, (res) => {
+      let buf = "";
+      res.on("data", (chunk) => (buf += chunk));
+      res.on("end", () => {
+        try { resolve({ status: res.statusCode!, body: JSON.parse(buf) }); }
+        catch { resolve({ status: res.statusCode!, body: buf }); }
+      });
+      res.on("error", reject);
+    });
+    req.on("error", reject);
+    req.write(data);
+    req.end();
   });
 }
 
@@ -177,6 +203,91 @@ describe("API Server", () => {
     it("includes Content-Type: application/json", async () => {
       const { headers } = await get("/api/events");
       expect(headers["content-type"]).toBe("application/json");
+    });
+  });
+
+  // ---- POST /api/order-intent ----
+
+  describe("POST /api/order-intent", () => {
+    const validIntent = {
+      orderId: 42,
+      market: "Ma22etAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      wallet: "Wa22etAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      intent: "buy_yes",
+      displayPrice: 65,
+    };
+
+    it("stores a valid intent and returns ok", async () => {
+      const { status, body } = await post(baseUrl, "/api/order-intent", validIntent);
+      expect(status).toBe(200);
+      expect(body.ok).toBe(true);
+    });
+
+    it("accepts orderId=0 as valid", async () => {
+      const { status, body } = await post(baseUrl, "/api/order-intent", { ...validIntent, orderId: 0 });
+      expect(status).toBe(200);
+      expect(body.ok).toBe(true);
+    });
+
+    it("rejects missing required fields", async () => {
+      const { status, body } = await post(baseUrl, "/api/order-intent", { orderId: 1 });
+      expect(status).toBe(400);
+      expect(body.error).toMatch(/Missing required fields/);
+    });
+
+    it("rejects invalid intent value", async () => {
+      const { status, body } = await post(baseUrl, "/api/order-intent", { ...validIntent, intent: "invalid" });
+      expect(status).toBe(400);
+      expect(body.error).toMatch(/Invalid intent/);
+    });
+
+    it("rejects displayPrice out of range", async () => {
+      const { status, body } = await post(baseUrl, "/api/order-intent", { ...validIntent, displayPrice: 0 });
+      expect(status).toBe(400);
+      expect(body.error).toMatch(/displayPrice/);
+    });
+
+    it("rejects invalid base58 addresses", async () => {
+      const { status, body } = await post(baseUrl, "/api/order-intent", { ...validIntent, market: "!!invalid!!" });
+      expect(status).toBe(400);
+      expect(body.error).toMatch(/Invalid market or wallet/);
+    });
+
+    it("returns 405 for GET on order-intent endpoint", async () => {
+      const { status } = await get("/api/order-intent");
+      expect(status).toBe(405);
+    });
+  });
+
+  // ---- GET /api/events/fills ----
+
+  describe("GET /api/events/fills", () => {
+    const wallet = "Fi22Wa22etAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    const market = "Fi22Ma22etAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    beforeAll(() => {
+      insertEventsBatch([{
+        type: "fill",
+        market,
+        data: JSON.stringify({ taker: wallet, maker: "Other", takerSide: 0, makerSide: 0, price: 50, quantity: 1000000, makerOrderId: "99" }),
+        signature: "fill_api_1",
+        slot: 200,
+        timestamp: 2000,
+      }]);
+    });
+
+    it("returns fills with viewerIntent for a wallet", async () => {
+      const { status, body } = await get(`/api/events/fills?wallet=${wallet}`);
+      expect(status).toBe(200);
+      expect(body.fills).toBeInstanceOf(Array);
+      expect(body.fills.length).toBe(1);
+      expect(body.fills[0].viewerIntent).toBe("buy_yes");
+    });
+
+    it("returns 400 when wallet param is missing", async () => {
+      const { status, body } = await get("/api/events/fills");
+      expect(status).toBe(400);
+      expect(body.error).toMatch(/wallet/i);
     });
   });
 

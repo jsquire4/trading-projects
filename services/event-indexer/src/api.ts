@@ -139,14 +139,22 @@ function handleOrderIntent(
   }
 
   let body = "";
-  req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+  const MAX_BODY_SIZE = 4096; // 4KB — order intent payloads are ~200 bytes
+  req.on("data", (chunk: Buffer) => {
+    body += chunk.toString();
+    if (body.length > MAX_BODY_SIZE) {
+      req.destroy();
+      jsonResponse(res, 413, { error: "Request body too large" }, req);
+      return;
+    }
+  });
   req.on("end", () => {
     try {
       const parsed = JSON.parse(body);
       const { orderId, market, wallet, intent, displayPrice } = parsed;
 
       // Validate required fields
-      if (!orderId || !market || !wallet || !intent || displayPrice === undefined) {
+      if (orderId == null || !market || !wallet || !intent || displayPrice === undefined) {
         jsonResponse(res, 400, { error: "Missing required fields: orderId, market, wallet, intent, displayPrice" }, req);
         return;
       }

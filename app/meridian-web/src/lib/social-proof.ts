@@ -57,7 +57,7 @@ export function generateSuggestedTrades(
         minute: "2-digit",
         hour12: false,
       }).formatToParts(now);
-      const etHour = parseInt(etParts.find((p) => p.type === "hour")?.value ?? "0", 10);
+      const etHour = parseInt(etParts.find((p) => p.type === "hour")?.value ?? "0", 10) % 24;
       const etMin = parseInt(etParts.find((p) => p.type === "minute")?.value ?? "0", 10);
       const etMinute = etHour * 60 + etMin;
       const marketOpen = 9 * 60 + 30; // 9:30 AM ET

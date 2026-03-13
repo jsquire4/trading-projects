@@ -92,7 +92,7 @@ describe("Mint Pair — Position Constraints", () => {
     } catch (err: any) {
       // Anchor error code 6059 = ConflictingPosition (0x17ab)
       const errStr = err.toString();
-      expect(errStr).to.match(/0x17ab|ConflictingPosition|6059|custom program error/i);
+      expect(errStr).to.match(/0x17ab|ConflictingPosition|6059/i);
     }
   });
 
@@ -145,7 +145,7 @@ describe("Mint Pair — Position Constraints", () => {
       expect.fail("Expected transaction to fail with ConflictingPosition");
     } catch (err: any) {
       const errStr = err.toString();
-      expect(errStr).to.match(/0x17ab|ConflictingPosition|6059|custom program error/i);
+      expect(errStr).to.match(/0x17ab|ConflictingPosition|6059/i);
     }
   });
 

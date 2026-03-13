@@ -52,8 +52,8 @@ async function fetchClosingPrices(
   for (const q of quotes) {
     // Prefer prevclose (prior day's closing price) for settlement accuracy.
     // Fall back to last trade price if prevclose is unavailable (e.g. IPO day).
-    const price = q.prevclose ?? q.last;
-    const source = q.prevclose ? "prevclose" : "last";
+    const price = q.prevclose != null && q.prevclose > 0 ? q.prevclose : q.last;
+    const source = q.prevclose != null && q.prevclose > 0 ? "prevclose" : "last";
     prices.set(q.symbol, price);
     log.info(`${q.symbol}: $${price} (source: ${source})`);
   }

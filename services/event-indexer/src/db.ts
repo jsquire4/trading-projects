@@ -77,7 +77,7 @@ export function initDb(dbPath?: string): Database.Database {
       intent TEXT NOT NULL,
       display_price INTEGER NOT NULL,
       created_at TEXT DEFAULT (datetime('now')),
-      PRIMARY KEY (order_id, market)
+      PRIMARY KEY (order_id, market, wallet)
     );
     CREATE INDEX IF NOT EXISTS idx_order_intents_wallet ON order_intents(wallet);
   `);
@@ -308,8 +308,9 @@ export function queryFillsWithIntent(wallet: string, limit: number = 50): FillWi
       `SELECT e.*, oi.intent, oi.display_price
        FROM events e
        LEFT JOIN order_intents oi
-         ON CAST(json_extract(e.data, '$.orderId') AS TEXT) = oi.order_id
+         ON CAST(json_extract(e.data, '$.makerOrderId') AS TEXT) = oi.order_id
          AND e.market = oi.market
+         AND oi.wallet = @wallet
        WHERE e.type = 'fill'
          AND (json_extract(e.data, '$.taker') = @wallet
               OR json_extract(e.data, '$.maker') = @wallet)
@@ -322,6 +323,7 @@ export function queryFillsWithIntent(wallet: string, limit: number = 50): FillWi
     const data = JSON.parse(row.data);
     const isTaker = data.taker === wallet;
     const takerSide = data.takerSide as number;
+    const makerSide = data.makerSide as number;
 
     let viewerIntent: string;
     if (row.intent && data[isTaker ? 'taker' : 'maker'] === wallet) {
@@ -331,8 +333,8 @@ export function queryFillsWithIntent(wallet: string, limit: number = 50): FillWi
       // Derive from taker's side
       viewerIntent = { 0: "buy_yes", 1: "sell_yes", 2: "sell_no" }[takerSide] ?? "unknown";
     } else {
-      // Derive from maker's perspective (opposite of taker)
-      viewerIntent = { 0: "sell_yes", 1: "buy_yes", 2: "sell_yes" }[takerSide] ?? "unknown";
+      // Derive from maker's own resting side (makerSide is authoritative)
+      viewerIntent = { 0: "buy_yes", 1: "sell_yes", 2: "sell_no" }[makerSide] ?? "unknown";
     }
 
     return {

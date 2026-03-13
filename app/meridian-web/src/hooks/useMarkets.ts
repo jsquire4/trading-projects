@@ -175,15 +175,13 @@ export function useMarket(marketKey: PublicKey | string | null) {
 export function useOrderBooks(marketKeys: (PublicKey | string)[]) {
   const { connection } = useConnection();
 
-  // Stabilize addresses — marketKeys array identity changes every render
-  const marketKeysStr = useMemo(
-    () => marketKeys.map((k) => (typeof k === "string" ? k : k.toBase58())).sort().join(","),
-    [marketKeys],
-  );
+  // Stabilize addresses — marketKeys array identity changes every render.
+  // Derive a stable string key from sorted pubkeys, then use it as the
+  // sole dependency so addresses only recomputes when markets actually change.
+  const marketKeysStr = marketKeys.map((k) => (typeof k === "string" ? k : k.toBase58())).sort().join(",");
   const addresses = useMemo(() => {
-    return marketKeys.map((k) => {
-      const pk = typeof k === "string" ? new PublicKey(k) : k;
-      const [addr] = findOrderBook(pk);
+    return marketKeysStr.split(",").filter(Boolean).map((k) => {
+      const [addr] = findOrderBook(new PublicKey(k));
       return addr;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { PublicKey, Transaction, AccountMeta } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction } from "@solana/spl-token";
+import { PublicKey, Transaction, AccountMeta, SystemProgram } from "@solana/web3.js";
+import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddress, getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction } from "@solana/spl-token";
 import { BN } from "@coral-xyz/anchor";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { useQueryClient } from "@tanstack/react-query";
+
 import { useAnchorProgram } from "@/hooks/useAnchorProgram";
 import { useTransaction } from "@/hooks/useTransaction";
 import { useNetwork } from "@/hooks/useNetwork";
@@ -28,9 +30,9 @@ import {
 //   0 = Buy Yes (bid on yes tokens, spends USDC)
 //   1 = Sell Yes (ask yes tokens, receives USDC)
 //   2 = Sell No (no-backed bid — escrows No tokens, receives USDC via merge/burn)
-// To acquire No tokens: mint a pair (Yes+No), then sell Yes.
+// "Buy No" is a composite: mint pair + sell Yes on the order book.
 // Order type: 0 = Market, 1 = Limit
-type OrderSide = "buy-yes" | "sell-yes" | "sell-no";
+type OrderSide = "buy-yes" | "sell-yes" | "sell-no" | "buy-no";
 
 interface OrderFormProps {
   marketKey: string;
@@ -49,6 +51,8 @@ function sideToU8(side: OrderSide): number {
     case "buy-yes":
       return 0;
     case "sell-yes":
+    case "buy-no":
+      // Buy No is implemented as: mint pair + sell Yes (side=1)
       return 1;
     case "sell-no":
       // Sell No = No-backed bid (side 2) — user offers No tokens at stated price
@@ -60,7 +64,7 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
   const [side, setSide] = useState<OrderSide>("buy-yes");
   const [orderType, setOrderType] = useState<"limit" | "market">("limit");
   const [price, setPrice] = useState<string>("50");
-  const [quantity, setQuantity] = useState<string>("1");
+  const [dollarAmount, setDollarAmount] = useState<string>("10");
   const [submitting, setSubmitting] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
 
@@ -77,6 +81,7 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
   const { publicKey: walletPublicKey } = useWallet();
   const { isMainnet } = useNetwork();
   const { data: positions = [] } = usePositions();
+  const queryClient = useQueryClient();
 
   const marketPubkey = useMemo(() => new PublicKey(marketKey), [marketKey]);
   const { data: orderBookData } = useOrderBook(marketKey);
@@ -91,8 +96,11 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
     if ((side === "buy-yes") && currentPosition.noBal > BigInt(0)) {
       return "You hold No tokens for this strike. Sell your No position first.";
     }
+    if ((side === "buy-no") && currentPosition.yesBal > BigInt(0)) {
+      return "You hold Yes tokens for this strike. Sell your Yes position first, or use Buy No to switch sides.";
+    }
     if ((side === "sell-no") && currentPosition.yesBal > BigInt(0) && currentPosition.noBal === BigInt(0)) {
-      return "You hold Yes tokens but no No tokens. Mint a pair first, or sell your Yes position.";
+      return "You hold Yes tokens but no No tokens. Sell your Yes position first, or use Buy No to switch sides.";
     }
     return null;
   }, [side, currentPosition]);
@@ -104,11 +112,12 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
     const yesView = orderBookData.yesView;
     // Buy Yes = needs asks on Yes book. Sell Yes = needs bids on Yes book.
     // Sell No = matches against Yes asks (merge/burn).
+    // Buy No = sell Yes side, needs bids on Yes book.
     if (side === "buy-yes" && (yesView.bestAsk === null)) {
       return "No sell orders on the book — market buy can't fill. Use a limit order instead.";
     }
-    if (side === "sell-yes" && (yesView.bestBid === null)) {
-      return "No buy orders on the book — market sell can't fill. Use a limit order instead.";
+    if ((side === "sell-yes" || side === "buy-no") && (yesView.bestBid === null)) {
+      return "No buy orders on the book — market order can't fill. Use a limit order instead.";
     }
     // Sell No matches against Yes asks (via merge/burn).
     // Check if there are Yes asks available (shown as bids in the No view after inversion).
@@ -127,12 +136,6 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
     return p;
   }, [price, orderType]);
 
-  const quantityLamports = useMemo(() => {
-    const q = parseFloat(quantity);
-    if (isNaN(q) || q < 1) return null;
-    return Math.floor(q * LAMPORTS_PER_TOKEN);
-  }, [quantity]);
-
   // For market orders, use best ask (buys) or best bid (sells) from the order book
   const marketPrice = useMemo((): number | null => {
     if (orderType !== "market" || !orderBookData) return null;
@@ -140,10 +143,39 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
     const noView = orderBookData.noView;
     if (side === "buy-yes") return yesView.bestAsk;
     if (side === "sell-yes") return yesView.bestBid;
+    // Buy No: we sell Yes, so price is from Yes bids. But user sees No price = 100 - yesBid.
+    if (side === "buy-no") {
+      const yesBid = yesView.bestBid;
+      return yesBid !== null ? 100 - yesBid : null;
+    }
     // Sell No: best price is the highest Yes ask complement available
     if (side === "sell-no") return noView.bestBid;
     return null;
   }, [orderType, orderBookData, side]);
+
+  // Dollar-denominated input: compute quantity from dollar amount and price
+  const quantityLamports = useMemo(() => {
+    const dollars = parseFloat(dollarAmount);
+    if (isNaN(dollars) || dollars <= 0) return null;
+
+    // For all sides, the user's entered price represents what they pay per contract.
+    // cost per contract = price / 100 (price is in cents)
+    const priceForCalc = effectivePrice ?? marketPrice;
+    if (!priceForCalc) return null;
+
+    const costPerContract = priceForCalc / 100;
+    if (costPerContract <= 0) return null;
+
+    const qty = dollars / costPerContract;
+    const lamports = Math.floor(qty * LAMPORTS_PER_TOKEN);
+    return lamports >= LAMPORTS_PER_TOKEN ? lamports : null;
+  }, [dollarAmount, effectivePrice, marketPrice]);
+
+  // Derived quantity for display
+  const derivedQuantity = useMemo(() => {
+    if (!quantityLamports) return null;
+    return quantityLamports / LAMPORTS_PER_TOKEN;
+  }, [quantityLamports]);
 
   const displayPrice = effectivePrice ?? marketPrice;
 
@@ -151,6 +183,12 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
     if (!quantityLamports || !displayPrice) return null;
     return (displayPrice / 100) * (quantityLamports / LAMPORTS_PER_TOKEN);
   }, [quantityLamports, displayPrice]);
+
+  // Payout estimate: for buys, payout is $1 per contract if condition is met
+  const estimatedPayout = useMemo(() => {
+    if (!quantityLamports) return null;
+    return quantityLamports / LAMPORTS_PER_TOKEN;
+  }, [quantityLamports]);
 
   const isValid = useMemo(() => {
     if (!quantityLamports || quantityLamports < LAMPORTS_PER_TOKEN) return false;
@@ -185,112 +223,231 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
       tx.add(createAssociatedTokenAccountIdempotentInstruction(user, userYesAta, user, yesMint));
       tx.add(createAssociatedTokenAccountIdempotentInstruction(user, userNoAta, user, noMint));
 
-      const sideU8 = sideToU8(side);
-      // Market orders: use worst acceptable price
-      //   Buy Yes (side=0): price=99 (accept any ask up to 99c)
-      //   Sell Yes (side=1): price=1 (accept any bid down to 1c)
-      //   Sell No (side=2): price=1 (on-chain: max_yes_ask = 100-1 = 99, sweep all asks)
-      const priceU8 = orderType === "market"
-        ? (side === "buy-yes" ? 99 : 1)
-        : effectivePrice!;
-      const orderTypeU8 = orderType === "limit" ? 1 : 0;
-      const maxFills = 10;
+      if (side === "buy-no") {
+        // Atomic Buy No: mint pair + sell Yes + (optional) redeem cleanup
+        // Step 1: Mint pair — gives user Yes + No tokens
+        const mintPairIx = await program.methods
+          .mintPair(new BN(quantityLamports!))
+          .accountsPartial({
+            user,
+            config,
+            market: marketPubkey,
+            yesMint,
+            noMint,
+            userUsdcAta,
+            userYesAta,
+            userNoAta,
+            usdcVault,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .instruction();
+        tx.add(mintPairIx);
 
-      // Build remaining_accounts: maker ATAs needed for fill settlement.
-      // One entry per matchable order slot (up to maxFills), NOT deduped by owner.
-      // The on-chain engine consumes one remaining_account per fill.
-      //   Buy Yes (side=0)  fills Yes asks  → maker's USDC ATA
-      //   Sell Yes (side=1) fills USDC bids → maker's Yes ATA
-      //                     AND No-backed bids (merge) → maker's USDC ATA
-      //   Sell No  (side=2) fills Yes asks (merge) → maker's USDC ATA
-      const makerAccounts: AccountMeta[] = [];
-      if (orderBookData) {
-        const orders = orderBookData.raw.orders;
-        let matchableOrders: { order: ActiveOrder; isMerge: boolean }[] = [];
+        // Step 2: Sell Yes on the order book
+        // For buy-no, user enters a No price. The Yes sell price = 100 - noPrice.
+        const noPrice = orderType === "market" ? 1 : effectivePrice!;
+        const yesSellPrice = orderType === "market" ? 1 : (100 - noPrice);
+        const orderTypeU8 = orderType === "limit" ? 1 : 0;
+        const maxFills = 10;
 
-        if (sideU8 === Side.UsdcBid) {
-          // Buy Yes: matches against Yes asks at price <= our bid price (ascending)
-          matchableOrders = orders
-            .filter((o) => o.side === Side.YesAsk && o.priceLevel <= priceU8)
-            .sort((a, b) => a.priceLevel - b.priceLevel)
-            .map((o) => ({ order: o, isMerge: false }));
-        } else if (sideU8 === Side.YesAsk) {
-          // Sell Yes: matches against BOTH USDC bids AND No-backed bids
-          // Engine walks highest price downward, USDC bids before No-backed bids at each level
+        // Build remaining_accounts for Sell Yes: matches USDC bids + No-backed bids
+        const makerAccounts: AccountMeta[] = [];
+        if (orderBookData) {
+          const orders = orderBookData.raw.orders;
           const usdcBids = orders
-            .filter((o) => o.side === Side.UsdcBid && o.priceLevel >= priceU8);
+            .filter((o) => o.side === Side.UsdcBid && o.priceLevel >= yesSellPrice);
           const noBids = orders
-            .filter((o) => o.side === Side.NoBackedBid && o.priceLevel <= (100 - priceU8));
+            .filter((o) => o.side === Side.NoBackedBid && o.priceLevel <= (100 - yesSellPrice));
 
-          // Interleave: at each price level (highest first), USDC bids then No-backed bids
           const allBids: { order: ActiveOrder; isMerge: boolean }[] = [];
           for (let level = 99; level >= 1; level--) {
-            // USDC bids at this level (standard swap)
             for (const o of usdcBids.filter((b) => b.priceLevel === level)) {
               allBids.push({ order: o, isMerge: false });
             }
-            // No-backed bids at this level (merge/burn)
             for (const o of noBids.filter((b) => b.priceLevel === level)) {
               allBids.push({ order: o, isMerge: true });
             }
           }
-          matchableOrders = allBids;
-        } else if (sideU8 === Side.NoBackedBid) {
-          // Sell No: matches against Yes asks where ask_price <= (100 - our_price)
-          // Engine walks ascending (lowest ask first)
-          const maxYesAsk = 100 - priceU8;
-          matchableOrders = orders
-            .filter((o) => o.side === Side.YesAsk && o.priceLevel <= maxYesAsk)
-            .sort((a, b) => a.priceLevel - b.priceLevel)
-            .map((o) => ({ order: o, isMerge: true }));
-        }
 
-        // One ATA per matchable order slot (no dedup — engine consumes per fill)
-        for (const { order, isMerge } of matchableOrders) {
-          if (makerAccounts.length >= maxFills) break;
-
-          let makerAta: PublicKey;
-          if (sideU8 === Side.YesAsk && !isMerge) {
-            // Standard swap: Sell Yes fills USDC bid → maker receives Yes tokens
-            makerAta = getAssociatedTokenAddressSync(yesMint, order.owner);
-          } else {
-            // All other cases: maker receives USDC
-            // - Buy Yes fills Yes ask → maker gets USDC
-            // - Sell Yes fills No-backed bid (merge) → maker gets USDC
-            // - Sell No fills Yes ask (merge) → maker gets USDC
-            makerAta = getAssociatedTokenAddressSync(USDC_MINT, order.owner);
+          for (const { order, isMerge } of allBids) {
+            if (makerAccounts.length >= maxFills) break;
+            let makerAta: PublicKey;
+            if (!isMerge) {
+              makerAta = getAssociatedTokenAddressSync(yesMint, order.owner);
+            } else {
+              makerAta = getAssociatedTokenAddressSync(USDC_MINT, order.owner);
+            }
+            makerAccounts.push({ pubkey: makerAta, isSigner: false, isWritable: true });
           }
-          makerAccounts.push({ pubkey: makerAta, isSigner: false, isWritable: true });
         }
-      }
 
-      const placeOrderIx = await program.methods
-        .placeOrder(sideU8, priceU8, new BN(quantityLamports!), orderTypeU8, maxFills)
-        .accountsPartial({
-          user,
-          config,
-          market: marketPubkey,
-          orderBook: orderBookPda,
-          usdcVault,
-          escrowVault,
-          yesEscrow,
-          noEscrow,
-          yesMint,
-          noMint,
-          userUsdcAta,
-          userYesAta,
-          userNoAta,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .remainingAccounts(makerAccounts)
-        .instruction();
+        const sellYesIx = await program.methods
+          .placeOrder(1, yesSellPrice, new BN(quantityLamports!), orderTypeU8, maxFills)
+          .accountsPartial({
+            user,
+            config,
+            market: marketPubkey,
+            orderBook: orderBookPda,
+            usdcVault,
+            escrowVault,
+            yesEscrow,
+            noEscrow,
+            yesMint,
+            noMint,
+            userUsdcAta,
+            userYesAta,
+            userNoAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .remainingAccounts(makerAccounts)
+          .instruction();
+        tx.add(sellYesIx);
 
-      tx.add(placeOrderIx);
+        // Step 3: For market orders, add pair-burn cleanup to recover USDC from unfilled portion
+        // If sell Yes partially fills, user still holds Yes+No tokens for the unfilled qty.
+        // Redeem mode 0 = pair burn — burns min(yes, no) and returns USDC.
+        if (orderType === "market") {
+          const redeemIx = await program.methods
+            .redeem(0, new BN(quantityLamports!))
+            .accountsPartial({
+              user,
+              config,
+              market: marketPubkey,
+              yesMint,
+              noMint,
+              usdcVault,
+              userUsdcAta,
+              userYesAta,
+              userNoAta,
+              tokenProgram: TOKEN_PROGRAM_ID,
+            })
+            .instruction();
+          tx.add(redeemIx);
+        }
 
-      const sideLabel = side.replace("-", " ").replace(/\b\w/g, (c) => c.toUpperCase());
-      const signature = await sendTransaction(tx, { description: `Place ${sideLabel} Order` });
-      if (signature) {
-        onTransactionSuccess?.(signature);
+        const signature = await sendTransaction(tx, { description: "Buy No (Atomic)" });
+        if (signature) {
+          // Optimistic updates: immediately refetch related queries
+          queryClient.invalidateQueries({ queryKey: ["positions"] });
+          queryClient.invalidateQueries({ queryKey: ["order-book", marketKey] });
+          queryClient.invalidateQueries({ queryKey: ["cost-basis"] });
+          onTransactionSuccess?.(signature);
+        }
+      } else {
+        // Standard order flow (buy-yes, sell-yes, sell-no)
+        const sideU8 = sideToU8(side);
+        // Market orders: use worst acceptable price
+        //   Buy Yes (side=0): price=99 (accept any ask up to 99c)
+        //   Sell Yes (side=1): price=1 (accept any bid down to 1c)
+        //   Sell No (side=2): price=1 (on-chain: max_yes_ask = 100-1 = 99, sweep all asks)
+        const priceU8 = orderType === "market"
+          ? (side === "buy-yes" ? 99 : 1)
+          : effectivePrice!;
+        const orderTypeU8 = orderType === "limit" ? 1 : 0;
+        const maxFills = 10;
+
+        // Build remaining_accounts: maker ATAs needed for fill settlement.
+        // One entry per matchable order slot (up to maxFills), NOT deduped by owner.
+        // The on-chain engine consumes one remaining_account per fill.
+        //   Buy Yes (side=0)  fills Yes asks  → maker's USDC ATA
+        //   Sell Yes (side=1) fills USDC bids → maker's Yes ATA
+        //                     AND No-backed bids (merge) → maker's USDC ATA
+        //   Sell No  (side=2) fills Yes asks (merge) → maker's USDC ATA
+        const makerAccounts: AccountMeta[] = [];
+        if (orderBookData) {
+          const orders = orderBookData.raw.orders;
+          let matchableOrders: { order: ActiveOrder; isMerge: boolean }[] = [];
+
+          if (sideU8 === Side.UsdcBid) {
+            // Buy Yes: matches against Yes asks at price <= our bid price (ascending)
+            matchableOrders = orders
+              .filter((o) => o.side === Side.YesAsk && o.priceLevel <= priceU8)
+              .sort((a, b) => a.priceLevel - b.priceLevel)
+              .map((o) => ({ order: o, isMerge: false }));
+          } else if (sideU8 === Side.YesAsk) {
+            // Sell Yes: matches against BOTH USDC bids AND No-backed bids
+            // Engine walks highest price downward, USDC bids before No-backed bids at each level
+            const usdcBids = orders
+              .filter((o) => o.side === Side.UsdcBid && o.priceLevel >= priceU8);
+            const noBids = orders
+              .filter((o) => o.side === Side.NoBackedBid && o.priceLevel <= (100 - priceU8));
+
+            // Interleave: at each price level (highest first), USDC bids then No-backed bids
+            const allBids: { order: ActiveOrder; isMerge: boolean }[] = [];
+            for (let level = 99; level >= 1; level--) {
+              // USDC bids at this level (standard swap)
+              for (const o of usdcBids.filter((b) => b.priceLevel === level)) {
+                allBids.push({ order: o, isMerge: false });
+              }
+              // No-backed bids at this level (merge/burn)
+              for (const o of noBids.filter((b) => b.priceLevel === level)) {
+                allBids.push({ order: o, isMerge: true });
+              }
+            }
+            matchableOrders = allBids;
+          } else if (sideU8 === Side.NoBackedBid) {
+            // Sell No: matches against Yes asks where ask_price <= (100 - our_price)
+            // Engine walks ascending (lowest ask first)
+            const maxYesAsk = 100 - priceU8;
+            matchableOrders = orders
+              .filter((o) => o.side === Side.YesAsk && o.priceLevel <= maxYesAsk)
+              .sort((a, b) => a.priceLevel - b.priceLevel)
+              .map((o) => ({ order: o, isMerge: true }));
+          }
+
+          // One ATA per matchable order slot (no dedup — engine consumes per fill)
+          for (const { order, isMerge } of matchableOrders) {
+            if (makerAccounts.length >= maxFills) break;
+
+            let makerAta: PublicKey;
+            if (sideU8 === Side.YesAsk && !isMerge) {
+              // Standard swap: Sell Yes fills USDC bid → maker receives Yes tokens
+              makerAta = getAssociatedTokenAddressSync(yesMint, order.owner);
+            } else {
+              // All other cases: maker receives USDC
+              // - Buy Yes fills Yes ask → maker gets USDC
+              // - Sell Yes fills No-backed bid (merge) → maker gets USDC
+              // - Sell No fills Yes ask (merge) → maker gets USDC
+              makerAta = getAssociatedTokenAddressSync(USDC_MINT, order.owner);
+            }
+            makerAccounts.push({ pubkey: makerAta, isSigner: false, isWritable: true });
+          }
+        }
+
+        const placeOrderIx = await program.methods
+          .placeOrder(sideU8, priceU8, new BN(quantityLamports!), orderTypeU8, maxFills)
+          .accountsPartial({
+            user,
+            config,
+            market: marketPubkey,
+            orderBook: orderBookPda,
+            usdcVault,
+            escrowVault,
+            yesEscrow,
+            noEscrow,
+            yesMint,
+            noMint,
+            userUsdcAta,
+            userYesAta,
+            userNoAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .remainingAccounts(makerAccounts)
+          .instruction();
+
+        tx.add(placeOrderIx);
+
+        const sideLabel = side.replace("-", " ").replace(/\b\w/g, (c) => c.toUpperCase());
+        const signature = await sendTransaction(tx, { description: `Place ${sideLabel} Order` });
+        if (signature) {
+          // Optimistic updates: immediately refetch related queries
+          queryClient.invalidateQueries({ queryKey: ["positions"] });
+          queryClient.invalidateQueries({ queryKey: ["order-book", marketKey] });
+          queryClient.invalidateQueries({ queryKey: ["cost-basis"] });
+          onTransactionSuccess?.(signature);
+        }
       }
     } catch (err) {
       // Pre-sendTransaction errors (PDA derivation, ATA resolution) won't be
@@ -307,6 +464,7 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
     walletPublicKey,
     submitting,
     marketPubkey,
+    marketKey,
     side,
     orderType,
     effectivePrice,
@@ -314,6 +472,7 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
     sendTransaction,
     orderBookData,
     onTransactionSuccess,
+    queryClient,
   ]);
 
   const handleSubmit = useCallback(() => {
@@ -329,37 +488,33 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
     handleSubmitDirect();
   }, [handleSubmitDirect]);
 
-  const isBuying = side === "buy-yes";
+  const isBuying = side === "buy-yes" || side === "buy-no";
 
   return (
     <div className="rounded-lg border border-white/10 bg-white/5 p-4 space-y-4">
       <h3 className="text-sm font-semibold text-white/80">Place Order</h3>
 
       {/* Side selector */}
-      <div className="grid grid-cols-3 gap-1 rounded-md border border-white/10 p-0.5 text-xs">
-        {(["buy-yes", "sell-yes", "sell-no"] as const).map((s) => (
+      <div className="grid grid-cols-4 gap-1 rounded-md border border-white/10 p-0.5 text-xs">
+        {(["buy-yes", "buy-no", "sell-yes", "sell-no"] as const).map((s) => (
           <button
             key={s}
             onClick={() => setSide(s)}
             className={`rounded px-2 py-1.5 transition-colors ${
               side === s
-                ? s === "buy-yes"
-                  ? "bg-yes/20 text-yes"
+                ? s === "buy-yes" || s === "buy-no"
+                  ? s === "buy-yes" ? "bg-yes/20 text-yes" : "bg-no/20 text-no"
                   : "bg-no/20 text-no"
                 : "text-white/50 hover:text-white/80"
             }`}
           >
             {s === "buy-yes" && "Buy Yes"}
+            {s === "buy-no" && "Buy No"}
             {s === "sell-yes" && "Sell Yes"}
             {s === "sell-no" && "Sell No"}
           </button>
         ))}
       </div>
-      {side === "sell-no" && (
-        <p className="text-[10px] text-white/40 -mt-2">
-          To acquire No tokens, mint a Yes+No pair then sell Yes.
-        </p>
-      )}
 
       {/* Order type toggle */}
       <div className="flex rounded-md border border-white/10 text-xs">
@@ -409,31 +564,51 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
         </div>
       )}
 
-      {/* Quantity input */}
+      {/* Dollar amount input */}
       <div>
         <label className="block text-xs text-white/50 mb-1">
-          Quantity (tokens)
+          Amount ($)
         </label>
-        <input
-          type="number"
-          min={1}
-          step={1}
-          value={quantity}
-          onChange={(e) => setQuantity(e.target.value)}
-          className="w-full rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-white placeholder-white/30 focus:border-accent focus:outline-none"
-          placeholder="1"
-        />
+        <div className="relative">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-white/40">
+            $
+          </span>
+          <input
+            type="number"
+            min={0.01}
+            step={0.01}
+            value={dollarAmount}
+            onChange={(e) => setDollarAmount(e.target.value)}
+            className="w-full rounded-md border border-white/10 bg-white/5 pl-7 pr-3 py-2 text-sm text-white placeholder-white/30 focus:border-accent focus:outline-none"
+            placeholder="10.00"
+          />
+        </div>
+        {derivedQuantity !== null && (
+          <p className="text-[10px] text-white/40 mt-1">
+            ≈ {derivedQuantity.toFixed(derivedQuantity % 1 === 0 ? 0 : 2)} contracts
+          </p>
+        )}
       </div>
 
-      {/* Cost estimate */}
+      {/* Cost / payout estimate */}
       {estimatedCost !== null && (
-        <div className="rounded-md bg-white/5 px-3 py-2 text-xs">
-          <span className="text-white/50">
-            {isBuying ? "Est. Cost" : "Est. Proceeds"}:{" "}
-          </span>
-          <span className="font-medium text-white">
-            ${estimatedCost.toFixed(2)} USDC
-          </span>
+        <div className="rounded-md bg-white/5 px-3 py-2 text-xs space-y-1">
+          <div>
+            <span className="text-white/50">
+              {isBuying ? "Cost" : "Est. Proceeds"}:{" "}
+            </span>
+            <span className="font-medium text-white">
+              ${estimatedCost.toFixed(2)}
+            </span>
+          </div>
+          {isBuying && estimatedPayout !== null && (
+            <div>
+              <span className="text-white/50">Payout:{" "}</span>
+              <span className="font-medium text-white">
+                ${estimatedPayout.toFixed(2)} if {side === "buy-yes" ? "Yes" : "No"} wins
+              </span>
+            </div>
+          )}
         </div>
       )}
 
@@ -462,7 +637,9 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
         disabled={!isValid || submitting || !!positionConflict || !!marketOrderWarning}
         className={`w-full rounded-md py-2.5 text-sm font-semibold transition-colors ${
           isBuying
-            ? "bg-yes hover:bg-yes-dark disabled:bg-yes/30"
+            ? side === "buy-yes"
+              ? "bg-yes hover:bg-yes-dark disabled:bg-yes/30"
+              : "bg-no hover:bg-no-dark disabled:bg-no/30"
             : "bg-no hover:bg-no-dark disabled:bg-no/30"
         } text-white disabled:cursor-not-allowed`}
       >
@@ -479,7 +656,7 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
           ticker={ticker}
           side={side.replace("-", " ").replace(/\b\w/g, (c) => c.toUpperCase())}
           price={displayPrice ?? 50}
-          quantity={parseFloat(quantity) || 0}
+          quantity={derivedQuantity ?? 0}
           estimatedCost={estimatedCost ?? 0}
         />
       )}

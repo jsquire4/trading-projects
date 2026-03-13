@@ -65,7 +65,7 @@ export function MintPairButton({ market }: MintPairButtonProps) {
         })
         .transaction();
 
-      await sendTransaction(tx, { description: "Mint Pair" });
+      await sendTransaction(tx, { description: "Create Pair" });
       queryClient.invalidateQueries({ queryKey: ["positions"] });
       queryClient.invalidateQueries({ queryKey: ["markets"] });
       setQuantity("");
@@ -82,7 +82,7 @@ export function MintPairButton({ market }: MintPairButtonProps) {
         onClick={() => setShowForm(true)}
         className="text-xs text-white/40 hover:text-white/70 transition-colors border border-white/10 rounded-md px-3 py-1.5"
       >
-        Mint Pairs
+        Create Pairs
       </button>
     );
   }
@@ -106,7 +106,7 @@ export function MintPairButton({ market }: MintPairButtonProps) {
           disabled={submitting || !isValidInteger}
           className="text-xs bg-accent/20 text-accent hover:bg-accent/30 rounded-md px-2 py-1.5 transition-colors disabled:opacity-50"
         >
-          {submitting ? "..." : `Mint ${qtyNum || 0} pairs ($${qtyNum.toFixed(2)})`}
+          {submitting ? "..." : `Create ${qtyNum || 0} pairs ($${qtyNum.toFixed(2)})`}
         </button>
         <button
           onClick={() => setShowForm(false)}

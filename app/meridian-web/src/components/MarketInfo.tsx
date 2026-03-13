@@ -49,7 +49,7 @@ export function MarketInfo({ market, currentPrice }: MarketInfoProps) {
           <div className="text-white font-mono font-medium">{formatCountdown(remaining)}</div>
         </div>
         <div>
-          <span className="text-white/40">Total Minted</span>
+          <span className="text-white/40">Total Pairs</span>
           <div className="text-white font-mono font-medium">{totalMinted.toLocaleString()} pairs</div>
         </div>
         <div>

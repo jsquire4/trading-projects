@@ -9,7 +9,7 @@
  *   r     continuous risk-free rate (default 0.05)
  */
 
-import { normalCdf, normalPdf } from './pricer.js';
+import { normalCdf, normalPdf } from './pricer';
 export { normalCdf, normalPdf };
 
 /** Black-Scholes d2: d2 = [ln(S/K) + (r - σ²/2) · T] / (σ · √T) */

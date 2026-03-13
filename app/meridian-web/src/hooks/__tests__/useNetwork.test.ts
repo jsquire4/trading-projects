@@ -15,15 +15,15 @@ describe("useNetwork", () => {
     vi.resetModules();
   });
 
-  it("detects devnet from default RPC URL", async () => {
+  it("detects localnet from default RPC URL", async () => {
     delete process.env.NEXT_PUBLIC_RPC_URL;
     const { useNetwork } = await import("../useNetwork");
     const { result } = renderHook(() => useNetwork());
-    // Default fallback is devnet
-    expect(result.current.cluster).toBe("devnet");
-    expect(result.current.isDevnet).toBe(true);
+    // Default fallback is localnet
+    expect(result.current.cluster).toBe("localnet");
+    expect(result.current.isLocalnet).toBe(true);
     expect(result.current.isMainnet).toBe(false);
-    expect(result.current.isLocalnet).toBe(false);
+    expect(result.current.isDevnet).toBe(false);
   });
 
   it("detects mainnet from RPC URL", async () => {

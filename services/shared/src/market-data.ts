@@ -13,10 +13,10 @@ import type {
   CalendarDay,
   OptionsChainItem,
   TradierClientOptions,
-} from "./tradier-client.js";
+} from "./tradier-client";
 
-import { TradierClient } from "./tradier-client.js";
-import { SyntheticClient } from "./synthetic-client.js";
+import { TradierClient } from "./tradier-client";
+import { SyntheticClient } from "./synthetic-client";
 
 export type { Quote, OHLCVBar, MarketClock, CalendarDay, OptionsChainItem, TradierClientOptions };
 

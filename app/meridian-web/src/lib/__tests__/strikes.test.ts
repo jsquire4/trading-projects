@@ -21,12 +21,13 @@ describe("generateStrikes", () => {
     // -9%: 455 → round to 460
     // -6%: 470 → 470
     // -3%: 485 → 490
+    // ATM: 500 → 500
     // +3%: 515 → 520
     // +6%: 530 → 530
     // +9%: 545 → 550
     const result = generateStrikes(500);
     expect(result.previousClose).toBe(500);
-    expect(result.strikes).toEqual([460, 470, 490, 520, 530, 550]);
+    expect(result.strikes).toEqual([460, 470, 490, 500, 520, 530, 550]);
   });
 
   it("rounds to nearest $10", () => {

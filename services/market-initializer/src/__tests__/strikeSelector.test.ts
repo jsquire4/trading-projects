@@ -85,8 +85,20 @@ describe("generateBaselineStrikes", () => {
     // Raw: 85*0.91=77.35, 85*0.94=79.9, 85*0.97=82.45,
     //      85*1.03=87.55, 85*1.06=90.1, 85*1.09=92.65
     // Rounded to $5: 75, 80, 80, 90, 90, 95
-    // Deduped: [75, 80, 90, 95]
-    expect(result.strikes).toEqual([75, 80, 90, 95]);
+    // Center strike: roundToNearest(85, 5) = 85
+    // Deduped: [75, 80, 85, 90, 95]
+    expect(result.strikes).toEqual([75, 80, 85, 90, 95]);
+  });
+
+  it("AAPL at $230: includes ATM center strike $230", () => {
+    const result = generateBaselineStrikes(230);
+    expect(result.method).toBe("baseline");
+
+    // Raw offsets: 209.3→210, 216.2→220, 223.1→220, 236.9→240, 243.8→240, 250.7→250
+    // Center strike: roundToNearest(230, 10) = 230
+    // Deduped: [210, 220, 230, 240, 250]
+    expect(result.strikes).toEqual([210, 220, 230, 240, 250]);
+    expect(result.strikes).toContain(230);
   });
 
   it("deduplication when strikes collide after rounding", () => {
@@ -240,6 +252,14 @@ describe("generateVolAwareStrikes", () => {
     for (const s of result.strikes) {
       expect(s % 10).toBe(0);
     }
+  });
+
+  it("vol-aware includes ATM center strike", () => {
+    const bars = makeBars(25, 230, 0.02);
+    const result = generateVolAwareStrikes(230, bars);
+    expect(result.method).toBe("vol-aware");
+    // Center strike: roundToNearest(230, 10) = 230
+    expect(result.strikes).toContain(230);
   });
 
   it("high volatility produces wider strike range", () => {

@@ -35,6 +35,9 @@ export function generateStrikes(previousClose: number): StrikeSet {
     roundToNearest(previousClose * (1 + pct), increment),
   );
 
+  // Include the ATM center strike (rounded previous close)
+  rawStrikes.push(roundToNearest(previousClose, increment));
+
   // Deduplicate and sort ascending
   const unique = [...new Set(rawStrikes)].sort((a, b) => a - b);
 

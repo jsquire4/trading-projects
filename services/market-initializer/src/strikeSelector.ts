@@ -46,6 +46,9 @@ export function generateBaselineStrikes(previousClose: number): StrikeResult {
     roundToNearest(previousClose * (1 + pct), increment),
   );
 
+  // Include the ATM center strike (rounded previous close)
+  rawStrikes.push(roundToNearest(previousClose, increment));
+
   const unique = [...new Set(rawStrikes)].sort((a, b) => a - b);
 
   return { strikes: unique, method: "baseline" };
@@ -91,6 +94,9 @@ export function generateVolAwareStrikes(
     rawStrikes.push(roundToNearest(previousClose + offset, increment));
     rawStrikes.push(roundToNearest(previousClose - offset, increment));
   }
+
+  // Include the ATM center strike (rounded previous close)
+  rawStrikes.push(roundToNearest(previousClose, increment));
 
   // Deduplicate and sort ascending
   const unique = [...new Set(rawStrikes)].sort((a, b) => a - b);

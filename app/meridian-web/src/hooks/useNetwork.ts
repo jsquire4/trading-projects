@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { getClusterFromRpcUrl, type NetworkCluster } from "../lib/network";
 
-const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com";
+const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? "http://127.0.0.1:8899";
 
 // Pre-compute cluster once at module load since RPC_URL is a constant
 const _cluster = getClusterFromRpcUrl(RPC_URL);

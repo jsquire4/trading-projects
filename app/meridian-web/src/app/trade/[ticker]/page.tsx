@@ -17,6 +17,7 @@ import { MyPositions } from "@/components/MyPositions";
 import { RedeemPanel } from "@/components/RedeemPanel";
 import { FillFeed } from "@/components/FillFeed";
 import { PayoffDisplay } from "@/components/PayoffDisplay";
+import { getExplorerUrl } from "@/lib/network";
 
 // ---------------------------------------------------------------------------
 // Strike selector
@@ -275,7 +276,7 @@ export default function TradingCockpit({
               </div>
               <div className="flex items-center gap-2">
                 <a
-                  href={`https://explorer.solana.com/tx/${lastTxSignature}?cluster=devnet`}
+                  href={getExplorerUrl(lastTxSignature)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex-1 text-center text-xs text-accent hover:text-accent/80 py-1.5 rounded-md border border-white/10 hover:border-white/20"

@@ -5,7 +5,7 @@ import { Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import bs58 from "bs58";
 
 // Use server-only env var for RPC (fallback to public var for backwards compat)
-const RPC_URL = process.env.RPC_URL ?? process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com";
+const RPC_URL = process.env.RPC_URL ?? process.env.NEXT_PUBLIC_RPC_URL ?? "http://127.0.0.1:8899";
 if (!process.env.NEXT_PUBLIC_USDC_MINT) {
   throw new Error("NEXT_PUBLIC_USDC_MINT environment variable is required");
 }

@@ -12,7 +12,7 @@ import {
   DEFAULT_PRICE,
   DEFAULT_VOL,
   DEFAULT_DRIFT,
-} from "../synthetic-config.js";
+} from "../synthetic-config";
 
 // ---- SeededRng --------------------------------------------------------------
 

@@ -3,8 +3,8 @@
 // ---------------------------------------------------------------------------
 
 import { describe, it, expect } from "vitest";
-import { SyntheticClient } from "../synthetic-client.js";
-import { BASE_PRICES, DEFAULT_PRICE } from "../synthetic-config.js";
+import { SyntheticClient } from "../synthetic-client";
+import { BASE_PRICES, DEFAULT_PRICE } from "../synthetic-config";
 
 function makeClient(seed = 42) {
   return new SyntheticClient({ seed });

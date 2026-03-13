@@ -14,9 +14,9 @@ import type {
   MarketClock,
   CalendarDay,
   OptionsChainItem,
-} from "./tradier-client.js";
+} from "./tradier-client";
 
-import type { IMarketDataClient } from "./market-data.js";
+import type { IMarketDataClient } from "./market-data";
 
 import {
   BASE_PRICES,
@@ -26,11 +26,11 @@ import {
   hashSeed,
   gbmStep,
   generateBars,
-} from "./synthetic-config.js";
+} from "./synthetic-config";
 
-import { binaryCallPrice, normalCdf } from "./pricer.js";
-import { binaryDelta, binaryGamma, binaryTheta, binaryVega } from "./greeks.js";
-import { generateStrikes } from "./strikes.js";
+import { binaryCallPrice, normalCdf } from "./pricer";
+import { binaryDelta, binaryGamma, binaryTheta, binaryVega } from "./greeks";
+import { generateStrikes } from "./strikes";
 
 export interface SyntheticClientOptions {
   seed?: number;

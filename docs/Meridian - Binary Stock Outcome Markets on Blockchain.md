@@ -129,19 +129,20 @@ token on the bid side of the book. They keep the No token. The effective cost of
 token = $1.00 − the Yes sale price.
 ● Sell Yes — The user sells their Yes tokens on the ask side of the book, receiving USDC.
 This closes their Yes position.
-● Sell No — The user buys a Yes token from the ask side of the book. Since they already
-hold a No token, holding both Yes + No = $1.00 worth of redeemable USDC, which
-closes their No exposure.
-Key insight: Buy Yes and Sell No are the same side of the book (both are buying Yes tokens).
-Buy No and Sell Yes are the same side of the book (both are selling Yes tokens). One book, four
+● Sell No — The user places a No-backed bid on the book (side=2). When matched
+against a Yes ask, the matching engine burns both the Yes and No tokens from escrow
+and splits the $1 USDC between both parties. The user receives USDC directly — they
+never hold both tokens.
+Key insight: Buy Yes and Sell No are the same side of the book (both consume Yes asks).
+Buy No and Sell Yes are the same side of the book (both consume Yes bids). One book, four
 user actions, two perspectives.
 UX Abstraction
 To the user, the frontend presents a simple experience:
 ● "Buy Yes" and "Sell Yes" buttons for the bullish view
 ● "Buy No" and "Sell No" buttons for the bearish view
 The user doesn't need to understand that Buy No is actually a mint-and-sell-Yes operation, or
-that Sell No is actually a buy-Yes operation. The frontend translates their intent into the correct
-order book action. Under the hood, it's all one book.
+that Sell No places a No-backed bid that triggers a merge/burn on fill. The frontend translates
+their intent into the correct order book action. Under the hood, it's all one book.
 Position Constraints
 ● A user should not be able to Buy Yes if they already hold No tokens for the same strike
 without first selling (closing) their No position. Holding both Yes and No simultaneously is
@@ -222,12 +223,11 @@ Sell Yes (Exit Bullish)
 ● Portfolio updates with realized P&L (entry price vs sale price)
 Sell No (Exit Bearish)
 ● User selects their No position and clicks "Sell No"
-● Under the hood, this buys a Yes token from the ask side of the order book
-● The user now holds Yes + No, which can be redeemed for $1.00, or the system handles
-the close automatically
+● Under the hood, this places a No-backed bid (side=2) on the order book
+● When matched against a Yes ask, the matching engine burns both Yes and No tokens
+from escrow and splits the $1 USDC between both parties
+● The user receives USDC directly — they never hold both tokens simultaneously
 ● Portfolio updates with realized P&L
-● To the user, this feels like simply selling their No token — the Yes-buy mechanic is
-abstracted away
 Settlement & Redemption
 ● Settlement occurs automatically via the automation service at ~4:05 PM ET
 ● The settlement price and outcome (above/below strike) are displayed per contract

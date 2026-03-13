@@ -92,6 +92,8 @@ async function updateOracleFeeds(
   const ORACLE_MAX_RETRIES = 3;
   const ORACLE_RETRY_DELAY_MS = 2_000;
 
+  const failedTickers: string[] = [];
+
   for (const [ticker, price] of prices) {
     const [priceFeedPda] = findPriceFeed(ticker);
 
@@ -138,8 +140,13 @@ async function updateOracleFeeds(
     }
 
     if (!succeeded) {
-      prices.delete(ticker);
+      failedTickers.push(ticker);
     }
+  }
+
+  // Remove failed tickers after iteration (don't mutate Map during iteration)
+  for (const ticker of failedTickers) {
+    prices.delete(ticker);
   }
 }
 

@@ -23,7 +23,11 @@ import { MarketInfo, tickerFromBytes } from "./settler.js";
 
 const log = createLogger("settlement:redeemer");
 
-/** Max users per crank_redeem call (each user = 2 remaining_accounts) */
+/**
+ * Max users per crank_redeem call (each user = 2 remaining_accounts).
+ * On-chain cap: batch_size.min(32) / 2 = 16 users max.
+ * Do NOT increase above 16 — excess users would be silently skipped.
+ */
 const MAX_USERS_PER_BATCH = 16;
 
 interface RedeemResult {

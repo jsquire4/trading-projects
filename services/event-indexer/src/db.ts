@@ -389,8 +389,8 @@ export function queryPortfolioSnapshot(wallet: string): PortfolioPosition[] {
         WHEN json_extract(data, '$.taker') = @wallet THEN CAST(json_extract(data, '$.takerSide') AS INTEGER)
         ELSE CAST(json_extract(data, '$.makerSide') AS INTEGER)
       END as side,
-      SUM(CAST(json_extract(data, '$.quantity') AS INTEGER)) as totalQuantity,
-      SUM(CAST(json_extract(data, '$.quantity') AS INTEGER) * CAST(json_extract(data, '$.price') AS INTEGER)) as totalCost,
+      SUM(CAST(json_extract(data, '$.quantity') AS REAL)) as totalQuantity,
+      SUM(CAST(json_extract(data, '$.quantity') AS REAL) * CAST(json_extract(data, '$.price') AS REAL)) as totalCost,
       COUNT(*) as fillCount
     FROM events
     WHERE type = 'fill'
@@ -420,12 +420,21 @@ export interface DailySummary {
 }
 
 export function queryPortfolioHistory(wallet: string, days: number): DailySummary[] {
+  // netCostBasis is sign-aware: buys (sides 0, 2) are positive (cost),
+  // sells (side 1) are negative (proceeds received).
   const stmt = getDb().prepare(`
     SELECT
       date(timestamp, 'unixepoch') as date,
       SUM(CAST(json_extract(data, '$.quantity') AS INTEGER)) as totalVolume,
       COUNT(*) as fillCount,
-      SUM(CAST(json_extract(data, '$.quantity') AS INTEGER) * CAST(json_extract(data, '$.price') AS INTEGER)) as netCostBasis
+      SUM(
+        CASE
+          WHEN (json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 1)
+            OR (json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.makerSide') AS INTEGER) = 1)
+          THEN -(CAST(json_extract(data, '$.quantity') AS INTEGER) * CAST(json_extract(data, '$.price') AS INTEGER))
+          ELSE CAST(json_extract(data, '$.quantity') AS INTEGER) * CAST(json_extract(data, '$.price') AS INTEGER)
+        END
+      ) as netCostBasis
     FROM events
     WHERE type = 'fill'
       AND (json_extract(data, '$.taker') = @wallet OR json_extract(data, '$.maker') = @wallet)

@@ -97,7 +97,9 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
 
         setApiPositions(snapshotJson.positions ?? []);
 
-        // Map API daily summaries to the DailySummary shape consumers expect
+        // Map API daily summaries to the DailySummary shape consumers expect.
+        // netCostBasis is sign-aware: buys are positive (cost), sells are negative (proceeds).
+        // Daily P&L proxy = -netCostBasis (net proceeds minus net cost).
         const mappedSummaries: DailySummary[] = (historyJson.dailySummaries ?? []).map((d: ApiDailySummary) => ({
           date: d.date,
           wallet,
@@ -105,7 +107,7 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
           closeValue: 0,
           highValue: 0,
           lowValue: 0,
-          pnl: d.netCostBasis / (1_000_000 * 100), // micro-tokens * cents → USDC
+          pnl: -d.netCostBasis / (1_000_000 * 100), // negate: spending = negative P&L
           positionCount: d.fillCount,
         }));
 
@@ -130,8 +132,8 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
   }, [wallet]);
 
   // Compute current portfolio value from on-chain positions + mid prices
-  const liveValue = useMemo(() => {
-    let usedFallback = false;
+  const { liveValue, usedFallback } = useMemo(() => {
+    let fallback = false;
     const value = positions.reduce((sum, p) => {
       const marketKey = p.market.publicKey.toBase58();
       let yesMid: number;
@@ -143,14 +145,18 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
         const mid = midPrices?.get(marketKey);
         yesMid = mid ?? 0.5;
         noMid = 1 - yesMid;
-        if (mid === undefined) usedFallback = true;
+        if (mid === undefined) fallback = true;
       }
       return sum + (Number(p.yesBal) / 1_000_000) * yesMid + (Number(p.noBal) / 1_000_000) * noMid;
     }, 0);
-    setApproximate(usedFallback);
-    return value;
+    return { liveValue: value, usedFallback: fallback };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [positions, midPricesKey]);
+
+  // Sync approximate flag via effect (not inside useMemo, which would be setState during render)
+  useEffect(() => {
+    setApproximate(usedFallback);
+  }, [usedFallback]);
 
   // Build intraday-like data from API positions for chart compatibility.
   // The event-indexer provides aggregate fill data, not time-series snapshots,
@@ -192,7 +198,10 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
   const totalCostFromApi = useMemo(() => {
     return apiPositions.reduce((sum, p) => {
       // totalCost is quantity * price (in micro-tokens * cents)
-      return sum + p.totalCost / (1_000_000 * 100);
+      const cost = p.totalCost / (1_000_000 * 100);
+      // Side 0 (Buy Yes) and 2 (Sell No / buy No tokens) are acquisitions (add to cost).
+      // Side 1 (Sell Yes) is a disposal — subtract proceeds from net cost.
+      return p.side === 1 ? sum - cost : sum + cost;
     }, 0);
   }, [apiPositions]);
 
@@ -204,11 +213,13 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
   let bottomPerformer: { ticker: string; pnl: number } | null = null;
 
   if (positions.length > 0 && apiPositions.length > 0) {
-    // Build cost basis map from API
+    // Build net cost basis map from API (buys add, sells subtract)
     const costByMarket = new Map<string, number>();
     for (const ap of apiPositions) {
       const existing = costByMarket.get(ap.market) ?? 0;
-      costByMarket.set(ap.market, existing + ap.totalCost / (1_000_000 * 100));
+      const cost = ap.totalCost / (1_000_000 * 100);
+      const delta = ap.side === 1 ? -cost : cost;
+      costByMarket.set(ap.market, existing + delta);
     }
 
     const pnlByTicker = new Map<string, number>();

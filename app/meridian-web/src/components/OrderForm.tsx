@@ -97,7 +97,7 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
       return "You hold No tokens for this strike. Sell your No position first.";
     }
     if ((side === "buy-no") && currentPosition.yesBal > BigInt(0)) {
-      return "You hold Yes tokens for this strike. Sell your Yes position first, or use Buy No to switch sides.";
+      return "You hold Yes tokens for this strike. Sell your Yes position first.";
     }
     if ((side === "sell-no") && currentPosition.yesBal > BigInt(0) && currentPosition.noBal === BigInt(0)) {
       return "You hold Yes tokens but no No tokens. Sell your Yes position first, or use Buy No to switch sides.";

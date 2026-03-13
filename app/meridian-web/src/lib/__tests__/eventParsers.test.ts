@@ -66,6 +66,8 @@ describe("parseFillEvent", () => {
       isMerge: false,
       orderId: "42",
       timestamp: 1710100000,
+      signature: "5VERv8NMhKxF6F2Xk4j3y1Kp",
+      seq: 0,
     });
   });
 

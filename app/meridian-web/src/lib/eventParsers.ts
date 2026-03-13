@@ -36,6 +36,8 @@ export interface ParsedFill {
   isMerge: boolean;
   orderId: string;
   timestamp: number;
+  signature: string;
+  seq: number;
 }
 
 export interface ParsedSettlement {
@@ -94,6 +96,8 @@ export function parseFillEvent(event: IndexedEvent): ParsedFill | null {
       isMerge,
       orderId,
       timestamp,
+      signature: event.signature ?? "",
+      seq: Number(d.seq ?? 0),
     };
   } catch {
     return null;

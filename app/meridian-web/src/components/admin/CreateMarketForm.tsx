@@ -78,7 +78,7 @@ export function CreateMarketForm() {
           new BN(prevCloseLamports.toString()),
         )
         .accountsPartial({
-          admin: publicKey,
+          creator: publicKey,
           config,
           market,
           yesMint,

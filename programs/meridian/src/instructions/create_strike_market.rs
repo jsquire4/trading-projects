@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{Mint, Token, TokenAccount};
+use anchor_spl::token::{self, spl_token, Mint, Token, TokenAccount, Transfer};
 use crate::error::MeridianError;
 use crate::state::{GlobalConfig, OrderBook, StrikeMarket};
 
@@ -12,17 +12,16 @@ use crate::state::{GlobalConfig, OrderBook, StrikeMarket};
     previous_close: u64,
 )]
 pub struct CreateStrikeMarket<'info> {
+    /// Market creator — can be anyone (admin or regular user).
+    /// Non-admin creators pay a strike_creation_fee if configured.
     #[account(mut)]
-    pub admin: Signer<'info>,
+    pub creator: Signer<'info>,
 
-    #[account(
-        has_one = admin @ MeridianError::Unauthorized,
-    )]
     pub config: Account<'info, GlobalConfig>,
 
     #[account(
         init,
-        payer = admin,
+        payer = creator,
         space = 8 + StrikeMarket::LEN,
         seeds = [
             StrikeMarket::SEED_PREFIX,
@@ -36,7 +35,7 @@ pub struct CreateStrikeMarket<'info> {
 
     #[account(
         init,
-        payer = admin,
+        payer = creator,
         mint::decimals = 6,
         mint::authority = market,
         mint::freeze_authority = market,
@@ -47,7 +46,7 @@ pub struct CreateStrikeMarket<'info> {
 
     #[account(
         init,
-        payer = admin,
+        payer = creator,
         mint::decimals = 6,
         mint::authority = market,
         mint::freeze_authority = market,
@@ -59,7 +58,7 @@ pub struct CreateStrikeMarket<'info> {
     /// USDC collateral vault — holds $1 × pairs minted
     #[account(
         init,
-        payer = admin,
+        payer = creator,
         token::mint = usdc_mint,
         token::authority = market,
         seeds = [StrikeMarket::VAULT_SEED, market.key().as_ref()],
@@ -70,7 +69,7 @@ pub struct CreateStrikeMarket<'info> {
     /// USDC escrow for bid orders (side=0)
     #[account(
         init,
-        payer = admin,
+        payer = creator,
         token::mint = usdc_mint,
         token::authority = market,
         seeds = [StrikeMarket::ESCROW_SEED, market.key().as_ref()],
@@ -81,7 +80,7 @@ pub struct CreateStrikeMarket<'info> {
     /// Yes token escrow for ask orders (side=1)
     #[account(
         init,
-        payer = admin,
+        payer = creator,
         token::mint = yes_mint,
         token::authority = market,
         seeds = [StrikeMarket::YES_ESCROW_SEED, market.key().as_ref()],
@@ -92,7 +91,7 @@ pub struct CreateStrikeMarket<'info> {
     /// No token escrow for No-backed bid orders (side=2)
     #[account(
         init,
-        payer = admin,
+        payer = creator,
         token::mint = no_mint,
         token::authority = market,
         seeds = [StrikeMarket::NO_ESCROW_SEED, market.key().as_ref()],
@@ -120,6 +119,18 @@ pub struct CreateStrikeMarket<'info> {
         constraint = usdc_mint.key() == config.usdc_mint @ MeridianError::InvalidMint,
     )]
     pub usdc_mint: Box<Account<'info, Mint>>,
+
+    /// Creator's USDC ATA — fee is deducted from here for non-admin creators.
+    /// Optional: only required when creator != admin && strike_creation_fee > 0.
+    /// CHECK: Validated in handler when fee transfer is needed.
+    #[account(mut)]
+    pub creator_usdc_ata: Option<UncheckedAccount<'info>>,
+
+    /// Fee vault — receives strike creation fees.
+    /// CHECK: Validated in handler via PDA derivation when fee transfer is needed.
+    #[account(mut)]
+    pub fee_vault: Option<UncheckedAccount<'info>>,
+
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
@@ -152,6 +163,59 @@ pub fn handle_create_strike_market(
         market_close_unix > clock.unix_timestamp,
         MeridianError::InvalidMarketCloseTime
     );
+
+    // Charge strike creation fee for non-admin creators
+    let creator_key = ctx.accounts.creator.key();
+    let fee = config.strike_creation_fee;
+    if creator_key != config.admin && fee > 0 {
+        let creator_ata = ctx.accounts.creator_usdc_ata
+            .as_ref()
+            .ok_or(MeridianError::InsufficientAccounts)?;
+        let fee_vault_account = ctx.accounts.fee_vault
+            .as_ref()
+            .ok_or(MeridianError::InsufficientAccounts)?;
+
+        // Validate creator_usdc_ata is an SPL token account with correct mint and owner
+        require!(
+            creator_ata.owner == &spl_token::ID,
+            MeridianError::InvalidMint
+        );
+        let ata_data = creator_ata.try_borrow_data()?;
+        require!(ata_data.len() >= 72, MeridianError::InvalidMint);
+        let ata_mint = Pubkey::new_from_array(ata_data[0..32].try_into().unwrap());
+        let ata_owner = Pubkey::new_from_array(ata_data[32..64].try_into().unwrap());
+        drop(ata_data);
+        require!(ata_mint == config.usdc_mint, MeridianError::InvalidMint);
+        require!(ata_owner == creator_key, MeridianError::SignerMismatch);
+
+        // Validate fee_vault is the correct PDA and is an SPL token account
+        let (expected_fee_vault, _) = Pubkey::find_program_address(
+            &[GlobalConfig::FEE_VAULT_SEED],
+            ctx.program_id,
+        );
+        require!(
+            fee_vault_account.key() == expected_fee_vault,
+            MeridianError::InvalidVault
+        );
+        require!(
+            fee_vault_account.owner == &spl_token::ID,
+            MeridianError::InvalidVault
+        );
+
+        token::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: creator_ata.to_account_info(),
+                    to: fee_vault_account.to_account_info(),
+                    authority: ctx.accounts.creator.to_account_info(),
+                },
+            ),
+            fee,
+        )?;
+
+        msg!("Strike creation fee charged: {} USDC lamports from {}", fee, creator_key);
+    }
 
     // Initialize the market
     let market = &mut ctx.accounts.market;

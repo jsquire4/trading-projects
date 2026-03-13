@@ -142,6 +142,10 @@ export interface CreateStrikeMarketParams {
   orderBook: PublicKey;
   oracleFeed: PublicKey;
   usdcMint: PublicKey;
+  /** Creator's USDC ATA for fee payment (pass null/program ID to skip) */
+  creatorUsdcAta?: PublicKey;
+  /** Fee vault PDA (pass null/program ID to skip) */
+  feeVault?: PublicKey;
   /** 8-byte ticker (use padTicker) */
   ticker: Buffer;
   /** Strike price in USDC lamports */
@@ -171,9 +175,12 @@ export function buildCreateStrikeMarketIx(
   ]);
 
   // Account order matches CreateStrikeMarket struct:
-  //   admin, config, market, yes_mint, no_mint, usdc_vault, escrow_vault,
+  //   creator, config, market, yes_mint, no_mint, usdc_vault, escrow_vault,
   //   yes_escrow, no_escrow, order_book, oracle_feed, usdc_mint,
+  //   creator_usdc_ata (optional), fee_vault (optional),
   //   token_program, system_program, rent
+  const creatorUsdcAta = params.creatorUsdcAta ?? MERIDIAN_PROGRAM_ID;
+  const feeVault = params.feeVault ?? MERIDIAN_PROGRAM_ID;
   const keys = [
     { pubkey: params.admin, isSigner: true, isWritable: true },
     { pubkey: params.config, isSigner: false, isWritable: false },
@@ -187,6 +194,8 @@ export function buildCreateStrikeMarketIx(
     { pubkey: params.orderBook, isSigner: false, isWritable: true },
     { pubkey: params.oracleFeed, isSigner: false, isWritable: false },
     { pubkey: params.usdcMint, isSigner: false, isWritable: false },
+    { pubkey: creatorUsdcAta, isSigner: false, isWritable: true },
+    { pubkey: feeVault, isSigner: false, isWritable: true },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
@@ -960,6 +969,75 @@ export function buildUpdateFeeBpsIx(
   const keys = [
     { pubkey: params.admin, isSigner: true, isWritable: false },
     { pubkey: params.config, isSigner: false, isWritable: true },
+  ];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Meridian: update_strike_creation_fee
+// ---------------------------------------------------------------------------
+
+export interface UpdateStrikeCreationFeeParams {
+  admin: PublicKey;
+  config: PublicKey;
+}
+
+export function buildUpdateStrikeCreationFeeIx(
+  params: UpdateStrikeCreationFeeParams,
+  newFee: BN,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("update_strike_creation_fee");
+  const data = Buffer.concat([disc, newFee.toArrayLike(Buffer, "le", 8)]);
+
+  // Account order matches UpdateStrikeCreationFee struct:
+  //   admin, config
+  const keys = [
+    { pubkey: params.admin, isSigner: true, isWritable: false },
+    { pubkey: params.config, isSigner: false, isWritable: true },
+  ];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Meridian: crank_redeem
+// ---------------------------------------------------------------------------
+
+export interface CrankRedeemParams {
+  caller: PublicKey;
+  config: PublicKey;
+  market: PublicKey;
+  yesMint: PublicKey;
+  noMint: PublicKey;
+  usdcVault: PublicKey;
+}
+
+export function buildCrankRedeemIx(
+  params: CrankRedeemParams,
+  batchSize: number,
+  remainingAccounts: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[],
+): TransactionInstruction {
+  const disc = anchorDiscriminator("crank_redeem");
+  const data = Buffer.concat([disc, Buffer.from([batchSize])]);
+
+  const keys = [
+    { pubkey: params.caller, isSigner: true, isWritable: true },
+    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.market, isSigner: false, isWritable: true },
+    { pubkey: params.yesMint, isSigner: false, isWritable: true },
+    { pubkey: params.noMint, isSigner: false, isWritable: true },
+    { pubkey: params.usdcVault, isSigner: false, isWritable: true },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    ...remainingAccounts,
   ];
 
   return new TransactionInstruction({

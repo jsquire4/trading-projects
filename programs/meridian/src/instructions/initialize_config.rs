@@ -81,6 +81,7 @@ pub fn handle_initialize_config(
     config.bump = ctx.bumps.config;
     config.fee_bps = 0;
     config._padding = [0; 2];
+    config.strike_creation_fee = 0;
 
     msg!(
         "GlobalConfig initialized: admin={}, usdc_mint={}, oracle_program={}, tickers={}",

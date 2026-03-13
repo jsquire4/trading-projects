@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount, Transfer};
+use anchor_spl::token::{self, Approve, Mint, MintTo, Token, TokenAccount, Transfer};
 use crate::error::MeridianError;
 use crate::state::{GlobalConfig, StrikeMarket};
 
@@ -145,6 +145,33 @@ pub fn handle_mint_pair(ctx: Context<MintPair>, quantity: u64) -> Result<()> {
             signer_seeds,
         ),
         quantity,
+    )?;
+
+    // Approve market PDA as delegate on both Yes and No ATAs for auto-redemption.
+    // This allows crank_redeem to burn winning tokens without user interaction.
+    // Users can revoke delegation and redeem manually if preferred.
+    token::approve(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            Approve {
+                to: ctx.accounts.user_yes_ata.to_account_info(),
+                delegate: ctx.accounts.market.to_account_info(),
+                authority: ctx.accounts.user.to_account_info(),
+            },
+        ),
+        u64::MAX,
+    )?;
+
+    token::approve(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            Approve {
+                to: ctx.accounts.user_no_ata.to_account_info(),
+                delegate: ctx.accounts.market.to_account_info(),
+                authority: ctx.accounts.user.to_account_info(),
+            },
+        ),
+        u64::MAX,
     )?;
 
     // Update market state

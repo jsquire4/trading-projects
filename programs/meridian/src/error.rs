@@ -174,4 +174,10 @@ pub enum MeridianError {
     FeeBpsOutOfRange = 130,
     #[msg("Fee vault CPI transfer failed")]
     FeeTransferFailed = 131,
+
+    // === Crank Redeem (on-chain: 6140-6141) ===
+    #[msg("Redemption blocked — override window still active")]
+    CrankRedeemOverrideActive = 140,
+    #[msg("No tokens were redeemed in this batch")]
+    CrankRedeemEmpty = 141,
 }

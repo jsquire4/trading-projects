@@ -16,6 +16,8 @@ pub mod close_market;
 pub mod treasury_redeem;
 pub mod cleanup_market;
 pub mod update_fee_bps;
+pub mod update_strike_creation_fee;
+pub mod crank_redeem;
 
 pub use allocate_order_book::*;
 pub use initialize_config::*;
@@ -35,3 +37,5 @@ pub use close_market::*;
 pub use treasury_redeem::*;
 pub use cleanup_market::*;
 pub use update_fee_bps::*;
+pub use update_strike_creation_fee::*;
+pub use crank_redeem::*;

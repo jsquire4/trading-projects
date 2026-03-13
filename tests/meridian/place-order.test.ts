@@ -673,3 +673,515 @@ describe("Place Order", () => {
     expect(makerUsdcAfter - makerUsdcBefore).to.equal(expectedMakerPayout);
   });
 });
+
+// ===========================================================================
+// FIFO Priority Tests — timestamp-based matching within price levels
+// ===========================================================================
+describe("FIFO Priority (timestamp-based matching)", () => {
+  let ctx: BankrunContext;
+  let usdcMint: PublicKey;
+  let config: PublicKey;
+  let feeVault: PublicKey;
+  let oracleFeed: PublicKey;
+  let ma: MarketAccounts;
+
+  const TICKER = "MSFT";
+  const STRIKE_PRICE = 400_000_000;
+  const PREVIOUS_CLOSE = 390_000_000;
+  let marketCloseUnix: number;
+  const ONE_TOKEN = 1_000_000;
+
+  before(async () => {
+    ctx = await setupBankrun();
+
+    const clock = await ctx.context.banksClient.getClock();
+    marketCloseUnix = Number(clock.unixTimestamp) + 86400;
+
+    usdcMint = await createMockUsdc(ctx.context, ctx.admin);
+    await initializeConfig(ctx.context, ctx.admin, usdcMint, MOCK_ORACLE_PROGRAM_ID);
+    [config] = findGlobalConfig();
+    [feeVault] = findFeeVault();
+    oracleFeed = await initializeOracleFeed(ctx.context, ctx.admin, TICKER);
+    await updateOraclePrice(ctx.context, ctx.admin, oracleFeed, 395_000_000, 500_000);
+
+    ma = await createTestMarket(
+      ctx.context, ctx.admin, config, TICKER,
+      STRIKE_PRICE, marketCloseUnix, PREVIOUS_CLOSE,
+      oracleFeed, usdcMint,
+    );
+  });
+
+  it("fills older order first when two asks exist at the same price", async () => {
+    const provider = new BankrunProvider(ctx.context);
+
+    // Create two sellers with Yes tokens
+    const { user: sellerA, userUsdcAta: sellerAUsdcAta, userYesAta: sellerAYesAta, userNoAta: sellerANoAta } =
+      await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 100_000_000);
+    const { user: sellerB, userUsdcAta: sellerBUsdcAta, userYesAta: sellerBYesAta, userNoAta: sellerBNoAta } =
+      await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 100_000_000);
+
+    // Mint pairs for both sellers to get Yes tokens
+    for (const [user, uAta, yAta, nAta] of [
+      [sellerA, sellerAUsdcAta, sellerAYesAta, sellerANoAta],
+      [sellerB, sellerBUsdcAta, sellerBYesAta, sellerBNoAta],
+    ] as [Keypair, PublicKey, PublicKey, PublicKey][]) {
+      const mintIx = buildMintPairIx({
+        user: user.publicKey,
+        config,
+        market: ma.market,
+        yesMint: ma.yesMint,
+        noMint: ma.noMint,
+        userUsdcAta: uAta,
+        userYesAta: yAta,
+        userNoAta: nAta,
+        usdcVault: ma.usdcVault,
+        quantity: new BN(10 * ONE_TOKEN),
+      });
+      await provider.sendAndConfirm!(new Transaction().add(mintIx), [user]);
+    }
+
+    // Set clock to t=1000 and place order A (ask at price 50)
+    const clock = await ctx.context.banksClient.getClock();
+    const { Clock } = await import("solana-bankrun");
+    ctx.context.setClock(new Clock(
+      clock.slot,
+      clock.epochStartTimestamp,
+      clock.epoch,
+      clock.leaderScheduleEpoch,
+      BigInt(1000),
+    ));
+
+    const askAIx = buildPlaceOrderIx({
+      user: sellerA.publicKey,
+      config,
+      market: ma.market,
+      orderBook: ma.orderBook,
+      usdcVault: ma.usdcVault,
+      escrowVault: ma.escrowVault,
+      yesEscrow: ma.yesEscrow,
+      noEscrow: ma.noEscrow,
+      yesMint: ma.yesMint,
+      noMint: ma.noMint,
+      userUsdcAta: sellerAUsdcAta,
+      userYesAta: sellerAYesAta,
+      userNoAta: sellerANoAta,
+      feeVault,
+      side: SIDE_YES_ASK,
+      price: 50,
+      quantity: new BN(5 * ONE_TOKEN),
+      orderType: ORDER_TYPE_LIMIT,
+      maxFills: 0,
+    });
+    await provider.sendAndConfirm!(new Transaction().add(askAIx), [sellerA]);
+
+    // Set clock to t=2000 and place order B (ask at same price 50)
+    ctx.context.setClock(new Clock(
+      clock.slot + 1n,
+      clock.epochStartTimestamp,
+      clock.epoch,
+      clock.leaderScheduleEpoch,
+      BigInt(2000),
+    ));
+
+    const askBIx = buildPlaceOrderIx({
+      user: sellerB.publicKey,
+      config,
+      market: ma.market,
+      orderBook: ma.orderBook,
+      usdcVault: ma.usdcVault,
+      escrowVault: ma.escrowVault,
+      yesEscrow: ma.yesEscrow,
+      noEscrow: ma.noEscrow,
+      yesMint: ma.yesMint,
+      noMint: ma.noMint,
+      userUsdcAta: sellerBUsdcAta,
+      userYesAta: sellerBYesAta,
+      userNoAta: sellerBNoAta,
+      feeVault,
+      side: SIDE_YES_ASK,
+      price: 50,
+      quantity: new BN(5 * ONE_TOKEN),
+      orderType: ORDER_TYPE_LIMIT,
+      maxFills: 0,
+    });
+    await provider.sendAndConfirm!(new Transaction().add(askBIx), [sellerB]);
+
+    // Verify both orders are on the book
+    const obAcct = await ctx.context.banksClient.getAccount(ma.orderBook);
+    const obData = Buffer.from(obAcct!.data);
+    const slotA = readOrderSlot(obData, 49, 0); // price 50 → index 49
+    const slotB = readOrderSlot(obData, 49, 1);
+    expect(slotA.isActive).to.be.true;
+    expect(slotB.isActive).to.be.true;
+    expect(slotA.owner.toBase58()).to.equal(sellerA.publicKey.toBase58());
+    expect(slotB.owner.toBase58()).to.equal(sellerB.publicKey.toBase58());
+    expect(slotA.timestamp).to.equal(1000);
+    expect(slotB.timestamp).to.equal(2000);
+
+    // Create a buyer that buys only 5 tokens (fills exactly one order)
+    const { user: buyer, userUsdcAta: buyerUsdcAta, userYesAta: buyerYesAta, userNoAta: buyerNoAta } =
+      await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 100_000_000);
+
+    // Set clock forward to avoid "already processed" issues
+    ctx.context.setClock(new Clock(
+      clock.slot + 2n,
+      clock.epochStartTimestamp,
+      clock.epoch,
+      clock.leaderScheduleEpoch,
+      BigInt(3000),
+    ));
+
+    // Buyer places USDC bid at price 50, quantity 5 tokens — should fill against older order A
+    // Only pass sellerA's USDC ATA since FIFO fills sellerA first (exactly 5 tokens = 1 fill)
+    const buyIx = buildPlaceOrderIx({
+      user: buyer.publicKey,
+      config,
+      market: ma.market,
+      orderBook: ma.orderBook,
+      usdcVault: ma.usdcVault,
+      escrowVault: ma.escrowVault,
+      yesEscrow: ma.yesEscrow,
+      noEscrow: ma.noEscrow,
+      yesMint: ma.yesMint,
+      noMint: ma.noMint,
+      userUsdcAta: buyerUsdcAta,
+      userYesAta: buyerYesAta,
+      userNoAta: buyerNoAta,
+      feeVault,
+      side: SIDE_USDC_BID,
+      price: 50,
+      quantity: new BN(5 * ONE_TOKEN),
+      orderType: ORDER_TYPE_MARKET,
+      maxFills: 1,
+      makerAccounts: [sellerAUsdcAta],
+    });
+    await provider.sendAndConfirm!(new Transaction().add(buyIx), [buyer]);
+
+    // Verify: order A (the older one at t=1000) should be filled (inactive)
+    // and order B (newer at t=2000) should remain active
+    const obAcct2 = await ctx.context.banksClient.getAccount(ma.orderBook);
+    const obData2 = Buffer.from(obAcct2!.data);
+
+    const slotA2 = readOrderSlot(obData2, 49, 0);
+    const slotB2 = readOrderSlot(obData2, 49, 1);
+
+    expect(slotA2.isActive).to.be.false;  // Older order filled first
+    expect(slotB2.isActive).to.be.true;   // Newer order still resting
+    expect(slotB2.quantity).to.equal(5 * ONE_TOKEN); // Untouched
+
+    // Verify USDC proceeds went to sellerA (the filled maker), not sellerB
+    const sellerAUsdcAfter = await getTokenBalance(ctx, sellerAUsdcAta);
+    const sellerBUsdcAfter = await getTokenBalance(ctx, sellerBUsdcAta);
+    // sellerA started with 100M, spent 10M on mint, gets USDC from fill
+    // sellerB started with 100M, spent 10M on mint, should NOT have received fill proceeds
+    expect(sellerAUsdcAfter).to.be.greaterThan(90_000_000); // got fill proceeds
+    expect(sellerBUsdcAfter).to.equal(90_000_000); // no fill, just mint cost
+  });
+
+  it("fills original older order before a newer order placed in a cancelled slot", async () => {
+    const provider = new BankrunProvider(ctx.context);
+
+    // Create a SEPARATE market to avoid interference from the first FIFO test's
+    // leftover orders. The USDC BID sweep walks all ask levels from 1 to bid price,
+    // so leftover asks at price 50 from test 1 would match first.
+    const clock0 = await ctx.context.banksClient.getClock();
+    const m2CloseUnix = Number(clock0.unixTimestamp) + 86400;
+
+    const ma2 = await createTestMarket(
+      ctx.context, ctx.admin, config, TICKER,
+      410_000_000, // different strike → unique PDA
+      m2CloseUnix, PREVIOUS_CLOSE,
+      oracleFeed, usdcMint,
+    );
+
+    // Create three sellers
+    const { user: s1, userUsdcAta: s1Usdc, userYesAta: s1Yes, userNoAta: s1No } =
+      await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma2, 100_000_000);
+    const { user: s2, userUsdcAta: s2Usdc, userYesAta: s2Yes, userNoAta: s2No } =
+      await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma2, 100_000_000);
+    const { user: s3, userUsdcAta: s3Usdc, userYesAta: s3Yes, userNoAta: s3No } =
+      await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma2, 100_000_000);
+
+    // Mint pairs for all three sellers
+    for (const [user, uAta, yAta, nAta] of [
+      [s1, s1Usdc, s1Yes, s1No],
+      [s2, s2Usdc, s2Yes, s2No],
+      [s3, s3Usdc, s3Yes, s3No],
+    ] as [Keypair, PublicKey, PublicKey, PublicKey][]) {
+      const mintIx = buildMintPairIx({
+        user: user.publicKey,
+        config,
+        market: ma2.market,
+        yesMint: ma2.yesMint,
+        noMint: ma2.noMint,
+        userUsdcAta: uAta,
+        userYesAta: yAta,
+        userNoAta: nAta,
+        usdcVault: ma2.usdcVault,
+        quantity: new BN(10 * ONE_TOKEN),
+      });
+      await provider.sendAndConfirm!(new Transaction().add(mintIx), [user]);
+    }
+
+    const { Clock } = await import("solana-bankrun");
+    const clock = await ctx.context.banksClient.getClock();
+
+    const PRICE = 60;
+    const LEVEL_IDX = PRICE - 1; // = 59
+
+    // Place order 1 at t=4000
+    ctx.context.setClock(new Clock(
+      clock.slot + 10n,
+      clock.epochStartTimestamp,
+      clock.epoch,
+      clock.leaderScheduleEpoch,
+      BigInt(4000),
+    ));
+
+    const ask1Ix = buildPlaceOrderIx({
+      user: s1.publicKey,
+      config,
+      market: ma2.market,
+      orderBook: ma2.orderBook,
+      usdcVault: ma2.usdcVault,
+      escrowVault: ma2.escrowVault,
+      yesEscrow: ma2.yesEscrow,
+      noEscrow: ma2.noEscrow,
+      yesMint: ma2.yesMint,
+      noMint: ma2.noMint,
+      userUsdcAta: s1Usdc,
+      userYesAta: s1Yes,
+      userNoAta: s1No,
+      feeVault,
+      side: SIDE_YES_ASK,
+      price: PRICE,
+      quantity: new BN(3 * ONE_TOKEN),
+      orderType: ORDER_TYPE_LIMIT,
+      maxFills: 0,
+    });
+    await provider.sendAndConfirm!(new Transaction().add(ask1Ix), [s1]);
+
+    // Place order 2 at t=5000
+    ctx.context.setClock(new Clock(
+      clock.slot + 11n,
+      clock.epochStartTimestamp,
+      clock.epoch,
+      clock.leaderScheduleEpoch,
+      BigInt(5000),
+    ));
+
+    const ask2Ix = buildPlaceOrderIx({
+      user: s2.publicKey,
+      config,
+      market: ma2.market,
+      orderBook: ma2.orderBook,
+      usdcVault: ma2.usdcVault,
+      escrowVault: ma2.escrowVault,
+      yesEscrow: ma2.yesEscrow,
+      noEscrow: ma2.noEscrow,
+      yesMint: ma2.yesMint,
+      noMint: ma2.noMint,
+      userUsdcAta: s2Usdc,
+      userYesAta: s2Yes,
+      userNoAta: s2No,
+      feeVault,
+      side: SIDE_YES_ASK,
+      price: PRICE,
+      quantity: new BN(3 * ONE_TOKEN),
+      orderType: ORDER_TYPE_LIMIT,
+      maxFills: 0,
+    });
+    await provider.sendAndConfirm!(new Transaction().add(ask2Ix), [s2]);
+
+    // Place order 3 at t=6000
+    ctx.context.setClock(new Clock(
+      clock.slot + 12n,
+      clock.epochStartTimestamp,
+      clock.epoch,
+      clock.leaderScheduleEpoch,
+      BigInt(6000),
+    ));
+
+    const ask3Ix = buildPlaceOrderIx({
+      user: s3.publicKey,
+      config,
+      market: ma2.market,
+      orderBook: ma2.orderBook,
+      usdcVault: ma2.usdcVault,
+      escrowVault: ma2.escrowVault,
+      yesEscrow: ma2.yesEscrow,
+      noEscrow: ma2.noEscrow,
+      yesMint: ma2.yesMint,
+      noMint: ma2.noMint,
+      userUsdcAta: s3Usdc,
+      userYesAta: s3Yes,
+      userNoAta: s3No,
+      feeVault,
+      side: SIDE_YES_ASK,
+      price: PRICE,
+      quantity: new BN(3 * ONE_TOKEN),
+      orderType: ORDER_TYPE_LIMIT,
+      maxFills: 0,
+    });
+    await provider.sendAndConfirm!(new Transaction().add(ask3Ix), [s3]);
+
+    // Verify all three orders placed: slots 0, 1, 2
+    let obAcct = await ctx.context.banksClient.getAccount(ma2.orderBook);
+    let obData = Buffer.from(obAcct!.data);
+    expect(readOrderSlot(obData, LEVEL_IDX, 0).isActive).to.be.true;
+    expect(readOrderSlot(obData, LEVEL_IDX, 1).isActive).to.be.true;
+    expect(readOrderSlot(obData, LEVEL_IDX, 2).isActive).to.be.true;
+
+    // Read order 2's orderId for cancellation
+    const order2Id = readOrderSlot(obData, LEVEL_IDX, 1).orderId;
+
+    // Cancel order 2 (the middle one at t=5000), creating a slot gap
+    ctx.context.setClock(new Clock(
+      clock.slot + 13n,
+      clock.epochStartTimestamp,
+      clock.epoch,
+      clock.leaderScheduleEpoch,
+      BigInt(6500),
+    ));
+
+    const cancelIx = buildCancelOrderIx({
+      user: s2.publicKey,
+      config,
+      market: ma2.market,
+      orderBook: ma2.orderBook,
+      escrowVault: ma2.escrowVault,
+      yesEscrow: ma2.yesEscrow,
+      noEscrow: ma2.noEscrow,
+      userUsdcAta: s2Usdc,
+      userYesAta: s2Yes,
+      userNoAta: s2No,
+      price: PRICE,
+      orderId: new BN(order2Id),
+    });
+    await provider.sendAndConfirm!(new Transaction().add(cancelIx), [s2]);
+
+    // Verify slot 1 is now inactive (cancelled)
+    obAcct = await ctx.context.banksClient.getAccount(ma2.orderBook);
+    obData = Buffer.from(obAcct!.data);
+    expect(readOrderSlot(obData, LEVEL_IDX, 1).isActive).to.be.false;
+
+    // Place a new order from s2 at t=7000 — should take the cancelled slot (slot 1)
+    ctx.context.setClock(new Clock(
+      clock.slot + 14n,
+      clock.epochStartTimestamp,
+      clock.epoch,
+      clock.leaderScheduleEpoch,
+      BigInt(7000),
+    ));
+
+    const ask4Ix = buildPlaceOrderIx({
+      user: s2.publicKey,
+      config,
+      market: ma2.market,
+      orderBook: ma2.orderBook,
+      usdcVault: ma2.usdcVault,
+      escrowVault: ma2.escrowVault,
+      yesEscrow: ma2.yesEscrow,
+      noEscrow: ma2.noEscrow,
+      yesMint: ma2.yesMint,
+      noMint: ma2.noMint,
+      userUsdcAta: s2Usdc,
+      userYesAta: s2Yes,
+      userNoAta: s2No,
+      feeVault,
+      side: SIDE_YES_ASK,
+      price: PRICE,
+      quantity: new BN(3 * ONE_TOKEN),
+      orderType: ORDER_TYPE_LIMIT,
+      maxFills: 0,
+    });
+    await provider.sendAndConfirm!(new Transaction().add(ask4Ix), [s2]);
+
+    // Verify the new order is active and has timestamp 7000
+    obAcct = await ctx.context.banksClient.getAccount(ma2.orderBook);
+    obData = Buffer.from(obAcct!.data);
+
+    // Find which slot the new order took (should be slot 1, the cancelled gap)
+    let newSlotIdx = -1;
+    for (let i = 0; i < 32; i++) {
+      const s = readOrderSlot(obData, LEVEL_IDX, i);
+      if (s.isActive && s.owner.toBase58() === s2.publicKey.toBase58()) {
+        newSlotIdx = i;
+        break;
+      }
+    }
+    expect(newSlotIdx).to.be.greaterThanOrEqual(0);
+    const newSlot = readOrderSlot(obData, LEVEL_IDX, newSlotIdx);
+    expect(newSlot.timestamp).to.equal(7000);
+
+    // Now create a buyer and fill exactly one order
+    // FIFO picks s1 (t=4000) first, so s1Usdc must be the first remaining account
+    const { user: buyer, userUsdcAta: buyerUsdc, userYesAta: buyerYes, userNoAta: buyerNo } =
+      await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma2, 100_000_000);
+
+    ctx.context.setClock(new Clock(
+      clock.slot + 15n,
+      clock.epochStartTimestamp,
+      clock.epoch,
+      clock.leaderScheduleEpoch,
+      BigInt(8000),
+    ));
+
+    const buyIx = buildPlaceOrderIx({
+      user: buyer.publicKey,
+      config,
+      market: ma2.market,
+      orderBook: ma2.orderBook,
+      usdcVault: ma2.usdcVault,
+      escrowVault: ma2.escrowVault,
+      yesEscrow: ma2.yesEscrow,
+      noEscrow: ma2.noEscrow,
+      yesMint: ma2.yesMint,
+      noMint: ma2.noMint,
+      userUsdcAta: buyerUsdc,
+      userYesAta: buyerYes,
+      userNoAta: buyerNo,
+      feeVault,
+      side: SIDE_USDC_BID,
+      price: PRICE,
+      quantity: new BN(3 * ONE_TOKEN),
+      orderType: ORDER_TYPE_MARKET,
+      maxFills: 1, // only fill one order
+      makerAccounts: [s1Usdc],
+    });
+    await provider.sendAndConfirm!(new Transaction().add(buyIx), [buyer]);
+
+    // Verify: order 1 (t=4000, the oldest) should be filled
+    obAcct = await ctx.context.banksClient.getAccount(ma2.orderBook);
+    obData = Buffer.from(obAcct!.data);
+
+    // Find s1's slot by owner key (more robust than hardcoding slot 0)
+    let s1SlotActive = false;
+    for (let i = 0; i < 32; i++) {
+      const s = readOrderSlot(obData, LEVEL_IDX, i);
+      if (s.owner.toBase58() === s1.publicKey.toBase58()) {
+        s1SlotActive = s.isActive;
+        break;
+      }
+    }
+    expect(s1SlotActive).to.be.false; // Oldest order (t=4000) filled first
+
+    // The new order at t=7000 (slot 1) and order 3 at t=6000 (slot 2) should still be active
+    let activeOrders = 0;
+    for (let i = 0; i < 32; i++) {
+      const s = readOrderSlot(obData, LEVEL_IDX, i);
+      if (s.isActive) activeOrders++;
+    }
+    expect(activeOrders).to.equal(2); // Two orders remaining (t=6000 and t=7000)
+
+    // Verify USDC proceeds went to s1 (the filled maker), not s2 or s3
+    const s1UsdcAfter = await getTokenBalance(ctx, s1Usdc);
+    const s2UsdcAfter = await getTokenBalance(ctx, s2Usdc);
+    const s3UsdcAfter = await getTokenBalance(ctx, s3Usdc);
+    // s1 started with 100M, spent 10M on mint, gets USDC from fill
+    expect(s1UsdcAfter).to.be.greaterThan(90_000_000); // got fill proceeds
+    // s2 cancelled and re-placed (mint cost + escrow movements), s3 just minted + escrowed
+    // Both should NOT have received fill proceeds from this specific buy
+    expect(s3UsdcAfter).to.equal(90_000_000); // no fill, just mint cost
+  });
+});

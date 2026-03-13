@@ -28,6 +28,8 @@ pub use instructions::close_market::*;
 pub use instructions::treasury_redeem::*;
 pub use instructions::cleanup_market::*;
 pub use instructions::update_fee_bps::*;
+pub use instructions::update_strike_creation_fee::*;
+pub use instructions::crank_redeem::*;
 
 declare_id!("7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth");
 
@@ -155,5 +157,19 @@ pub mod meridian {
 
     pub fn update_fee_bps(ctx: Context<UpdateFeeBps>, new_fee_bps: u16) -> Result<()> {
         instructions::update_fee_bps::handle_update_fee_bps(ctx, new_fee_bps)
+    }
+
+    pub fn update_strike_creation_fee(
+        ctx: Context<UpdateStrikeCreationFee>,
+        new_fee: u64,
+    ) -> Result<()> {
+        instructions::update_strike_creation_fee::handle_update_strike_creation_fee(ctx, new_fee)
+    }
+
+    pub fn crank_redeem<'info>(
+        ctx: Context<'_, '_, '_, 'info, CrankRedeem<'info>>,
+        batch_size: u8,
+    ) -> Result<()> {
+        instructions::crank_redeem::handle_crank_redeem(ctx, batch_size)
     }
 }

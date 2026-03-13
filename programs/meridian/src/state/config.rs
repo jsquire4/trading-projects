@@ -28,6 +28,8 @@ pub struct GlobalConfig {
     pub fee_bps: u16,
     /// Alignment padding
     pub _padding: [u8; 2],
+    /// Fee in USDC lamports charged to non-admin users creating strike markets
+    pub strike_creation_fee: u64,
 }
 
 impl GlobalConfig {
@@ -36,8 +38,8 @@ impl GlobalConfig {
     pub const FEE_VAULT_SEED: &'static [u8] = b"fee_vault";
 
     // Calculate exact size: verify with std::mem::size_of after compilation
-    // 3×32 (Pubkeys) + 3×8 (u64s) + 56 (tickers) + 4×1 (bool/u8s) + 2 (fee_bps) + 2 (padding) = 184
-    pub const LEN: usize = 32 + 32 + 32 + 8 + 8 + 8 + 1 + 1 + 56 + 1 + 1 + 2 + 2; // 184 bytes
+    // 3×32 (Pubkeys) + 4×8 (u64s) + 56 (tickers) + 4×1 (bool/u8s) + 2 (fee_bps) + 2 (padding) = 192
+    pub const LEN: usize = 32 + 32 + 32 + 8 + 8 + 8 + 1 + 1 + 56 + 1 + 1 + 2 + 2 + 8; // 192 bytes
 
     pub fn is_valid_ticker(&self, ticker: &[u8; 8]) -> bool {
         self.tickers[..(self.ticker_count as usize).min(self.tickers.len())]

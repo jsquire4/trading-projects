@@ -233,7 +233,10 @@ fn match_against_bids(
 }
 
 /// Core matching at a price level — scans slots for active orders of the given side.
-/// Uses time priority (lower slot index = earlier placement = higher priority).
+/// Uses FIFO time priority: for each fill, finds the active order with the lowest
+/// timestamp (oldest order first), with ties broken by lowest slot index.
+/// This ensures correct price-time priority even when cancelled slots are reused
+/// by newer orders.
 fn match_at_level_for_side(
     book: &mut OrderBook,
     taker_side: u8,
@@ -244,9 +247,7 @@ fn match_at_level_for_side(
     max_fills: u8,
     is_merge: bool,
 ) {
-    let level = &mut book.levels[level_idx];
-
-    for slot_idx in 0..MAX_ORDERS_PER_LEVEL {
+    loop {
         if result.remaining_quantity < MIN_ORDER_SIZE {
             break;
         }
@@ -254,27 +255,31 @@ fn match_at_level_for_side(
             break;
         }
 
-        let order = &level.orders[slot_idx];
-        if !order.active() {
-            continue;
-        }
-        if order.side != resting_side {
-            continue;
+        // Find the active order with the lowest timestamp (FIFO priority)
+        let level = &book.levels[level_idx];
+        let mut best_slot: Option<usize> = None;
+        let mut best_ts: i64 = i64::MAX;
+
+        for slot_idx in 0..MAX_ORDERS_PER_LEVEL {
+            let order = &level.orders[slot_idx];
+            if !order.active() || order.side != resting_side {
+                continue;
+            }
+            if order.timestamp < best_ts {
+                best_ts = order.timestamp;
+                best_slot = Some(slot_idx);
+            }
         }
 
-        // Self-trade allowed per spec (documented limitation)
+        let slot_idx = match best_slot {
+            Some(idx) => idx,
+            None => break, // No more matching orders at this level
+        };
+
+        let order = &book.levels[level_idx].orders[slot_idx];
 
         // Calculate fill quantity
         let fill_qty = result.remaining_quantity.min(order.quantity);
-        if fill_qty < MIN_ORDER_SIZE && fill_qty < order.quantity {
-            // Don't create dust fills — skip if the remaining amount is below min
-            // and wouldn't fully fill the resting order.
-            // Note: this continue is effectively unreachable because the loop breaks
-            // when remaining_quantity < MIN_ORDER_SIZE (checked above), meaning
-            // fill_qty = min(remaining, order.qty) < MIN_ORDER_SIZE only when
-            // remaining < MIN_ORDER_SIZE, which already triggered the break.
-            continue;
-        }
 
         // Record the fill
         result.fills.push(Fill {
@@ -290,6 +295,7 @@ fn match_at_level_for_side(
         });
 
         // Update the resting order
+        let level = &mut book.levels[level_idx];
         let order_mut = &mut level.orders[slot_idx];
         if fill_qty >= order_mut.quantity {
             // Fully filled — deactivate

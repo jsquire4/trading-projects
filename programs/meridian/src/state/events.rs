@@ -35,3 +35,10 @@ pub struct CrankCancelEvent {
     pub market: Pubkey,
     pub cancelled_count: u32,
 }
+
+#[event]
+pub struct CrankRedeemEvent {
+    pub market: Pubkey,
+    pub redeemed_count: u32,
+    pub total_usdc_redeemed: u64,
+}

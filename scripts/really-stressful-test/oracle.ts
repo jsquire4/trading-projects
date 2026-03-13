@@ -10,7 +10,7 @@ import type { SharedContext } from "./types";
 import { CONFIDENCE_BPS_OF_PRICE } from "./config";
 import { SeededRng, gbmStep, hashSeed, BASE_PRICES } from "../../services/shared/src/synthetic-config";
 import { buildUpdatePriceIx } from "../../tests/helpers/instructions";
-import { sendTx, findPriceFeed } from "../stress-test/helpers";
+import { sendTx, findPriceFeed } from "./helpers";
 
 // ---------------------------------------------------------------------------
 // OracleSimulator

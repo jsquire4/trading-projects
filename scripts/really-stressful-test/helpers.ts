@@ -1,6 +1,9 @@
 /**
  * helpers.ts — Wallet funding, market state reading, order book parsing,
- * and PDA derivation helpers for the stress test.
+ * and transaction helpers for the Really Stressful Test.
+ *
+ * Extracted from scripts/stress-test/helpers.ts when the older stress tests
+ * were removed.
  */
 
 import {
@@ -12,28 +15,18 @@ import {
 } from "@solana/web3.js";
 import type { Transaction } from "@solana/web3.js";
 import {
-  getAssociatedTokenAddressSync,
   getOrCreateAssociatedTokenAccount,
   mintTo,
   getAccount,
 } from "@solana/spl-token";
 import {
-  padTicker,
-  findStrikeMarket,
-  findYesMint,
-  findNoMint,
-  findUsdcVault,
-  findEscrowVault,
-  findYesEscrow,
-  findNoEscrow,
-  findOrderBook,
   findPriceFeed,
   findGlobalConfig,
   findTreasury,
   findFeeVault,
+  padTicker,
   MERIDIAN_PROGRAM_ID,
 } from "../../services/shared/src/pda";
-import type { MarketDef } from "./config";
 
 // Re-export PDA finders for convenience
 export {
@@ -44,59 +37,6 @@ export {
   padTicker,
   MERIDIAN_PROGRAM_ID,
 };
-
-// ---------------------------------------------------------------------------
-// Market addresses type
-// ---------------------------------------------------------------------------
-
-export interface MarketAddresses {
-  def: MarketDef;
-  market: PublicKey;
-  yesMint: PublicKey;
-  noMint: PublicKey;
-  usdcVault: PublicKey;
-  escrowVault: PublicKey;
-  yesEscrow: PublicKey;
-  noEscrow: PublicKey;
-  orderBook: PublicKey;
-  oracleFeed: PublicKey;
-}
-
-// ---------------------------------------------------------------------------
-// PDA derivation
-// ---------------------------------------------------------------------------
-
-/**
- * Derive all PDA addresses for a market given its definition and
- * the market_close_unix used to compute expiry_day.
- */
-export function deriveMarketAddresses(
-  def: MarketDef,
-  marketCloseUnix: number,
-): MarketAddresses {
-  const [market] = findStrikeMarket(def.ticker, def.strikeLamports, marketCloseUnix);
-  const [yesMint] = findYesMint(market);
-  const [noMint] = findNoMint(market);
-  const [usdcVault] = findUsdcVault(market);
-  const [escrowVault] = findEscrowVault(market);
-  const [yesEscrow] = findYesEscrow(market);
-  const [noEscrow] = findNoEscrow(market);
-  const [orderBook] = findOrderBook(market);
-  const [oracleFeed] = findPriceFeed(def.ticker);
-
-  return {
-    def,
-    market,
-    yesMint,
-    noMint,
-    usdcVault,
-    escrowVault,
-    yesEscrow,
-    noEscrow,
-    orderBook,
-    oracleFeed,
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Wallet funding

@@ -6,7 +6,7 @@
 import { Keypair, PublicKey, Transaction } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import type { SharedContext, AgentState, AgentType, ErrorEntry, MarketContext } from "../types";
-import { sendTx } from "../../stress-test/helpers";
+import { sendTx } from "../helpers";
 
 // ---------------------------------------------------------------------------
 // BaseAgent

@@ -27,7 +27,7 @@ import {
   buildUpdatePriceIx,
   MERIDIAN_PROGRAM_ID,
 } from "../../tests/helpers/instructions";
-import { sendTx, parseOrderBook, readMarketState } from "../stress-test/helpers";
+import { sendTx, parseOrderBook, readMarketState } from "./helpers";
 import type { SharedContext, ActResult, ErrorEntry, MarketContext } from "./types";
 import { MAX_FILLS, CONFIDENCE_BPS_OF_PRICE, DEFAULT_MINT_QUANTITY } from "./config";
 

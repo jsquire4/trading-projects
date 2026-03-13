@@ -16,7 +16,7 @@ import {
   readMarketState,
   readVaultBalance,
   parseOrderBook,
-} from "../stress-test/helpers";
+} from "./helpers";
 
 // ─── Day-end verification ─────────────────────────────────────────────────────
 

@@ -58,10 +58,10 @@ local:
 local-stop:
 	./scripts/local-stack.sh --stop
 
-# Stress test against local validator
+# E2E stress test against local validator
 stress-test:
-	@echo "Running Meridian stress test against local validator..."
-	npx tsx scripts/stress-test.ts
+	@echo "Running Really Stressful Test against local validator..."
+	npx tsx scripts/really-stressful-test/index.ts --seed 42 --agents 20 --days 2
 
 # Validate running stack (smoke test)
 validate:

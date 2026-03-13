@@ -9,7 +9,7 @@ import BN from "bn.js";
 import { BaseAgent } from "./base-agent";
 import type { MarketContext } from "../types";
 import { buildMintPairIx, buildPlaceOrderIx } from "../../../tests/helpers/instructions";
-import { parseOrderBook } from "../../stress-test/helpers";
+import { parseOrderBook } from "../helpers";
 import { DEFAULT_MINT_QUANTITY, MAX_FILLS } from "../config";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 

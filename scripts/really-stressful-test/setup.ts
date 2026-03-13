@@ -34,7 +34,7 @@ function loadEnv(envPath: string): void {
 import type { RunConfig, SharedContext, AgentState, Metrics } from "./types";
 import { SOL_PER_AGENT, USDC_PER_AGENT } from "./config";
 
-import { fundWallet, batch } from "../stress-test/helpers";
+import { fundWallet, batch } from "./helpers";
 import {
   findGlobalConfig,
   findFeeVault,
@@ -42,7 +42,7 @@ import {
   findPriceFeed,
 } from "../../services/shared/src/pda";
 import { buildInitializeFeedIx } from "../../tests/helpers/instructions";
-import { sendTx } from "../stress-test/helpers";
+import { sendTx } from "./helpers";
 import { SeededRng, hashSeed } from "../../services/shared/src/synthetic-config";
 
 // ── Setup ──────────────────────────────────────────────────────────────────

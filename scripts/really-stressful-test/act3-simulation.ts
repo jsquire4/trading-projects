@@ -66,7 +66,7 @@ import {
   parseOrderBook,
   readMarketState,
   findPriceFeed,
-} from "../stress-test/helpers";
+} from "./helpers";
 import {
   findStrikeMarket,
   findYesMint,

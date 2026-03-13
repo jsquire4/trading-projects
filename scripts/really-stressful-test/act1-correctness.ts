@@ -46,7 +46,7 @@ import {
   batch,
   parseOrderBook,
   readMarketState,
-} from "../../scripts/stress-test/helpers";
+} from "./helpers";
 
 import {
   findStrikeMarket,

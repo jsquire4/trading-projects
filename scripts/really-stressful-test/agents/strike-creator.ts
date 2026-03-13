@@ -41,7 +41,7 @@ import {
   ALT_WARMUP_SLEEP_MS,
   DEFAULT_MINT_QUANTITY,
 } from "../config";
-import { sendTx, batch } from "../../stress-test/helpers";
+import { sendTx, batch } from "../helpers";
 
 // ---------------------------------------------------------------------------
 // Helpers

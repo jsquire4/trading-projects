@@ -9,7 +9,6 @@ import {
   LAMPORTS_PER_SOL,
   Transaction,
 } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import * as fs from "fs";
 import * as path from "path";
 // Manual .env loading (no dotenv dependency)
@@ -107,11 +106,15 @@ export async function setupTestEnvironment(config: RunConfig): Promise<SharedCon
     }
   }
 
-  // 6. Generate agent keypairs
-  const rng = new SeededRng(config.seed);
+  // 6. Generate agent keypairs (seeded for determinism)
   const agentKeypairs: Keypair[] = [];
   for (let i = 0; i < config.numAgents; i++) {
-    agentKeypairs.push(Keypair.generate());
+    const agentRng = new SeededRng(hashSeed(config.seed, `keypair-${i}`));
+    const secretBytes = new Uint8Array(32);
+    for (let j = 0; j < 32; j++) {
+      secretBytes[j] = Math.floor(agentRng.next() * 256);
+    }
+    agentKeypairs.push(Keypair.fromSeed(secretBytes));
   }
 
   // 7. Fund agents in batches

@@ -307,7 +307,7 @@ async function test5(ctx: SharedContext, m: MarketContext): Promise<TestResult> 
     priceFeed: m2.oracleFeed,
     price: bn(winPrice),
     confidence,
-    timestamp: new BN(Math.floor(Date.now() / 1000)),
+    timestamp: new BN(Math.floor(Date.now() / 1000) - 2),
   });
   await sendTx(ctx.connection, new Transaction().add(updateIx), [ctx.admin]);
 
@@ -378,7 +378,7 @@ async function test6(ctx: SharedContext, m: MarketContext): Promise<TestResult> 
     priceFeed: m3.oracleFeed,
     price: bn(winPrice),
     confidence,
-    timestamp: new BN(Math.floor(Date.now() / 1000)),
+    timestamp: new BN(Math.floor(Date.now() / 1000) - 2),
   });
   await sendTx(ctx.connection, new Transaction().add(updateIx), [ctx.admin]);
 
@@ -437,9 +437,9 @@ async function test7(ctx: SharedContext, m: MarketContext): Promise<TestResult> 
   if (restingBids.length === 0) return { passed: false, detail: "No resting bid found at 50c" };
 
   // Agent 15 places crossing ask (side=1) at 50c, maxFills=1
-  // makerAccounts for crossing ask (side=1): maker's USDC ATA
+  // makerAccounts for crossing ask against side=0 bids: maker's Yes ATA (they receive Yes tokens)
   const askIx = buildPlaceOrderIx(
-    placeOrderParams(ctx, 15, m, a15Atas, 1, 50, QTY, 1, [a14Atas.usdc]),
+    placeOrderParams(ctx, 15, m, a15Atas, 1, 50, QTY, 1, [a14Atas.yes]),
   );
   await sendTx(ctx.connection, new Transaction().add(askIx), [a15.keypair]);
 

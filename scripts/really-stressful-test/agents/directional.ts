@@ -164,8 +164,9 @@ export class Directional extends BaseAgent {
             const orders = parseOrderBook(Buffer.from(obAcct.data));
             const bids = orders.filter((o) => o.side === 0 && o.isActive);
 
+            // Crossing side=1 (Sell Yes) against side=0 bids: maker receives Yes tokens
             const makerAccounts = bids.slice(0, MAX_FILLS).map((bid) =>
-              getAssociatedTokenAddressSync(this.ctx.usdcMint, bid.owner),
+              getAssociatedTokenAddressSync(m.yesMint, bid.owner),
             );
 
             const exitIx = buildPlaceOrderIx({

@@ -16,17 +16,13 @@
 
 import {
   Transaction,
-  Keypair,
   PublicKey,
   AddressLookupTableProgram,
   SystemProgram,
-  LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
 import {
   getAssociatedTokenAddressSync,
   getAccount,
-  getMint,
-  TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import BN from "bn.js";
 
@@ -63,14 +59,12 @@ import {
   buildCleanupMarketIx,
   buildUpdatePriceIx,
   padTicker,
-  MERIDIAN_PROGRAM_ID,
 } from "../../tests/helpers/instructions";
 import {
   sendTx,
   batch,
   parseOrderBook,
   readMarketState,
-  readVaultBalance,
   findPriceFeed,
 } from "../stress-test/helpers";
 import {
@@ -83,7 +77,7 @@ import {
   findNoEscrow,
   findOrderBook,
 } from "../../services/shared/src/pda";
-import { BASE_PRICES } from "../../services/shared/src/synthetic-config";
+import { BASE_PRICES, SeededRng, hashSeed } from "../../services/shared/src/synthetic-config";
 
 import { OracleSimulator } from "./oracle";
 import { MetricsCollector } from "./metrics";
@@ -539,6 +533,7 @@ export async function runAct3(ctx: SharedContext): Promise<ActResult> {
   });
 
   const oracle = new OracleSimulator(ctx.config.tickers, ctx.config.seed);
+  const loopRng = new SeededRng(hashSeed(ctx.config.seed, "trading-loop"));
   const metricsCollector = new MetricsCollector();
   // Wire metrics collector data into ctx.metrics
   ctx.metrics = metricsCollector.data;
@@ -575,12 +570,12 @@ export async function runAct3(ctx: SharedContext): Promise<ActResult> {
     const ordersBeforeTrading = ctx.agents.reduce((s, a) => s + a.ordersPlaced, 0);
 
     while (Date.now() < tradingEndsMs) {
-      // Pick random agent
-      const agentIdx = Math.floor(Math.random() * agents.length);
-      await agents[agentIdx].act(ctx.markets, oracle.getAllPrices());
+      // Pick random agent (seeded for determinism) — only pass current day's markets
+      const agentIdx = Math.floor(loopRng.next() * agents.length);
+      await agents[agentIdx].act(dayMarkets, oracle.getAllPrices());
 
       // Periodically step oracle prices
-      if (Math.random() < 0.05) {
+      if (loopRng.next() < 0.05) {
         for (const ticker of ctx.config.tickers) {
           oracle.stepPrice(ticker);
         }

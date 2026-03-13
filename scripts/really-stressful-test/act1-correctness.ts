@@ -12,12 +12,10 @@ import {
   PublicKey,
   AddressLookupTableProgram,
   SystemProgram,
-  LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
 import {
   getAssociatedTokenAddressSync,
   getOrCreateAssociatedTokenAccount,
-  TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import BN from "bn.js";
 
@@ -41,7 +39,6 @@ import {
   buildCrankRedeemIx,
   buildUpdatePriceIx,
   padTicker,
-  MERIDIAN_PROGRAM_ID,
 } from "../../tests/helpers/instructions";
 
 import {
@@ -930,8 +927,8 @@ async function act1Redeem(
   try {
     const state = await readMarketState(connection, m.market);
     if (state && state.isSettled) {
-      // outcome: 0 = Yes wins (price >= strike), 1 = No wins
-      const winMint = state.outcome === 0 ? m.yesMint : m.noMint;
+      // outcome: 1 = Yes wins (price >= strike), 2 = No wins
+      const winMint = state.outcome === 1 ? m.yesMint : m.noMint;
 
       // Build remaining accounts: pairs of [winningTokenATA, usdcATA] per holder
       const holders: PublicKey[] = [];

@@ -13,7 +13,7 @@ import type { Metrics, TpsPoint } from "./types";
 export class MetricsCollector {
   readonly data: Metrics;
   private windowStart: number;
-  private windowCount: number;
+  private lastLatencyCount: number;
 
   constructor() {
     this.data = {
@@ -29,7 +29,7 @@ export class MetricsCollector {
       instructionTypes: new Set<string>(),
     };
     this.windowStart = Date.now();
-    this.windowCount = 0;
+    this.lastLatencyCount = 0;
   }
 
   /**
@@ -43,7 +43,6 @@ export class MetricsCollector {
   ): void {
     this.data.latencies.push(latencyMs);
     this.data.instructionTypes.add(instructionName);
-    this.windowCount++;
 
     if (success) {
       this.data.orderResults.success++;
@@ -70,18 +69,17 @@ export class MetricsCollector {
   flushTpsWindow(): void {
     const now = Date.now();
     const elapsedSec = (now - this.windowStart) / 1000;
+    // Count transactions since last flush using latencies array length
+    const currentCount = this.data.latencies.length;
+    const windowTxns = currentCount - this.lastLatencyCount;
 
     if (elapsedSec > 0) {
-      const tps = this.windowCount / elapsedSec;
-      const point: TpsPoint = {
-        timestamp: now,
-        tps,
-      };
-      this.data.tpsTimeline.push(point);
+      const tps = windowTxns / elapsedSec;
+      this.data.tpsTimeline.push({ timestamp: now, tps });
     }
 
     this.windowStart = now;
-    this.windowCount = 0;
+    this.lastLatencyCount = currentCount;
   }
 
   /**

@@ -37,9 +37,9 @@ function PositionCard({ position, totalCost }: { position: Position; totalCost: 
     return (book.yesView.bestBid + book.yesView.bestAsk) / 2;
   }, [book]);
 
-  const yesValue = midPrice ? (yesBal * midPrice) / 100 : null;
-  const noValue = midPrice ? (noBal * (100 - midPrice)) / 100 : null;
-  const totalValue = (yesValue ?? 0) + (noValue ?? 0);
+  const yesValue = midPrice !== null ? (yesBal * midPrice) / 100 : null;
+  const noValue = midPrice !== null ? (noBal * (100 - midPrice)) / 100 : null;
+  const totalValue = yesValue !== null && noValue !== null ? yesValue + noValue : null;
 
   const formatCountdown = (secs: number) => {
     if (secs <= 0) return "Expired";
@@ -64,8 +64,8 @@ function PositionCard({ position, totalCost }: { position: Position; totalCost: 
 
   const minutesLeft = Math.max(0, remaining / 60);
   const side = yesBal >= noBal ? "yes" : "no";
-  const pnl = totalValue - totalCost;
-  const positionInsight = interpretPosition(side, pnl, minutesLeft);
+  const pnl = totalValue !== null ? totalValue - totalCost : null;
+  const positionInsight = pnl !== null ? interpretPosition(side, pnl, minutesLeft) : null;
 
   const handleRedeem = useCallback(async () => {
     if (!program || !publicKey || winnerBal <= BigInt(0)) return;
@@ -153,7 +153,11 @@ function PositionCard({ position, totalCost }: { position: Position; totalCost: 
         <div>
           <span className="text-white/40">{isSettled ? "Value" : "Est. Value"}</span>
           <div className="text-white font-medium tabular-nums">
-            ${(settledValue ?? totalValue).toFixed(2)}
+            {settledValue !== null
+              ? `$${settledValue.toFixed(2)}`
+              : totalValue !== null
+              ? `$${totalValue.toFixed(2)}`
+              : "—"}
           </div>
         </div>
         {!isSettled && midPrice && (

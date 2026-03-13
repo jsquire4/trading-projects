@@ -21,7 +21,7 @@ const WalletMultiButton = dynamic(
 export function WalletButton({ compact = false }: { compact?: boolean }) {
   const { connected, publicKey, wallet } = useWallet();
   const { setVisible } = useWalletModal();
-  const hasConnectedRef = useRef(false);
+  const hasConnectedRef = useRef(connected);
 
   // Track successful connections
   useEffect(() => {

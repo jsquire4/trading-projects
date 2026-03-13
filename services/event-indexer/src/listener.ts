@@ -186,6 +186,10 @@ export function createLiveListener(
 
             const events = parseEventsFromLogs(coder, logMessages, programIdStr);
 
+            // Advance checkpoint for all processed txs, even those with no events,
+            // so we don't re-fetch them on restart.
+            upsertCheckpoint(signature, slot);
+
             if (events.length === 0) return;
 
             // Assign sequence numbers per type+market combo within this tx
@@ -205,8 +209,6 @@ export function createLiveListener(
               };
             });
             insertEventsBatch(rows);
-
-            upsertCheckpoint(signature, slot);
 
             log.info(`Indexed ${events.length} event(s) from live tx`, {
               signature: signature.slice(0, 16) + "...",

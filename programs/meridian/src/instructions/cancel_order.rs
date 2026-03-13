@@ -93,7 +93,9 @@ pub fn handle_cancel_order(
     // Refund based on order side
     match cancelled.side {
         SIDE_USDC_BID => {
-            // Refund USDC: quantity was escrowed as quantity * price / 100
+            // Refund USDC: floor(quantity * price / 100).
+            // Escrow uses ceiling division (escrow.rs), so refund ≤ escrowed amount.
+            // Max dust retained per cancel: 99 lamports (< $0.0001). Swept at market close.
             let refund = cancelled
                 .quantity
                 .checked_mul(cancelled.price as u64)

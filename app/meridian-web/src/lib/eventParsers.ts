@@ -64,6 +64,7 @@ export function parseFillEvent(event: IndexedEvent): ParsedFill | null {
     if (typeof maker !== "string" || typeof taker !== "string") return null;
 
     const price = Number(d.price);
+    // Number() safe for quantities under 2^53 (~9B tokens at 6 decimals). BigInt migration deferred.
     const quantity = Number(d.quantity);
     const makerSide = Number(d.makerSide);
     const takerSide = Number(d.takerSide);

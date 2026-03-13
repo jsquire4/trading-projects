@@ -134,8 +134,9 @@ export function useIndexedEvents(options?: {
   type?: string;
   market?: string;
   limit?: number;
+  enabled?: boolean;
 }) {
-  const { type, market, limit: rawLimit = 100 } = options ?? {};
+  const { type, market, limit: rawLimit = 100, enabled } = options ?? {};
   const limit = Math.min(rawLimit, 1000); // Cap at 1000 to prevent excessive fetches (#12)
 
   return useQuery<IndexedEvent[]>({
@@ -152,6 +153,7 @@ export function useIndexedEvents(options?: {
       // API returns { events: [...], count, limit, offset } — unwrap
       return Array.isArray(json) ? json : (json.events ?? []);
     },
+    enabled: enabled ?? true,
     staleTime: 30_000,
     refetchInterval: 30_000,
   });
@@ -172,6 +174,7 @@ export function useFillEvents(market: string | null, limit: number = 200) {
     type: "fill",
     market: market ?? undefined,
     limit,
+    enabled: !!market,
   });
 }
 

@@ -73,7 +73,7 @@ export async function getIntradaySnapshots(
   dayStartMs: number,
 ): Promise<PnlSnapshot[]> {
   const db = await getDb();
-  const range = IDBKeyRange.bound([wallet, dayStartMs], [wallet, Infinity]);
+  const range = IDBKeyRange.bound([wallet, dayStartMs], [wallet, Number.MAX_SAFE_INTEGER]);
   return db.getAllFromIndex("snapshots", "by-wallet-ts", range);
 }
 

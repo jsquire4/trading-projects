@@ -5,7 +5,7 @@ use crate::error::MeridianError;
 use crate::state::{OrderBook, StrikeMarket};
 
 /// Total space for the OrderBook account (discriminator + data).
-const ORDER_BOOK_TOTAL_SPACE: usize = 8 + OrderBook::LEN; // 127,568
+const ORDER_BOOK_TOTAL_SPACE: usize = 8 + OrderBook::LEN; // 254,288
 
 /// Maximum growth per instruction (Solana runtime limit).
 const MAX_GROWTH: usize = 10_240;
@@ -20,7 +20,7 @@ const MAX_GROWTH: usize = 10_240;
 ///   - Next calls:  grows via `realloc` by up to 10KB each
 ///   - Final call:  no-op once full size is reached
 ///
-/// Call this ~13 times before `create_strike_market`.
+/// Call this ~25 times before `create_strike_market`.
 /// Multiple calls can be batched into 2-3 transactions.
 #[derive(Accounts)]
 pub struct AllocateOrderBook<'info> {

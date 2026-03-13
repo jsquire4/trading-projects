@@ -50,9 +50,12 @@ async function fetchClosingPrices(
   const prices = new Map<string, number>();
 
   for (const q of quotes) {
-    // Use last trade price (Tradier Quote type provides `last`, not `close`)
-    prices.set(q.symbol, q.last);
-    log.info(`${q.symbol}: $${q.last}`);
+    // Prefer prevclose (prior day's closing price) for settlement accuracy.
+    // Fall back to last trade price if prevclose is unavailable (e.g. IPO day).
+    const price = q.prevclose ?? q.last;
+    const source = q.prevclose ? "prevclose" : "last";
+    prices.set(q.symbol, price);
+    log.info(`${q.symbol}: $${price} (source: ${source})`);
   }
 
   const missing = tickers.filter((t) => !prices.has(t));

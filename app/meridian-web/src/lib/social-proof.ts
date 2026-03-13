@@ -50,12 +50,16 @@ export function generateSuggestedTrades(
       // Fake social proof — grows throughout the trading day (9:30 AM - 4 PM ET)
       // Base is seeded per-ticker per-day, then ramps with time-of-day
       const now = new Date();
-      const jan = new Date(now.getFullYear(), 0, 1).getTimezoneOffset();
-      const jul = new Date(now.getFullYear(), 6, 1).getTimezoneOffset();
-      const isDST = now.getTimezoneOffset() < Math.max(jan, jul);
-      const etOffset = isDST ? 4 : 5;
-      const etHour = now.getUTCHours() - etOffset;
-      const etMinute = etHour * 60 + now.getUTCMinutes();
+      // Use Intl API for correct ET hour regardless of server timezone or DST
+      const etParts = new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/New_York",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).formatToParts(now);
+      const etHour = parseInt(etParts.find((p) => p.type === "hour")?.value ?? "0", 10);
+      const etMin = parseInt(etParts.find((p) => p.type === "minute")?.value ?? "0", 10);
+      const etMinute = etHour * 60 + etMin;
       const marketOpen = 9 * 60 + 30; // 9:30 AM ET
       const marketClose = 16 * 60;    // 4:00 PM ET
       const elapsed = Math.max(0, Math.min(etMinute - marketOpen, marketClose - marketOpen));

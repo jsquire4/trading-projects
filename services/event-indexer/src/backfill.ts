@@ -31,13 +31,23 @@ const TX_FETCH_CONCURRENCY = 10;
  * Fetches a batch of transactions and parses events from their logs.
  * Uses concurrent fetching for throughput.
  */
+interface BatchResult {
+  totalEvents: number;
+  failedSigs: ConfirmedSignatureInfo[];
+}
+
+/**
+ * Fetches a batch of transactions and parses events from their logs.
+ * Uses concurrent fetching for throughput. Returns failed sigs for retry.
+ */
 async function processBatch(
   connection: Connection,
   coder: BorshCoder,
   programIdStr: string,
   signatures: ConfirmedSignatureInfo[],
-): Promise<number> {
+): Promise<BatchResult> {
   let totalEvents = 0;
+  const failedSigs: ConfirmedSignatureInfo[] = [];
 
   // Process in chunks of TX_FETCH_CONCURRENCY
   for (let i = 0; i < signatures.length; i += TX_FETCH_CONCURRENCY) {
@@ -56,7 +66,10 @@ async function processBatch(
       const result = txResults[j];
       const sigInfo = chunk[j];
 
-      if (result.status === "rejected" || !result.value) continue;
+      if (result.status === "rejected" || !result.value) {
+        failedSigs.push(sigInfo);
+        continue;
+      }
 
       const tx = result.value;
       if (tx.meta?.err) continue;
@@ -92,7 +105,7 @@ async function processBatch(
     }
   }
 
-  return totalEvents;
+  return { totalEvents, failedSigs };
 }
 
 /**
@@ -123,6 +136,7 @@ export async function runBackfill(
   let done = false;
   let backfillComplete = false;
   let newestSignature: ConfirmedSignatureInfo | null = null;
+  const allFailedSigs: ConfirmedSignatureInfo[] = [];
 
   while (!done) {
     const opts: { limit: number; before?: string; until?: string } = {
@@ -147,13 +161,14 @@ export async function runBackfill(
     }
 
     totalSignatures += signatures.length;
-    const batchEvents = await processBatch(
+    const { totalEvents: batchEvents, failedSigs } = await processBatch(
       connection,
       coder,
       programIdStr,
       signatures,
     );
     totalEvents += batchEvents;
+    allFailedSigs.push(...failedSigs);
 
     // Track the newest signature across the entire run (first element is the most recent)
     if (!newestSignature) {
@@ -173,7 +188,25 @@ export async function runBackfill(
     log.info(`Backfill batch: ${signatures.length} sigs, ${batchEvents} events`, {
       totalSignatures,
       totalEvents,
+      failedCount: failedSigs.length,
     });
+  }
+
+  // Retry failed signatures once before checkpointing
+  if (allFailedSigs.length > 0) {
+    log.info(`Retrying ${allFailedSigs.length} failed signature(s)`);
+    const { totalEvents: retryEvents, failedSigs: stillFailed } = await processBatch(
+      connection,
+      coder,
+      programIdStr,
+      allFailedSigs,
+    );
+    totalEvents += retryEvents;
+    if (stillFailed.length > 0) {
+      log.warn(`${stillFailed.length} signature(s) still failed after retry`, {
+        sigs: stillFailed.map((s) => s.signature.slice(0, 16) + "..."),
+      });
+    }
   }
 
   log.info("Backfill complete", { totalSignatures, totalEvents });

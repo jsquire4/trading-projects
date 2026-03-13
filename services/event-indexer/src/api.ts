@@ -14,6 +14,8 @@ import {
   getCheckpoint,
   queryCostBasis,
   queryMarketVwaps,
+  insertOrderIntent,
+  queryFillsWithIntent,
 } from "./db.js";
 
 const log = createLogger("event-indexer:api");
@@ -23,20 +25,25 @@ const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS ?? "http://localhost:3000,http
   .map((o) => o.trim())
   .filter(Boolean);
 
-function getAllowedOrigin(req: http.IncomingMessage): string {
+function getAllowedOrigin(req: http.IncomingMessage): string | null {
   const origin = req.headers.origin ?? "";
   if (ALLOWED_ORIGINS.includes(origin)) return origin;
-  return "";
+  return null;
 }
 
 function corsHeaders(req: http.IncomingMessage): Record<string, string> {
-  return {
-    "Access-Control-Allow-Origin": getAllowedOrigin(req),
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
+  const origin = getAllowedOrigin(req);
+  const headers: Record<string, string> = {
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
     "Vary": "Origin",
     "Content-Type": "application/json",
   };
+  // Only set Access-Control-Allow-Origin when the origin is explicitly allowed
+  if (origin) {
+    headers["Access-Control-Allow-Origin"] = origin;
+  }
+  return headers;
 }
 
 function jsonResponse(
@@ -122,6 +129,80 @@ function handleMarketVwaps(
   jsonResponse(res, 200, { vwaps }, req);
 }
 
+function handleOrderIntent(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): void {
+  if (req.method !== "POST") {
+    jsonResponse(res, 405, { error: "Method not allowed" }, req);
+    return;
+  }
+
+  let body = "";
+  req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+  req.on("end", () => {
+    try {
+      const parsed = JSON.parse(body);
+      const { orderId, market, wallet, intent, displayPrice } = parsed;
+
+      // Validate required fields
+      if (!orderId || !market || !wallet || !intent || displayPrice === undefined) {
+        jsonResponse(res, 400, { error: "Missing required fields: orderId, market, wallet, intent, displayPrice" }, req);
+        return;
+      }
+
+      const VALID_INTENTS = ["buy_yes", "sell_yes", "buy_no", "sell_no"];
+      if (!VALID_INTENTS.includes(intent)) {
+        jsonResponse(res, 400, { error: "Invalid intent. Must be one of: buy_yes, sell_yes, buy_no, sell_no" }, req);
+        return;
+      }
+
+      const price = parseInt(String(displayPrice), 10);
+      if (isNaN(price) || price < 1 || price > 99) {
+        jsonResponse(res, 400, { error: "displayPrice must be between 1 and 99" }, req);
+        return;
+      }
+
+      if (!/^[A-HJ-NP-Za-km-z1-9]{1,44}$/.test(market) || !/^[A-HJ-NP-Za-km-z1-9]{1,44}$/.test(wallet)) {
+        jsonResponse(res, 400, { error: "Invalid market or wallet address" }, req);
+        return;
+      }
+
+      insertOrderIntent({
+        order_id: String(orderId),
+        market,
+        wallet,
+        intent,
+        display_price: price,
+      });
+
+      jsonResponse(res, 200, { ok: true }, req);
+    } catch {
+      jsonResponse(res, 400, { error: "Invalid JSON body" }, req);
+    }
+  });
+}
+
+function handleFillsWithIntent(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL,
+): void {
+  const params = parseQuery(url);
+  const wallet = params.wallet;
+  if (!wallet || !/^[A-HJ-NP-Za-km-z1-9]{1,44}$/.test(wallet)) {
+    jsonResponse(res, 400, { error: "Invalid or missing wallet address" }, req);
+    return;
+  }
+  const limit = params.limit ? parseInt(params.limit, 10) : 50;
+  if (isNaN(limit) || limit < 1 || limit > 500) {
+    jsonResponse(res, 400, { error: "Invalid limit" }, req);
+    return;
+  }
+  const fills = queryFillsWithIntent(wallet, limit);
+  jsonResponse(res, 200, { fills }, req);
+}
+
 function handleHealth(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -145,7 +226,7 @@ export function startApiServer(port: number): http.Server {
       return;
     }
 
-    if (req.method !== "GET") {
+    if (req.method !== "GET" && req.method !== "POST") {
       jsonResponse(res, 405, { error: "Method not allowed" }, req);
       return;
     }
@@ -161,7 +242,11 @@ export function startApiServer(port: number): http.Server {
     const pathname = url.pathname;
 
     try {
-      if (pathname === "/api/events/cost-basis") {
+      if (pathname === "/api/order-intent") {
+        handleOrderIntent(req, res);
+      } else if (pathname === "/api/events/fills") {
+        handleFillsWithIntent(req, res, url);
+      } else if (pathname === "/api/events/cost-basis") {
         handleCostBasis(req, res, url);
       } else if (pathname === "/api/events/market-vwaps") {
         handleMarketVwaps(req, res);

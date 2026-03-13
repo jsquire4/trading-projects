@@ -5,6 +5,8 @@ import {
   d2,
   binaryDelta,
   binaryGamma,
+  binaryTheta,
+  binaryVega,
 } from "../greeks";
 
 describe("normalPdf", () => {
@@ -28,10 +30,12 @@ describe("normalCdf", () => {
     expect(normalCdf(0)).toBeCloseTo(0.5, 5);
   });
 
-  it("returns ~0.84 at x=1", () => {
-    const val = normalCdf(1);
-    expect(val).toBeGreaterThan(0.83);
-    expect(val).toBeLessThan(0.88);
+  it("returns ~0.8413 at x=1", () => {
+    expect(normalCdf(1)).toBeCloseTo(0.8413, 3);
+  });
+
+  it("returns ~0.975 at x=1.96", () => {
+    expect(normalCdf(1.96)).toBeCloseTo(0.975, 3);
   });
 
   it("returns ~0.16 at x=-1 (symmetric with x=1)", () => {
@@ -101,6 +105,63 @@ describe("binaryGamma", () => {
     // analytical formula yields negative gamma near ATM
     const gamma = binaryGamma(100, 100, 0.3, 0.25);
     expect(gamma).toBeLessThan(0);
+  });
+});
+
+describe("binaryTheta", () => {
+  it("returns 0 for expired option (T=0)", () => {
+    expect(binaryTheta(100, 100, 0.3, 0)).toBe(0);
+  });
+
+  it("returns 0 for zero vol", () => {
+    expect(binaryTheta(100, 100, 0, 0.25)).toBe(0);
+  });
+
+  it("returns 0 for zero spot", () => {
+    expect(binaryTheta(0, 100, 0.3, 0.25)).toBe(0);
+  });
+
+  it("ATM theta is negative (time decay hurts holder)", () => {
+    // For an ATM binary call, theta is typically negative as time decay
+    // reduces the probability of finishing ITM
+    const theta = binaryTheta(100, 100, 0.3, 0.25);
+    expect(theta).toBeLessThan(0);
+  });
+
+  it("deep ITM theta is non-zero", () => {
+    const theta = binaryTheta(150, 100, 0.3, 0.25);
+    expect(theta).not.toBe(0);
+  });
+});
+
+describe("binaryVega", () => {
+  it("returns 0 for expired option (T=0)", () => {
+    expect(binaryVega(100, 100, 0.3, 0)).toBe(0);
+  });
+
+  it("returns 0 for zero vol", () => {
+    expect(binaryVega(100, 100, 0, 0.25)).toBe(0);
+  });
+
+  it("returns 0 for zero spot", () => {
+    expect(binaryVega(0, 100, 0.3, 0.25)).toBe(0);
+  });
+
+  it("ATM vega is negative (higher vol reduces binary call value at ATM)", () => {
+    // For a binary call, ATM vega is negative: increasing vol spreads the
+    // distribution, reducing the peaked probability at the strike
+    const vega = binaryVega(100, 100, 0.3, 0.25);
+    expect(vega).toBeLessThan(0);
+  });
+
+  it("deep ITM vega is negative (vol reduces certainty)", () => {
+    const vega = binaryVega(150, 100, 0.3, 0.25);
+    expect(vega).toBeLessThan(0);
+  });
+
+  it("deep OTM vega is positive (vol increases upside chance)", () => {
+    const vega = binaryVega(80, 100, 0.3, 0.25);
+    expect(vega).toBeGreaterThan(0);
   });
 });
 

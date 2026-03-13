@@ -23,11 +23,13 @@ export function TransactionReceipt({
   onClose,
 }: TransactionReceiptProps) {
   const isSell = side.toLowerCase().startsWith("sell");
-  const isNo = side.toLowerCase().includes("no");
-  // Buy Yes & Sell No use (100-price); Sell Yes & Buy No use price
-  const effectivePrice = isSell !== isNo ? price : 100 - price;
-  const potentialWin = ((quantity * effectivePrice) / 100).toFixed(2);
-  const xUrl = buildXShareUrl(ticker, side, parseFloat(potentialWin));
+  // For buys: potential win = quantity * (100-price) / 100 (you pay price, win 100)
+  // For sells: expected proceeds = quantity * price / 100 (you receive price)
+  const winAmount = isSell
+    ? ((quantity * price) / 100).toFixed(2)
+    : ((quantity * (100 - price)) / 100).toFixed(2);
+  const winLabel = isSell ? "Expected Proceeds" : "Potential Win";
+  const xUrl = buildXShareUrl(ticker, side, parseFloat(winAmount));
   const liUrl = buildLinkedInShareUrl(
     `Just placed a ${side} trade on ${ticker} on Meridian!`,
     `https://meridian.app/trade/${ticker}`,
@@ -70,8 +72,8 @@ export function TransactionReceipt({
           <div className="text-white font-mono">${cost.toFixed(2)}</div>
         </div>
         <div>
-          <span className="text-white/40">Potential Win</span>
-          <div className="text-green-400 font-mono">+${potentialWin}</div>
+          <span className="text-white/40">{winLabel}</span>
+          <div className="text-green-400 font-mono">+${winAmount}</div>
         </div>
       </div>
 

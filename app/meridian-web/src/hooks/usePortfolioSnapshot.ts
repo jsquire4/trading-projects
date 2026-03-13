@@ -89,7 +89,9 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
     };
 
     writeSnapshot(snapshot).catch(() => {});
-  }, [wallet, positions, midPrices]);
+  // Stabilize midPrices dependency — Map identity changes every render
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wallet, positions, JSON.stringify(midPrices ? [...midPrices.entries()].sort((a, b) => a[0].localeCompare(b[0])) : null)]);
 
   // Load intraday data and daily summaries (clear on wallet disconnect)
   useEffect(() => {
@@ -100,13 +102,23 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
       return;
     }
 
+    let cancelled = false;
+
     async function load() {
-      const today = new Date();
-      today.setUTCHours(0, 0, 0, 0);
+      // Use ET midnight for day boundary (markets are ET-based)
+      const etDate = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/New_York",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date());
+      const todayMs = new Date(`${etDate}T00:00:00-05:00`).getTime();
+
       const [intraday, summaries] = await Promise.all([
-        getIntradaySnapshots(wallet, today.getTime()),
+        getIntradaySnapshots(wallet, todayMs),
         getDailySummaries(wallet),
       ]);
+      if (cancelled) return;
       setIntradayData(intraday);
       setDailySummaries(summaries);
       setIsReady(true);
@@ -115,7 +127,10 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
     load();
     // Refresh every 30s
     const interval = setInterval(load, 30_000);
-    return () => clearInterval(interval);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [wallet]);
 
   // Compute current portfolio value from positions directly (avoids cold start)

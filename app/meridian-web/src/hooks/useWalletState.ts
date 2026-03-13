@@ -101,6 +101,7 @@ export function useWalletState(): UseWalletStateReturn {
           // bytes 32-63: owner
           // bytes 64-71: amount (u64 LE)
           const data = account.data;
+          if (data.length < 72) continue;
           const mint = new PublicKey(data.subarray(0, 32));
           const amount = data.readBigUInt64LE(64);
 

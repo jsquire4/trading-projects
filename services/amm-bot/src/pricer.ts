@@ -19,27 +19,29 @@ export function normalPdf(x: number): number {
 }
 
 /**
- * Standard normal CDF using the Abramowitz & Stegun rational approximation.
- * Maximum absolute error: ~7.5e-8.
+ * Standard normal CDF using the Abramowitz & Stegun 26.2.17 approximation
+ * in Horner form. Maximum absolute error: ~1.5e-7.
+ *
+ * Q(x) = n(x) * (b1*t + b2*t^2 + ... + b5*t^5) for x >= 0
+ * Phi(x) = 1 - Q(x) for x >= 0, Q(-x) for x < 0
  */
 export function normalCdf(x: number): number {
-  if (x < -10) return 0;
-  if (x > 10) return 1;
+  if (x < -8) return 0;
+  if (x > 8) return 1;
 
-  const a1 = 0.254829592;
-  const a2 = -0.284496736;
-  const a3 = 1.421413741;
-  const a4 = -1.453152027;
-  const a5 = 1.061405429;
-  const p = 0.3275911;
+  const p = 0.2316419;
+  const b1 = 0.319381530;
+  const b2 = -0.356563782;
+  const b3 = 1.781477937;
+  const b4 = -1.821255978;
+  const b5 = 1.330274429;
 
-  const sign = x < 0 ? -1 : 1;
   const absX = Math.abs(x);
   const t = 1.0 / (1.0 + p * absX);
-  const poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t;
-  const y = 1.0 - poly * Math.exp(-0.5 * absX * absX);
+  const poly = ((((b5 * t + b4) * t + b3) * t + b2) * t + b1) * t;
+  const q = normalPdf(absX) * poly;
 
-  return 0.5 * (1.0 + sign * y);
+  return x >= 0 ? 1 - q : q;
 }
 
 // ---------------------------------------------------------------------------

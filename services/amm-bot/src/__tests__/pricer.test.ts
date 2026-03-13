@@ -30,25 +30,16 @@ describe("normalCdf", () => {
     expect(normalCdf(15)).toBe(1);
   });
 
-  it("known value: cdf(1.96) ≈ 0.975 (A&S approximation)", () => {
-    // The A&S polynomial approximation has max error ~7.5e-8 but can deviate
-    // from the exact CDF by more at certain points. Accept 2-digit precision.
-    expect(normalCdf(1.96)).toBeCloseTo(0.975, 1);
-    // More precisely, verify it's in the right ballpark
-    expect(normalCdf(1.96)).toBeGreaterThan(0.97);
-    expect(normalCdf(1.96)).toBeLessThan(0.99);
+  it("known value: cdf(1.96) ≈ 0.975", () => {
+    expect(normalCdf(1.96)).toBeCloseTo(0.975, 3);
   });
 
-  it("known value: cdf(-1.96) ≈ 0.025 (A&S approximation)", () => {
-    expect(normalCdf(-1.96)).toBeCloseTo(0.025, 1);
-    expect(normalCdf(-1.96)).toBeGreaterThan(0.01);
-    expect(normalCdf(-1.96)).toBeLessThan(0.03);
+  it("known value: cdf(-1.96) ≈ 0.025", () => {
+    expect(normalCdf(-1.96)).toBeCloseTo(0.025, 3);
   });
 
-  it("known value: cdf(1) ≈ 0.8413 (A&S approximation)", () => {
-    // A&S gives ~0.8703 for this implementation — accept 1-digit precision
-    expect(normalCdf(1)).toBeGreaterThan(0.84);
-    expect(normalCdf(1)).toBeLessThan(0.88);
+  it("known value: cdf(1) ≈ 0.8413", () => {
+    expect(normalCdf(1)).toBeCloseTo(0.8413, 3);
   });
 
   it("symmetry: cdf(x) + cdf(-x) ≈ 1", () => {

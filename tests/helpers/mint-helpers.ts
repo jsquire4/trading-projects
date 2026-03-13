@@ -3,7 +3,7 @@
  * mint_pair transactions in bankrun tests.
  */
 
-import { Keypair, PublicKey, Transaction } from "@solana/web3.js";
+import { ComputeBudgetProgram, Keypair, PublicKey, Transaction } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { BankrunProvider } from "anchor-bankrun";
 import BN from "bn.js";
@@ -122,6 +122,8 @@ export async function executeMintPair(
     quantity: new BN(quantity),
   });
 
-  const tx = new Transaction().add(ix);
+  // Add a unique CU nonce to prevent bankrun "already processed" dedup
+  const cuIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 + Math.floor(Math.random() * 100_000) });
+  const tx = new Transaction().add(cuIx).add(ix);
   await provider.sendAndConfirm!(tx, [user]);
 }

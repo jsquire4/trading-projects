@@ -48,6 +48,8 @@ const NYSE_HOLIDAYS: Set<string> = new Set([
   "2027-11-25", // Thanksgiving
   "2027-12-24", // Christmas Day (observed)
   // 2028
+  // Note: 2028-01-01 (New Year's Day) falls on Saturday. NYSE does not observe
+  // on prior Friday when New Year's falls on Saturday, so it is correctly omitted.
   "2028-01-17", // MLK Jr. Day
   "2028-02-21", // Presidents' Day
   "2028-04-14", // Good Friday

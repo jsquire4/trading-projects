@@ -97,7 +97,7 @@ export function TradeModal({
               </h2>
               {currentPrice && (
                 <p className="text-xs text-white/40">
-                  Current price: ${currentPrice.toFixed(2)}
+                  Yes price: {Math.round(currentPrice * 100)}¢
                 </p>
               )}
             </div>
@@ -181,6 +181,9 @@ export function TradeModal({
                 {quantity} × {unitPrice}¢ = ${totalCost}
               </span>
             </div>
+            <p className="text-[10px] text-white/20 text-center mt-1">
+              Price may change before execution
+            </p>
           </div>
 
           {/* Action button */}

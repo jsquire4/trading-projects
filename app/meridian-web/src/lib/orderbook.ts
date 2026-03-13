@@ -104,10 +104,10 @@ export function deserializeOrderBook(buffer: Buffer): DeserializedOrderBook {
   for (let level = 0; level < NUM_LEVELS; level++) {
     const levelBase = base + LEVELS_OFFSET + level * PRICE_LEVEL_SIZE;
 
-    // count is at offset (32 * 80) = 2560 within the PriceLevel
+    // count is a high-water-mark of ever-written slots at this level.
+    // If 0, no orders have ever been placed here — safe to skip entirely.
+    // Non-zero doesn't mean all slots are active (holey layout after cancels/fills).
     const count = data.getUint8(levelBase + ORDERS_PER_LEVEL * ORDER_SLOT_SIZE);
-
-    // Skip empty levels entirely
     if (count === 0) continue;
 
     // Scan ALL slots, not just 0..count — the on-chain layout is holey.

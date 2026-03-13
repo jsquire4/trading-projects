@@ -277,7 +277,8 @@ fn drain_lamports<'info>(
         .checked_add(lamports)
         .ok_or(MeridianError::ArithmeticOverflow)?;
 
-    // Zero account data to prevent resurrection
+    // Zero account data as defense-in-depth; 0-lamport GC is the primary protection
+    // against resurrection, but zeroing ensures no stale data if GC is delayed.
     let mut data = source.try_borrow_mut_data()?;
     for byte in data.iter_mut() {
         *byte = 0;

@@ -69,6 +69,17 @@ export function initDb(dbPath?: string): Database.Database {
       last_slot INTEGER NOT NULL,
       updated_at TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS order_intents (
+      order_id TEXT NOT NULL,
+      market TEXT NOT NULL,
+      wallet TEXT NOT NULL,
+      intent TEXT NOT NULL,
+      display_price INTEGER NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (order_id, market)
+    );
+    CREATE INDEX IF NOT EXISTS idx_order_intents_wallet ON order_intents(wallet);
   `);
 
   // Migration: add seq column to existing databases and fix unique index
@@ -190,21 +201,16 @@ export interface CostBasisRow {
 }
 
 export function queryCostBasis(wallet: string): CostBasisRow[] {
-  // Fill events have JSON data with: maker, taker, price, quantity, takerSide, makerSide
-  // Buy-side fills:
   // Acquisition fills (cost basis = tokens obtained):
   //   - Taker buys Yes: taker = wallet AND takerSide = 0 (USDC_BID)
-  //   - Taker buys No:  taker = wallet AND takerSide = 2 (NO_BID)
   //   - Maker bought Yes when taker sold: maker = wallet AND takerSide = 1 (YES_ASK) → maker is USDC bid side
-  // Note: maker=wallet AND takerSide=2 is EXCLUDED — wallet is the resting YES_ASK (selling, not buying)
+  // takerSide=2 (NO_BID) is EXCLUDED — taker sends No tokens FROM wallet to escrow (selling, not acquiring)
   const stmt = getDb().prepare(`
     SELECT
       market,
       CASE
         WHEN json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 0 THEN 'yes'
-        WHEN json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 2 THEN 'no'
         WHEN json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 1 THEN 'yes'
-        /* takerSide=2 maker=wallet: wallet is the resting YES_ASK (selling Yes, not buying) — excluded from cost basis */
       END as side,
       SUM(CAST(json_extract(data, '$.quantity') AS REAL)) as totalQuantity,
       SUM(CAST(json_extract(data, '$.quantity') AS REAL) * CAST(json_extract(data, '$.price') AS REAL)) as totalCost,
@@ -212,7 +218,7 @@ export function queryCostBasis(wallet: string): CostBasisRow[] {
     FROM events
     WHERE type = 'fill'
       AND (
-        (json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) IN (0, 2))
+        (json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 0)
         OR
         (json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 1)
       )
@@ -255,6 +261,94 @@ export function queryMarketVwaps(): MarketVwap[] {
     GROUP BY market
   `);
   return stmt.all() as MarketVwap[];
+}
+
+// --------------- Order intent operations ---------------
+
+export interface OrderIntent {
+  order_id: string;
+  market: string;
+  wallet: string;
+  intent: string;       // "buy_yes" | "sell_yes" | "buy_no" | "sell_no"
+  display_price: number; // price in cents from user's perspective
+}
+
+export function insertOrderIntent(intent: OrderIntent): void {
+  getDb()
+    .prepare(
+      `INSERT OR REPLACE INTO order_intents (order_id, market, wallet, intent, display_price)
+       VALUES (@order_id, @market, @wallet, @intent, @display_price)`,
+    )
+    .run(intent);
+}
+
+export interface FillWithIntent {
+  id: number;
+  type: string;
+  market: string;
+  data: string;
+  signature: string;
+  slot: number;
+  timestamp: number;
+  seq: number;
+  intent: string | null;
+  display_price: number | null;
+  viewerIntent: string;
+}
+
+/**
+ * Query fills for a wallet with viewer-perspective intent labels.
+ *
+ * If a stored intent exists for the fill's order, use it directly.
+ * Otherwise derive intent from the viewer's role (taker/maker) and takerSide.
+ */
+export function queryFillsWithIntent(wallet: string, limit: number = 50): FillWithIntent[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT e.*, oi.intent, oi.display_price
+       FROM events e
+       LEFT JOIN order_intents oi
+         ON CAST(json_extract(e.data, '$.orderId') AS TEXT) = oi.order_id
+         AND e.market = oi.market
+       WHERE e.type = 'fill'
+         AND (json_extract(e.data, '$.taker') = @wallet
+              OR json_extract(e.data, '$.maker') = @wallet)
+       ORDER BY e.timestamp DESC
+       LIMIT @limit`,
+    )
+    .all({ wallet, limit }) as (EventRow & { intent: string | null; display_price: number | null })[];
+
+  return rows.map((row) => {
+    const data = JSON.parse(row.data);
+    const isTaker = data.taker === wallet;
+    const takerSide = data.takerSide as number;
+
+    let viewerIntent: string;
+    if (row.intent && data[isTaker ? 'taker' : 'maker'] === wallet) {
+      // Stored intent matches viewer's order
+      viewerIntent = row.intent;
+    } else if (isTaker) {
+      // Derive from taker's side
+      viewerIntent = { 0: "buy_yes", 1: "sell_yes", 2: "sell_no" }[takerSide] ?? "unknown";
+    } else {
+      // Derive from maker's perspective (opposite of taker)
+      viewerIntent = { 0: "sell_yes", 1: "buy_yes", 2: "sell_yes" }[takerSide] ?? "unknown";
+    }
+
+    return {
+      id: row.id!,
+      type: row.type,
+      market: row.market,
+      data: row.data,
+      signature: row.signature,
+      slot: row.slot,
+      timestamp: row.timestamp,
+      seq: row.seq,
+      intent: row.intent,
+      display_price: row.display_price,
+      viewerIntent,
+    };
+  });
 }
 
 export function signatureExists(signature: string): boolean {

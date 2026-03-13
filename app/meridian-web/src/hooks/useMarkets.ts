@@ -175,13 +175,19 @@ export function useMarket(marketKey: PublicKey | string | null) {
 export function useOrderBooks(marketKeys: (PublicKey | string)[]) {
   const { connection } = useConnection();
 
+  // Stabilize addresses — marketKeys array identity changes every render
+  const marketKeysStr = useMemo(
+    () => marketKeys.map((k) => (typeof k === "string" ? k : k.toBase58())).sort().join(","),
+    [marketKeys],
+  );
   const addresses = useMemo(() => {
     return marketKeys.map((k) => {
       const pk = typeof k === "string" ? new PublicKey(k) : k;
       const [addr] = findOrderBook(pk);
       return addr;
     });
-  }, [marketKeys]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marketKeysStr]);
 
   return useQuery<Map<string, OrderBookData>>({
     queryKey: [

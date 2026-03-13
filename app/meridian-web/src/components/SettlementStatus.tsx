@@ -85,6 +85,19 @@ export function SettlementStatus({
     );
   }
 
+  // Outcome 0 = settlement in progress (settled but outcome not yet finalized)
+  if (outcome === 0) {
+    return (
+      <div className="rounded-lg border border-white/10 bg-white/5 px-4 py-3">
+        <div className="flex items-center gap-2 mb-1">
+          <div className="h-2 w-2 rounded-full bg-white/40 animate-pulse" />
+          <span className="text-sm font-semibold text-white/60">Settlement in progress</span>
+        </div>
+        <p className="text-xs text-white/40">Outcome is being determined.</p>
+      </div>
+    );
+  }
+
   // Final settled state
   const isYes = outcome === 1;
   return (

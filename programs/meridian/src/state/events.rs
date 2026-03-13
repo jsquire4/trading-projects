@@ -15,7 +15,7 @@ pub struct FillEvent {
     pub is_merge: bool,
     pub maker_order_id: u64,
     pub timestamp: i64,
-    /// Total protocol fee on this fill (both sides combined)
+    /// Protocol fee charged on this fill from the USDC pool
     pub fee: u64,
 }
 

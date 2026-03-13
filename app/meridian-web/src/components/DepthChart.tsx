@@ -14,6 +14,7 @@ import { COLORS, AXIS_STYLE, GRID_STYLE, TOOLTIP_STYLE, formatCompact } from "@/
 
 interface DepthLevel {
   price: number;
+  /** Quantity in raw lamports (1 token = 1,000,000 lamports) */
   quantity: number;
   cumulative: number;
 }

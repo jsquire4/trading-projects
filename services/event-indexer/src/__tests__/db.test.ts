@@ -11,6 +11,8 @@ import {
   getCheckpoint,
   upsertCheckpoint,
   getDb,
+  insertOrderIntent,
+  queryFillsWithIntent,
   type EventRow,
 } from "../db.ts";
 
@@ -22,6 +24,7 @@ function makeEvent(overrides: Partial<Omit<EventRow, "id" | "created_at">> = {})
     signature: overrides.signature ?? `sig_${Math.random().toString(36).slice(2)}`,
     slot: overrides.slot ?? 1000,
     timestamp: overrides.timestamp ?? Math.floor(Date.now() / 1000),
+    seq: overrides.seq ?? 0,
   };
 }
 
@@ -254,6 +257,142 @@ describe("Database Layer", () => {
 
     it("queryEvents with filters returns empty array", () => {
       expect(queryEvents({ market: "X", type: "fill" })).toEqual([]);
+    });
+  });
+
+  // ---- Same-signature multi-fill dedup ----
+
+  describe("same-signature multi-fill dedup", () => {
+    it("allows multiple events with same signature but different seq", () => {
+      const sig = "same_sig_123";
+      insertEvent(makeEvent({ signature: sig, seq: 0, market: "MarketA" }));
+      insertEvent(makeEvent({ signature: sig, seq: 1, market: "MarketA" }));
+      expect(getEventCount()).toBe(2);
+    });
+
+    it("ignores duplicate with same signature, type, market, and seq", () => {
+      const sig = "dup_sig_456";
+      insertEvent(makeEvent({ signature: sig, seq: 0, market: "MarketA" }));
+      insertEvent(makeEvent({ signature: sig, seq: 0, market: "MarketA" }));
+      expect(getEventCount()).toBe(1);
+    });
+  });
+
+  // ---- Order intent operations ----
+
+  describe("insertOrderIntent", () => {
+    it("inserts and retrieves an order intent", () => {
+      insertOrderIntent({
+        order_id: "42",
+        market: "MarketA",
+        wallet: "WalletA",
+        intent: "buy_yes",
+        display_price: 65,
+      });
+      const row = getDb()
+        .prepare("SELECT * FROM order_intents WHERE order_id = '42'")
+        .get() as any;
+      expect(row).toBeDefined();
+      expect(row.intent).toBe("buy_yes");
+      expect(row.display_price).toBe(65);
+    });
+
+    it("upserts on conflict (same order_id + market)", () => {
+      insertOrderIntent({
+        order_id: "42",
+        market: "MarketA",
+        wallet: "WalletA",
+        intent: "buy_yes",
+        display_price: 65,
+      });
+      insertOrderIntent({
+        order_id: "42",
+        market: "MarketA",
+        wallet: "WalletA",
+        intent: "buy_no",
+        display_price: 35,
+      });
+      const rows = getDb()
+        .prepare("SELECT * FROM order_intents WHERE order_id = '42'")
+        .all();
+      expect(rows).toHaveLength(1);
+      expect((rows[0] as any).intent).toBe("buy_no");
+    });
+  });
+
+  // ---- queryFillsWithIntent ----
+
+  describe("queryFillsWithIntent", () => {
+    const wallet = "WalletAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    const market = "MarketAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    it("returns fills with derived intent when no stored intent", () => {
+      // Insert a fill where wallet is taker with takerSide=0 (Buy Yes)
+      insertEvent(makeEvent({
+        market,
+        signature: "fill_sig_1",
+        data: JSON.stringify({
+          taker: wallet,
+          maker: "OtherWallet",
+          takerSide: 0,
+          price: 65,
+          quantity: 1000000,
+          orderId: "100",
+        }),
+      }));
+
+      const fills = queryFillsWithIntent(wallet);
+      expect(fills).toHaveLength(1);
+      expect(fills[0].viewerIntent).toBe("buy_yes");
+    });
+
+    it("returns stored intent when available", () => {
+      insertOrderIntent({
+        order_id: "200",
+        market,
+        wallet,
+        intent: "buy_no",
+        display_price: 35,
+      });
+
+      insertEvent(makeEvent({
+        market,
+        signature: "fill_sig_2",
+        data: JSON.stringify({
+          taker: wallet,
+          maker: "OtherWallet",
+          takerSide: 1,
+          price: 65,
+          quantity: 1000000,
+          orderId: "200",
+        }),
+      }));
+
+      const fills = queryFillsWithIntent(wallet);
+      expect(fills).toHaveLength(1);
+      expect(fills[0].viewerIntent).toBe("buy_no");
+      expect(fills[0].display_price).toBe(35);
+    });
+
+    it("derives maker perspective correctly", () => {
+      const maker = "MakerWalletAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+      // Taker side 0 (Buy Yes) → maker is Sell Yes
+      insertEvent(makeEvent({
+        market,
+        signature: "fill_sig_3",
+        data: JSON.stringify({
+          taker: "OtherWallet",
+          maker,
+          takerSide: 0,
+          price: 65,
+          quantity: 1000000,
+          orderId: "300",
+        }),
+      }));
+
+      const fills = queryFillsWithIntent(maker);
+      expect(fills).toHaveLength(1);
+      expect(fills[0].viewerIntent).toBe("sell_yes");
     });
   });
 });

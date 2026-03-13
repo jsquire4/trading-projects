@@ -7,15 +7,20 @@ import { parseFillEvent } from "@/lib/eventParsers";
 import { buildCsv, downloadCsv } from "@/lib/csv";
 import { getExplorerUrl } from "@/lib/network";
 
-const TAKER_SIDE_LABELS: Record<number, string> = {
-  0: "Buy Yes",
-  1: "Sell Yes",
-  2: "Buy No",
-};
-const TAKER_SIDE_COLORS: Record<number, string> = {
-  0: "text-green-400",
-  1: "text-amber-400",
-  2: "text-red-400",
+/** Derive viewer-perspective intent label when no stored intent is available. */
+function deriveViewerIntent(takerSide: number, isTaker: boolean): string {
+  if (isTaker) {
+    return { 0: "Buy Yes", 1: "Sell Yes", 2: "Sell No" }[takerSide] ?? "Unknown";
+  }
+  // Maker perspective: opposite of taker's action
+  return { 0: "Sell Yes", 1: "Buy Yes", 2: "Sell Yes" }[takerSide] ?? "Unknown";
+}
+
+const INTENT_COLORS: Record<string, string> = {
+  "Buy Yes": "text-green-400",
+  "Sell Yes": "text-amber-400",
+  "Buy No": "text-green-400",
+  "Sell No": "text-red-400",
 };
 
 export function TradeHistoryTab() {
@@ -40,14 +45,20 @@ export function TradeHistoryTab() {
 
   const handleExport = () => {
     const headers = ["Date", "Side", "Price (c)", "Quantity", "Role", "Tx Signature"];
-    const rows = fills.map((f) => [
-      new Date(f.timestamp * 1000).toISOString(),
-      TAKER_SIDE_LABELS[f.takerSide] ?? "Unknown",
-      String(f.price),
-      String(f.quantity / 1_000_000),
-      f.maker === publicKey?.toBase58() ? "Maker" : "Taker",
-      f.signature ?? "",
-    ]);
+    const walletStr = publicKey?.toBase58() ?? "";
+    const rows = fills.map((f) => {
+      const isTaker = f.taker === walletStr;
+      const role = isTaker ? "Taker" : "Maker";
+      const sideLabel = deriveViewerIntent(f.takerSide, isTaker);
+      return [
+        new Date(f.timestamp * 1000).toISOString(),
+        sideLabel,
+        String(f.price),
+        String(f.quantity / 1_000_000),
+        role,
+        f.signature ?? "",
+      ];
+    });
     const csv = buildCsv(headers, rows);
     downloadCsv(csv, `meridian-history-${new Date().toISOString().split("T")[0]}.csv`);
   };
@@ -90,9 +101,10 @@ export function TradeHistoryTab() {
           </thead>
           <tbody>
             {fills.map((f, i) => {
-              const sideLabel = TAKER_SIDE_LABELS[f.takerSide] ?? "Unknown";
-              const sideColor = TAKER_SIDE_COLORS[f.takerSide] ?? "text-white/50";
-              const role = f.maker === publicKey?.toBase58() ? "Maker" : "Taker";
+              const isTaker = f.taker === publicKey?.toBase58();
+              const sideLabel = deriveViewerIntent(f.takerSide, isTaker);
+              const sideColor = INTENT_COLORS[sideLabel] ?? "text-white/50";
+              const role = isTaker ? "Taker" : "Maker";
               const qty = (f.quantity / 1_000_000).toFixed(0);
 
               return (

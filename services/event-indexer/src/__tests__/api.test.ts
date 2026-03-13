@@ -155,9 +155,23 @@ describe("API Server", () => {
   // ---- CORS ----
 
   describe("CORS headers", () => {
-    it("includes Access-Control-Allow-Origin on responses", async () => {
+    it("includes Access-Control-Allow-Origin for allowed origins", async () => {
+      // Send request with an allowed origin
+      const { headers } = await new Promise<{ status: number; headers: http.IncomingHttpHeaders; body: any }>((resolve, reject) => {
+        const req = http.get(`${baseUrl}/api/events`, { headers: { Origin: "http://localhost:3000" } }, (res) => {
+          let data = "";
+          res.on("data", (chunk) => (data += chunk));
+          res.on("end", () => resolve({ status: res.statusCode!, headers: res.headers, body: JSON.parse(data) }));
+          res.on("error", reject);
+        });
+        req.on("error", reject);
+      });
+      expect(headers["access-control-allow-origin"]).toBe("http://localhost:3000");
+    });
+
+    it("omits Access-Control-Allow-Origin for disallowed origins", async () => {
       const { headers } = await get("/api/events");
-      expect(headers["access-control-allow-origin"]).toBeDefined();
+      expect(headers["access-control-allow-origin"]).toBeUndefined();
     });
 
     it("includes Content-Type: application/json", async () => {

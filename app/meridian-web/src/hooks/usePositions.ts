@@ -20,6 +20,8 @@ export function usePositions() {
   const { data: markets = [] } = useMarkets();
 
   return useQuery<Position[]>({
+    // Query key uses sorted pubkey string — data-only market changes (e.g. isSettled flip)
+    // don't produce a new key, so the cache stays warm and only refetchInterval triggers updates.
     queryKey: ["positions", publicKey?.toBase58() ?? null, markets.map((m) => m.publicKey.toBase58()).join(",")],
     queryFn: async () => {
       if (!publicKey || !connected || markets.length === 0) return [];

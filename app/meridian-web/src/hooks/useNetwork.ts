@@ -3,17 +3,18 @@ import { getClusterFromRpcUrl, type NetworkCluster } from "../lib/network";
 
 const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com";
 
+// Pre-compute cluster once at module load since RPC_URL is a constant
+const _cluster = getClusterFromRpcUrl(RPC_URL);
+
 export function useNetwork() {
-  return useMemo(() => {
-    const cluster = getClusterFromRpcUrl(RPC_URL);
-    return {
-      cluster,
-      isMainnet: cluster === "mainnet-beta",
-      isDevnet: cluster === "devnet",
-      isLocalnet: cluster === "localnet",
-      rpcUrl: RPC_URL,
-    };
-  }, []);
+  // useMemo with [] is retained for test mockability (vi.mock replaces this function)
+  return useMemo(() => ({
+    cluster: _cluster,
+    isMainnet: _cluster === "mainnet-beta",
+    isDevnet: _cluster === "devnet",
+    isLocalnet: _cluster === "localnet",
+    rpcUrl: RPC_URL,
+  }), []);
 }
 
 export type { NetworkCluster };

@@ -13,6 +13,8 @@ import {
   getDb,
   insertOrderIntent,
   queryFillsWithIntent,
+  queryCostBasis,
+  queryMarketVwaps,
   type EventRow,
 } from "../db.ts";
 
@@ -502,7 +504,7 @@ describe("Database Layer", () => {
       }));
 
       const walletFills = queryFillsWithIntent(wallet);
-      // wallet appears as taker in sig_w1 and maker in sig_w1 — but sig_w2 has neither
+      // wallet appears as taker in sig_w1 — sig_w2 has neither taker nor maker matching
       expect(walletFills).toHaveLength(1);
       expect(walletFills[0].signature).toBe("fill_sig_w1");
     });
@@ -529,6 +531,94 @@ describe("Database Layer", () => {
       expect(fills).toHaveLength(1);
       // Maker's resting side is 2 (NO_BID) → Sell No
       expect(fills[0].viewerIntent).toBe("sell_no");
+    });
+  });
+
+  // ---- queryCostBasis ----
+
+  describe("queryCostBasis", () => {
+    const wallet = "CostWalAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    const market = "CostMktAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    it("tracks taker Yes acquisition (takerSide=0)", () => {
+      insertEvent(makeEvent({
+        market,
+        signature: "cb_1",
+        data: JSON.stringify({ taker: wallet, maker: "Other", takerSide: 0, makerSide: 0, price: 60, quantity: 2000000, makerOrderId: "1" }),
+      }));
+      const rows = queryCostBasis(wallet);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].side).toBe("yes");
+      expect(rows[0].totalQuantity).toBe(2000000);
+      expect(rows[0].avgPrice).toBe(60);
+    });
+
+    it("tracks taker No acquisition (takerSide=2)", () => {
+      insertEvent(makeEvent({
+        market,
+        signature: "cb_2",
+        data: JSON.stringify({ taker: wallet, maker: "Other", takerSide: 2, makerSide: 1, price: 40, quantity: 1000000, makerOrderId: "2" }),
+      }));
+      const rows = queryCostBasis(wallet);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].side).toBe("no");
+      expect(rows[0].totalQuantity).toBe(1000000);
+    });
+
+    it("tracks maker Yes acquisition (makerSide=0)", () => {
+      insertEvent(makeEvent({
+        market,
+        signature: "cb_3",
+        data: JSON.stringify({ taker: "Other", maker: wallet, takerSide: 1, makerSide: 0, price: 55, quantity: 3000000, makerOrderId: "3" }),
+      }));
+      const rows = queryCostBasis(wallet);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].side).toBe("yes");
+    });
+
+    it("tracks maker No acquisition via merge fill (makerSide=2)", () => {
+      insertEvent(makeEvent({
+        market,
+        signature: "cb_4",
+        data: JSON.stringify({ taker: "Other", maker: wallet, takerSide: 1, makerSide: 2, price: 35, quantity: 1500000, makerOrderId: "4" }),
+      }));
+      const rows = queryCostBasis(wallet);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].side).toBe("no");
+      expect(rows[0].totalQuantity).toBe(1500000);
+    });
+
+    it("excludes sell fills (takerSide=1 as taker)", () => {
+      insertEvent(makeEvent({
+        market,
+        signature: "cb_5",
+        data: JSON.stringify({ taker: wallet, maker: "Other", takerSide: 1, makerSide: 0, price: 60, quantity: 1000000, makerOrderId: "5" }),
+      }));
+      const rows = queryCostBasis(wallet);
+      expect(rows).toHaveLength(0);
+    });
+
+    it("returns empty for wallet with no fills", () => {
+      const rows = queryCostBasis("NoFillsAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+      expect(rows).toHaveLength(0);
+    });
+  });
+
+  // ---- queryMarketVwaps ----
+
+  describe("queryMarketVwaps", () => {
+    it("computes VWAP per market", () => {
+      insertEventsBatch([
+        makeEvent({ market: "VwapMkt1", signature: "vw1", data: JSON.stringify({ price: 50, quantity: 1000000 }) }),
+        makeEvent({ market: "VwapMkt1", signature: "vw2", data: JSON.stringify({ price: 60, quantity: 3000000 }) }),
+        makeEvent({ market: "VwapMkt2", signature: "vw3", data: JSON.stringify({ price: 40, quantity: 2000000 }) }),
+      ]);
+      const vwaps = queryMarketVwaps();
+      expect(vwaps).toHaveLength(2);
+      const mkt1 = vwaps.find(v => v.market === "VwapMkt1")!;
+      // VWAP = (50*1M + 60*3M) / (1M + 3M) = 230M / 4M = 57.5
+      expect(mkt1.vwap).toBeCloseTo(57.5, 1);
+      expect(mkt1.fillCount).toBe(2);
     });
   });
 });

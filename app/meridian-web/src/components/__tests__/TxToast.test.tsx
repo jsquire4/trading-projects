@@ -33,9 +33,12 @@ describe("showTxToast", () => {
       }),
     );
 
-    // Verify the description contains the explorer URL
+    // Render the description and verify it contains an explorer link
     const callArgs = (toast.success as any).mock.calls[0][1];
-    expect(callArgs.description).toBeDefined();
+    const { container } = render(callArgs.description);
+    const link = container.querySelector("a");
+    expect(link).not.toBeNull();
+    expect(link!.textContent).toBe("View on Explorer");
   });
 
   it("creates error toast with error message", () => {
@@ -52,6 +55,11 @@ describe("showTxToast", () => {
         duration: 8000,
       }),
     );
+
+    // Verify the error message appears in the rendered description
+    const callArgs = (toast.error as any).mock.calls[0][1];
+    const { container } = render(callArgs.description);
+    expect(container.textContent).toBe("Insufficient funds");
   });
 
   it("uses 'Unknown error' when no error message provided", () => {

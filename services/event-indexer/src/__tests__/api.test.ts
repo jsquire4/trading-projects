@@ -304,6 +304,33 @@ describe("API Server", () => {
     });
   });
 
+  // ---- GET /api/events/cost-basis ----
+
+  describe("GET /api/events/cost-basis", () => {
+    it("returns cost basis for a valid wallet", async () => {
+      const wallet = "Fi22Wa22etAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+      const { status, body } = await get(`/api/events/cost-basis?wallet=${wallet}`);
+      expect(status).toBe(200);
+      expect(body.costBasis).toBeInstanceOf(Array);
+    });
+
+    it("returns 400 when wallet param is missing", async () => {
+      const { status, body } = await get("/api/events/cost-basis");
+      expect(status).toBe(400);
+      expect(body.error).toMatch(/wallet/i);
+    });
+  });
+
+  // ---- GET /api/events/market-vwaps ----
+
+  describe("GET /api/events/market-vwaps", () => {
+    it("returns VWAP data", async () => {
+      const { status, body } = await get("/api/events/market-vwaps");
+      expect(status).toBe(200);
+      expect(body.vwaps).toBeInstanceOf(Array);
+    });
+  });
+
   // ---- 404 ----
 
   describe("unknown routes", () => {

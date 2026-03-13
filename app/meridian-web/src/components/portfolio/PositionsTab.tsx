@@ -17,7 +17,7 @@ import { findGlobalConfig, findYesMint, findNoMint, findUsdcVault } from "@/lib/
 import { InsightTooltip } from "@/components/InsightTooltip";
 import { interpretPosition } from "@/lib/insights";
 
-function PositionCard({ position, totalCost }: { position: Position; totalCost: number }) {
+function PositionCard({ position, totalCost, now }: { position: Position; totalCost: number; now: number }) {
   const { data: book } = useOrderBook(position.market.publicKey.toBase58());
   const { program } = useAnchorProgram();
   const { sendTransaction } = useTransaction();
@@ -29,11 +29,6 @@ function PositionCard({ position, totalCost }: { position: Position; totalCost: 
   const noBal = Number(position.noBal) / 1_000_000;
   const strikeDollars = Number(position.market.strikePrice) / 1_000_000;
   const closeUnix = Number(position.market.marketCloseUnix);
-  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
-  useEffect(() => {
-    const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 15_000);
-    return () => clearInterval(id);
-  }, []);
   const remaining = Math.max(0, closeUnix - now);
 
   const midPrice = useMemo(() => {
@@ -208,6 +203,11 @@ function PositionCard({ position, totalCost }: { position: Position; totalCost: 
 export function PositionsTab() {
   const { data: positions = [], isLoading } = usePositions();
   const { costBasis } = useCostBasis();
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 15_000);
+    return () => clearInterval(id);
+  }, []);
 
   // Sort: winning settled positions first, then active, then losing settled
   const sortedPositions = useMemo(() => {
@@ -267,6 +267,7 @@ export function PositionsTab() {
             key={pos.market.publicKey.toBase58()}
             position={pos}
             totalCost={cb?.totalCostUsdc ?? 0}
+            now={now}
           />
         );
       })}

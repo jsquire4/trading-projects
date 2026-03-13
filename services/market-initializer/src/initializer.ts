@@ -21,7 +21,7 @@ import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 import { createMarketDataClient, type IMarketDataClient } from "../../shared/src/market-data.js";
 import { createLogger } from "../../shared/src/alerting.js";
-import { getETOffsetMinutes } from "../../automation/src/timezone.js";
+import { getETOffsetMinutes, isMarketDay } from "../../automation/src/timezone.js";
 import { generateVolAwareStrikes } from "./strikeSelector.js";
 import {
   findGlobalConfig,
@@ -115,7 +115,7 @@ export async function initializeMarkets(): Promise<InitResult[]> {
   }
 
   // ---- Compute market close (4:00 PM ET today, DST-aware) ------------------
-  const marketCloseUnix = computeMarketCloseUnix();
+  const marketCloseUnix = await computeMarketCloseUnix();
   const expiryDay = Math.floor(marketCloseUnix / 86400);
 
   log.info("Market close computed", {
@@ -419,7 +419,7 @@ async function createSingleMarket(
 // Compute 4:00 PM ET today as UTC unix timestamp (DST-aware)
 // ---------------------------------------------------------------------------
 
-export function computeMarketCloseUnix(date?: Date): number {
+export async function computeMarketCloseUnix(date?: Date): Promise<number> {
   const now = date ?? new Date();
 
   // Format in America/New_York to figure out the local date
@@ -439,22 +439,51 @@ export function computeMarketCloseUnix(date?: Date): number {
   const etOffsetMinutes = getETOffsetMinutes(now);
 
   // Start of day in UTC
-  const startOfDayUTC = Date.UTC(year, month - 1, day, 0, 0, 0);
+  let startOfDayUTC = Date.UTC(year, month - 1, day, 0, 0, 0);
   // 4 PM ET in minutes from midnight ET = 960 minutes
   // Convert to UTC: 960 - etOffsetMinutes (offset is negative for behind UTC)
   const marketCloseUTC = startOfDayUTC + (16 * 60 - etOffsetMinutes) * 60 * 1000;
 
   const closeUnix = Math.floor(marketCloseUTC / 1000);
 
-  // If today's close has already passed, recompute for tomorrow (handles DST transitions)
+  // If today's close has already passed, advance to the next valid trading day
   if (closeUnix <= Math.floor(Date.now() / 1000)) {
-    // Advance by exactly 1 day in UTC (not local time) to avoid off-by-one on non-UTC servers
-    const tomorrowStartUTC = startOfDayUTC + 86_400_000;
-    // Compute ET offset at the candidate 4 PM time (not midnight) to handle DST spring-forward correctly
-    const candidate4pmUTC = tomorrowStartUTC + 16 * 60 * 60 * 1000; // rough 4PM UTC guess
-    const tomorrowETOffset = getETOffsetMinutes(new Date(candidate4pmUTC));
-    const tomorrowCloseUTC = tomorrowStartUTC + (16 * 60 - tomorrowETOffset) * 60 * 1000;
-    return Math.floor(tomorrowCloseUTC / 1000);
+    // Advance day-by-day until we find a valid market day (cap at 7 iterations)
+    for (let advance = 1; advance <= 7; advance++) {
+      const candidateStartUTC = startOfDayUTC + advance * 86_400_000;
+      // Compute ET offset at the candidate 4 PM time (not midnight) to handle DST spring-forward correctly
+      const candidate4pmUTC = candidateStartUTC + 16 * 60 * 60 * 1000; // rough 4PM UTC guess
+      const candidateETOffset = getETOffsetMinutes(new Date(candidate4pmUTC));
+      const candidateCloseUTC = candidateStartUTC + (16 * 60 - candidateETOffset) * 60 * 1000;
+      const candidateDate = new Date(candidateCloseUTC);
+
+      if (await isMarketDay(candidateDate)) {
+        return Math.floor(candidateCloseUTC / 1000);
+      }
+    }
+
+    // Fallback: if no valid day found within 7 days (shouldn't happen), use +1 day
+    const fallbackStartUTC = startOfDayUTC + 86_400_000;
+    const fallback4pmUTC = fallbackStartUTC + 16 * 60 * 60 * 1000;
+    const fallbackETOffset = getETOffsetMinutes(new Date(fallback4pmUTC));
+    const fallbackCloseUTC = fallbackStartUTC + (16 * 60 - fallbackETOffset) * 60 * 1000;
+    return Math.floor(fallbackCloseUTC / 1000);
+  }
+
+  // Today's close hasn't passed yet — check if today is a market day
+  if (!(await isMarketDay(now))) {
+    // Today is not a market day — advance to next valid trading day
+    for (let advance = 1; advance <= 7; advance++) {
+      const candidateStartUTC = startOfDayUTC + advance * 86_400_000;
+      const candidate4pmUTC = candidateStartUTC + 16 * 60 * 60 * 1000;
+      const candidateETOffset = getETOffsetMinutes(new Date(candidate4pmUTC));
+      const candidateCloseUTC = candidateStartUTC + (16 * 60 - candidateETOffset) * 60 * 1000;
+      const candidateDate = new Date(candidateCloseUTC);
+
+      if (await isMarketDay(candidateDate)) {
+        return Math.floor(candidateCloseUTC / 1000);
+      }
+    }
   }
 
   return closeUnix;

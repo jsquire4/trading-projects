@@ -5,6 +5,7 @@
 // 2. Update mock oracle price feeds
 // 3. Settle all expired, unsettled markets (with oracle retry)
 // 4. Crank cancel resting orders on settled markets
+// 4.5 Auto-redeem winning tokens for settled markets past override deadline
 // 5. Close eligible markets
 // 6. Auto-create next-day markets
 // 7. Log results + alert on failures
@@ -30,6 +31,7 @@ import {
 
 import { settleMarkets, MarketInfo, tickerFromBytes } from "./settler.js";
 import { crankCancelAll } from "./cranker.js";
+import { autoRedeemAll } from "./redeemer.js";
 import { closeEligibleMarkets } from "./closer.js";
 import { initializeMarkets } from "../../market-initializer/src/initializer.js";
 
@@ -273,6 +275,22 @@ async function runSettlementCycle(): Promise<{ ok: boolean; error?: string; summ
     }
   } else {
     log.info("No settled markets to crank");
+  }
+
+  // ---- Step 4.5: Auto-redeem winning tokens ----
+  if (settledMarkets.length > 0) {
+    log.info(`Running auto-redeem on ${settledMarkets.length} settled markets`);
+    const redeemResults = await autoRedeemAll(meridianProgram, settledMarkets, usdcMint);
+
+    for (const r of redeemResults) {
+      if (r.error) {
+        log.error(`Auto-redeem failed for ${r.market}: ${r.error}`);
+      } else if (r.redeemed > 0) {
+        log.info(`Auto-redeemed ${r.redeemed} users for ${r.market} in ${r.batches} batches`);
+      }
+    }
+  } else {
+    log.info("No settled markets to auto-redeem");
   }
 
   // ---- Step 5: Close eligible markets ----

@@ -203,14 +203,15 @@ export interface CostBasisRow {
 export function queryCostBasis(wallet: string): CostBasisRow[] {
   // Acquisition fills (cost basis = tokens obtained):
   //   - Taker buys Yes: taker = wallet AND takerSide = 0 (USDC_BID)
-  //   - Maker bought Yes when taker sold: maker = wallet AND takerSide = 1 (YES_ASK) → maker is USDC bid side
-  // takerSide=2 (NO_BID) is EXCLUDED — taker sends No tokens FROM wallet to escrow (selling, not acquiring)
+  //   - Maker bought Yes: maker = wallet AND makerSide = 0 (USDC_BID)
+  //     Uses makerSide (not takerSide) because takerSide=1 can match against
+  //     makerSide=0 (Buy Yes) OR makerSide=2 (Sell No / merge fill).
   const stmt = getDb().prepare(`
     SELECT
       market,
       CASE
         WHEN json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 0 THEN 'yes'
-        WHEN json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 1 THEN 'yes'
+        WHEN json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.makerSide') AS INTEGER) = 0 THEN 'yes'
       END as side,
       SUM(CAST(json_extract(data, '$.quantity') AS REAL)) as totalQuantity,
       SUM(CAST(json_extract(data, '$.quantity') AS REAL) * CAST(json_extract(data, '$.price') AS REAL)) as totalCost,
@@ -220,7 +221,7 @@ export function queryCostBasis(wallet: string): CostBasisRow[] {
       AND (
         (json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 0)
         OR
-        (json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 1)
+        (json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.makerSide') AS INTEGER) = 0)
       )
     GROUP BY market, side
     HAVING side IS NOT NULL
@@ -300,7 +301,19 @@ export interface FillWithIntent {
  * Query fills for a wallet with viewer-perspective intent labels.
  *
  * If a stored intent exists for the fill's order, use it directly.
- * Otherwise derive intent from the viewer's role (taker/maker) and takerSide.
+ * Otherwise derive intent from the viewer's role (taker/maker) and side.
+ *
+ * Note on "Buy No" asymmetry: "Buy No" is a UI-only concept — the user
+ * submits a YES_ASK at (100 - price). On-chain, this appears as takerSide=1
+ * or makerSide=1. Without a stored intent, derivation maps side 1 to
+ * "sell_yes" because the on-chain action is identical. Only the stored
+ * intent (from POST /api/order-intent at order submission) can distinguish
+ * a "buy_no" from a "sell_yes".
+ *
+ * The LEFT JOIN is on makerOrderId only — taker orders don't have a
+ * persistent orderId in fill events. Taker intent derivation relies on
+ * takerSide which is always unambiguous (side 0 = buy_yes, 1 = sell_yes,
+ * 2 = sell_no).
  */
 export function queryFillsWithIntent(wallet: string, limit: number = 50): FillWithIntent[] {
   const rows = getDb()

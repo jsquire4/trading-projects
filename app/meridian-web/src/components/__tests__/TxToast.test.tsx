@@ -10,6 +10,11 @@ vi.mock("sonner", () => ({
   },
 }));
 
+// Mock network to return devnet explorer URLs in tests
+vi.mock("@/lib/network", () => ({
+  getExplorerUrl: (sig: string) => `https://explorer.solana.com/tx/${sig}?cluster=devnet`,
+}));
+
 describe("showTxToast", () => {
   beforeEach(() => {
     vi.clearAllMocks();

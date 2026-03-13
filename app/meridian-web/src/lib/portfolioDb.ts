@@ -101,7 +101,8 @@ export async function consolidateOldSnapshots(wallet: string): Promise<void> {
   const etM = parseInt(etNowStr.find(p => p.type === "minute")?.value ?? "0", 10);
   const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
   const etMinutes = (etH % 24) * 60 + etM;
-  const offsetMs = (utcMinutes - etMinutes) * 60_000;
+  const rawDiff = utcMinutes - etMinutes;
+  const offsetMs = (((rawDiff % 1440) + 1440) % 1440) * 60_000;
   const todayMs = etMidnightUtc.getTime() + offsetMs;
 
   // Get all snapshots before today for this wallet

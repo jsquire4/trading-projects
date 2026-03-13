@@ -253,6 +253,13 @@ describe("API Server", () => {
       expect(body.error).toMatch(/Invalid market or wallet/);
     });
 
+    it("returns 413 for oversized request body", async () => {
+      const oversized = { ...validIntent, extra: "x".repeat(5000) };
+      const { status, body } = await post(baseUrl, "/api/order-intent", oversized);
+      expect(status).toBe(413);
+      expect(body.error).toMatch(/too large/i);
+    });
+
     it("returns 405 for GET on order-intent endpoint", async () => {
       const { status } = await get("/api/order-intent");
       expect(status).toBe(405);

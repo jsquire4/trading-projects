@@ -75,6 +75,9 @@ export function TradeModal({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Trade ${ticker}`}
       onClick={onClose}
     >
       {/* Backdrop */}
@@ -103,6 +106,7 @@ export function TradeModal({
             </div>
             <button
               onClick={onClose}
+              aria-label="Close"
               className="text-white/30 hover:text-white/60 transition-colors text-xl leading-none"
             >
               &times;

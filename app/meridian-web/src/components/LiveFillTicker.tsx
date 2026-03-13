@@ -1,11 +1,18 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useIndexedEvents } from "@/hooks/useAnalyticsData";
 import { parseFillEvent } from "@/lib/eventParsers";
 
 export function LiveFillTicker() {
   const { data: events = [] } = useIndexedEvents({ type: "fill", limit: 20 });
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+
+  // Tick every 15s so relative timestamps stay fresh
+  useEffect(() => {
+    const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 15_000);
+    return () => clearInterval(id);
+  }, []);
 
   const fills = useMemo(() => {
     return events
@@ -24,7 +31,7 @@ export function LiveFillTicker() {
           const tokenType = fill.takerSide === 2 ? "No" : "Yes";
           const tokenColor = fill.takerSide === 2 ? "text-red-400" : "text-green-400";
           const qty = (fill.quantity / 1_000_000).toFixed(0);
-          const ago = Math.max(0, Math.floor(Date.now() / 1000 - fill.timestamp));
+          const ago = Math.max(0, now - fill.timestamp);
           const agoStr = ago < 60 ? `${ago}s` : `${Math.floor(ago / 60)}m`;
 
           return (

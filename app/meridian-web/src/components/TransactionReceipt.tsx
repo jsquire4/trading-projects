@@ -46,6 +46,7 @@ export function TransactionReceipt({
         </div>
         <button
           onClick={onClose}
+          aria-label="Close"
           className="text-white/30 hover:text-white/60 transition-colors text-sm"
         >
           ✕
@@ -73,7 +74,9 @@ export function TransactionReceipt({
         </div>
         <div>
           <span className="text-white/40">{winLabel}</span>
-          <div className="text-green-400 font-mono">+${winAmount}</div>
+          <div className={`font-mono ${isSell ? "text-white" : "text-green-400"}`}>
+            {isSell ? "" : "+"}${winAmount}
+          </div>
         </div>
       </div>
 

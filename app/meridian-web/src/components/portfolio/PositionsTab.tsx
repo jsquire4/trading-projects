@@ -120,9 +120,13 @@ function PositionCard({ position, totalCost }: { position: Position; totalCost: 
     }`}>
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <InsightTooltip insight={positionInsight}>
+          {positionInsight ? (
+            <InsightTooltip insight={positionInsight}>
+              <span className="text-white font-bold">{position.market.ticker}</span>
+            </InsightTooltip>
+          ) : (
             <span className="text-white font-bold">{position.market.ticker}</span>
-          </InsightTooltip>
+          )}
           <span className="text-white/40 font-mono text-sm">${strikeDollars.toFixed(0)}</span>
           {isSettled && (
             <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${

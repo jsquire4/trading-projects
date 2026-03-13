@@ -440,6 +440,26 @@ describe("Database Layer", () => {
       expect(fills[0].viewerIntent).toBe("sell_no");
     });
 
+    it("returns 'unknown' for unrecognized side values", () => {
+      insertEvent(makeEvent({
+        market,
+        signature: "fill_sig_unknown",
+        data: JSON.stringify({
+          taker: wallet,
+          maker: "OtherWallet",
+          takerSide: 99,
+          makerSide: 99,
+          price: 50,
+          quantity: 1000000,
+          makerOrderId: "999",
+        }),
+      }));
+
+      const fills = queryFillsWithIntent(wallet);
+      expect(fills).toHaveLength(1);
+      expect(fills[0].viewerIntent).toBe("unknown");
+    });
+
     it("derives maker perspective for merge fill (makerSide=2 = Sell No)", () => {
       const maker = "MergeMakerAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
       // takerSide=1 (Sell Yes) matched by makerSide=2 (No-backed bid)

@@ -39,7 +39,7 @@ describe("FaucetButton", () => {
     mockUseWallet.mockReturnValue({ publicKey: null });
 
     render(<FaucetButton />);
-    expect(screen.getByText("Get Test USDC")).toBeDefined();
+    expect(screen.getByText("Get Test Funds")).toBeDefined();
   });
 
   it("renders on localnet", () => {
@@ -53,7 +53,7 @@ describe("FaucetButton", () => {
     mockUseWallet.mockReturnValue({ publicKey: null });
 
     render(<FaucetButton />);
-    expect(screen.getByText("Get Test USDC")).toBeDefined();
+    expect(screen.getByText("Get Test Funds")).toBeDefined();
   });
 
   it("is hidden on mainnet", () => {
@@ -81,7 +81,7 @@ describe("FaucetButton", () => {
     mockUseWallet.mockReturnValue({ publicKey: null });
 
     render(<FaucetButton />);
-    const button = screen.getByText("Get Test USDC");
-    expect(button.hasAttribute("disabled")).toBe(true);
+    const button = screen.getByRole("button", { name: /Get Test Funds/i });
+    expect(button).toHaveProperty("disabled", true);
   });
 });

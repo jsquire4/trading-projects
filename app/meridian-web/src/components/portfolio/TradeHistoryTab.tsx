@@ -7,19 +7,27 @@ import { parseFillEvent } from "@/lib/eventParsers";
 import { buildCsv, downloadCsv } from "@/lib/csv";
 import { getExplorerUrl } from "@/lib/network";
 
-/** Derive viewer-perspective intent label when no stored intent is available. */
-function deriveViewerIntent(takerSide: number, isTaker: boolean): string {
+/**
+ * Derive viewer-perspective intent label when no stored intent is available.
+ *
+ * On-chain sides: 0 = USDC bid (Buy Yes), 1 = Yes ask (Sell Yes), 2 = No-backed bid (Sell No).
+ *
+ * Taker labels map directly from takerSide.
+ * Maker labels must use makerSide because a Sell-Yes taker (side 1) can match
+ * against either a USDC-bid maker (side 0 → Buy Yes) or a No-backed-bid maker
+ * (side 2 → Sell No).
+ */
+function deriveViewerIntent(takerSide: number, makerSide: number, isTaker: boolean): string {
   if (isTaker) {
     return { 0: "Buy Yes", 1: "Sell Yes", 2: "Sell No" }[takerSide] ?? "Unknown";
   }
-  // Maker perspective: opposite of taker's action
-  return { 0: "Sell Yes", 1: "Buy Yes", 2: "Sell Yes" }[takerSide] ?? "Unknown";
+  // Maker label is determined by the maker's own resting side
+  return { 0: "Buy Yes", 1: "Sell Yes", 2: "Sell No" }[makerSide] ?? "Unknown";
 }
 
 const INTENT_COLORS: Record<string, string> = {
   "Buy Yes": "text-green-400",
   "Sell Yes": "text-amber-400",
-  "Buy No": "text-green-400",
   "Sell No": "text-red-400",
 };
 
@@ -49,7 +57,7 @@ export function TradeHistoryTab() {
     const rows = fills.map((f) => {
       const isTaker = f.taker === walletStr;
       const role = isTaker ? "Taker" : "Maker";
-      const sideLabel = deriveViewerIntent(f.takerSide, isTaker);
+      const sideLabel = deriveViewerIntent(f.takerSide, f.makerSide, isTaker);
       return [
         new Date(f.timestamp * 1000).toISOString(),
         sideLabel,
@@ -102,7 +110,7 @@ export function TradeHistoryTab() {
           <tbody>
             {fills.map((f, i) => {
               const isTaker = f.taker === publicKey?.toBase58();
-              const sideLabel = deriveViewerIntent(f.takerSide, isTaker);
+              const sideLabel = deriveViewerIntent(f.takerSide, f.makerSide, isTaker);
               const sideColor = INTENT_COLORS[sideLabel] ?? "text-white/50";
               const role = isTaker ? "Taker" : "Maker";
               const qty = (f.quantity / 1_000_000).toFixed(0);

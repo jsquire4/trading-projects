@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useFillEvents, useEventIndexerStatus } from "@/hooks/useAnalyticsData";
 import { parseFillEvent } from "@/lib/eventParsers";
 
@@ -12,6 +12,13 @@ interface FillFeedProps {
 export function FillFeed({ marketKey, limit = 20 }: FillFeedProps) {
   const { data: events = [], isLoading } = useFillEvents(marketKey, limit);
   const { isOffline } = useEventIndexerStatus();
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+
+  // Tick every 15s so relative timestamps stay fresh
+  useEffect(() => {
+    const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 15_000);
+    return () => clearInterval(id);
+  }, []);
 
   const fills = useMemo(() => {
     return events
@@ -50,7 +57,7 @@ export function FillFeed({ marketKey, limit = 20 }: FillFeedProps) {
             const tokenType = fill.takerSide === 2 ? "No" : "Yes";
             const tokenColor = fill.takerSide === 2 ? "text-red-400" : "text-green-400";
             const qty = (fill.quantity / 1_000_000).toFixed(0);
-            const ago = Math.max(0, Math.floor(Date.now() / 1000 - fill.timestamp));
+            const ago = Math.max(0, now - fill.timestamp);
             const agoStr = ago < 60 ? `${ago}s` : ago < 3600 ? `${Math.floor(ago / 60)}m` : `${Math.floor(ago / 3600)}h`;
 
             return (

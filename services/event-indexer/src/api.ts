@@ -113,7 +113,7 @@ function handleCostBasis(
 ): void {
   const params = parseQuery(url);
   const wallet = params.wallet;
-  if (!wallet || !/^[A-HJ-NP-Za-km-z1-9]{1,44}$/.test(wallet)) {
+  if (!wallet || !/^[A-HJ-NP-Za-km-z1-9]{32,44}$/.test(wallet)) {
     jsonResponse(res, 400, { error: "Invalid or missing wallet address" }, req);
     return;
   }
@@ -139,16 +139,18 @@ function handleOrderIntent(
   }
 
   let body = "";
+  let bodyOverflow = false;
   const MAX_BODY_SIZE = 4096; // 4KB — order intent payloads are ~200 bytes
   req.on("data", (chunk: Buffer) => {
     body += chunk.toString();
-    if (body.length > MAX_BODY_SIZE) {
-      req.destroy();
+    if (body.length > MAX_BODY_SIZE && !bodyOverflow) {
+      bodyOverflow = true;
       jsonResponse(res, 413, { error: "Request body too large" }, req);
       return;
     }
   });
   req.on("end", () => {
+    if (bodyOverflow) return;
     try {
       const parsed = JSON.parse(body);
       const { orderId, market, wallet, intent, displayPrice } = parsed;
@@ -171,7 +173,7 @@ function handleOrderIntent(
         return;
       }
 
-      if (!/^[A-HJ-NP-Za-km-z1-9]{1,44}$/.test(market) || !/^[A-HJ-NP-Za-km-z1-9]{1,44}$/.test(wallet)) {
+      if (!/^[A-HJ-NP-Za-km-z1-9]{32,44}$/.test(market) || !/^[A-HJ-NP-Za-km-z1-9]{32,44}$/.test(wallet)) {
         jsonResponse(res, 400, { error: "Invalid market or wallet address" }, req);
         return;
       }
@@ -198,7 +200,7 @@ function handleFillsWithIntent(
 ): void {
   const params = parseQuery(url);
   const wallet = params.wallet;
-  if (!wallet || !/^[A-HJ-NP-Za-km-z1-9]{1,44}$/.test(wallet)) {
+  if (!wallet || !/^[A-HJ-NP-Za-km-z1-9]{32,44}$/.test(wallet)) {
     jsonResponse(res, 400, { error: "Invalid or missing wallet address" }, req);
     return;
   }

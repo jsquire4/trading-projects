@@ -12,7 +12,7 @@ const MAX_GROWTH: usize = 10_240;
 
 /// Incrementally allocate the OrderBook PDA.
 ///
-/// The OrderBook (~249KB) exceeds Solana's 10KB CPI data increase limit,
+/// The OrderBook (~248KB) exceeds Solana's 10KB CPI data increase limit,
 /// so it cannot be created in a single instruction. This instruction
 /// handles both initial creation and incremental growth:
 ///

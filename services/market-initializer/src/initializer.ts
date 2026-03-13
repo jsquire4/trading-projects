@@ -19,7 +19,7 @@ import {
 } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
-import { TradierClient } from "../../shared/src/tradier-client.ts";
+import { createMarketDataClient, type IMarketDataClient } from "../../shared/src/market-data.js";
 import { createLogger } from "../../shared/src/alerting.ts";
 import { getETOffsetMinutes } from "../../automation/src/timezone.js";
 import { generateVolAwareStrikes } from "./strikeSelector.ts";
@@ -103,9 +103,9 @@ export async function initializeMarkets(): Promise<InitResult[]> {
     usdcMint: usdcMint.toBase58(),
   });
 
-  // ---- Tradier quotes ------------------------------------------------------
-  const tradier = new TradierClient();
-  const quotes = await tradier.getQuotes(tickers);
+  // ---- Market data quotes ---------------------------------------------------
+  const marketData = createMarketDataClient();
+  const quotes = await marketData.getQuotes(tickers);
 
   const quoteMap = new Map(quotes.map((q) => [q.symbol, q]));
   for (const t of tickers) {
@@ -158,7 +158,7 @@ export async function initializeMarkets(): Promise<InitResult[]> {
       adminKeypair,
       configPda,
       usdcMint,
-      tradier,
+      marketData,
       ticker,
       quote.prevclose,
       marketCloseUnix,
@@ -180,7 +180,7 @@ async function processTickerStrikes(
   admin: Keypair,
   configPda: PublicKey,
   usdcMint: PublicKey,
-  tradier: TradierClient,
+  marketData: IMarketDataClient,
   ticker: string,
   previousClose: number,
   marketCloseUnix: number,
@@ -198,7 +198,7 @@ async function processTickerStrikes(
   const now = new Date();
   const startDate = new Date(now);
   startDate.setDate(startDate.getDate() - 90); // request 90 calendar days to get ~60 trading days
-  const bars = await tradier.getHistory(
+  const bars = await marketData.getHistory(
     ticker,
     "daily",
     startDate.toISOString().slice(0, 10),

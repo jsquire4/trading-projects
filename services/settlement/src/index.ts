@@ -15,7 +15,7 @@ import BN from "bn.js";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 
-import { TradierClient } from "../../shared/src/tradier-client.js";
+import { createMarketDataClient, type IMarketDataClient } from "../../shared/src/market-data.js";
 import { createLogger } from "../../shared/src/alerting.js";
 import meridianIdl from "../../shared/src/idl/meridian.json" with { type: "json" };
 import mockOracleIdl from "../../shared/src/idl/mock_oracle.json" with { type: "json" };
@@ -39,14 +39,14 @@ const log = createLogger("settlement");
 // ---------------------------------------------------------------------------
 
 async function fetchClosingPrices(
-  tradier: TradierClient,
+  marketData: IMarketDataClient,
   tickers: string[],
 ): Promise<Map<string, number>> {
   log.info(`Fetching closing prices for ${tickers.length} tickers`, {
     tickers,
   });
 
-  const quotes = await tradier.getQuotes(tickers);
+  const quotes = await marketData.getQuotes(tickers);
   const prices = new Map<string, number>();
 
   for (const q of quotes) {
@@ -176,14 +176,12 @@ async function loadUnsettledMarkets(
 }
 
 // ---------------------------------------------------------------------------
-// Main
+// Settlement cycle — extracted for reuse by trigger server
 // ---------------------------------------------------------------------------
 
-async function main(): Promise<void> {
-  log.info("=== Settlement Service starting ===");
+async function runSettlementCycle(): Promise<{ ok: boolean; error?: string; summary?: Record<string, unknown> }> {
   const startTime = Date.now();
 
-  // ---- Environment ----------------------------------------------------------
   const RPC_URL = process.env.RPC_URL ?? "http://127.0.0.1:8899";
   const ADMIN_KEYPAIR_B58 = process.env.ADMIN_KEYPAIR;
 
@@ -191,7 +189,6 @@ async function main(): Promise<void> {
     throw new Error("ADMIN_KEYPAIR env var is required (base58 secret key)");
   }
 
-  // ---- Setup ----------------------------------------------------------------
   const adminKeypair = Keypair.fromSecretKey(bs58.decode(ADMIN_KEYPAIR_B58));
   const connection = new Connection(RPC_URL, "confirmed");
   const wallet = new Wallet(adminKeypair);
@@ -205,143 +202,214 @@ async function main(): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const oracleProgram = new Program(mockOracleIdl as any, provider);
 
-  const tradier = new TradierClient();
+  const marketData = createMarketDataClient();
 
+  // ---- Load on-chain state ----
+  const [configPda] = findGlobalConfig();
+  const globalConfig = await meridianProgram.account.globalConfig.fetch(configPda);
+  const usdcMint = globalConfig.usdcMint as PublicKey;
+
+  // Extract active tickers from GlobalConfig
+  const tickerCount = (globalConfig.tickerCount as number) ?? 0;
+  const tickerArrays = globalConfig.tickers as number[][];
+  const activeTickers: string[] = [];
+  for (let i = 0; i < tickerCount; i++) {
+    const t = Buffer.from(tickerArrays[i]).toString("utf-8").replace(/\0+$/, "");
+    if (t.length > 0) activeTickers.push(t);
+  }
+
+  if (activeTickers.length === 0) {
+    return { ok: true, summary: { message: "No active tickers found" } };
+  }
+
+  log.info(`Active tickers: ${activeTickers.join(", ")}`);
+
+  // ---- Step 1: Fetch closing prices ----
+  const closingPrices = await fetchClosingPrices(marketData, activeTickers);
+
+  // ---- Step 2: Update oracle feeds ----
+  await updateOracleFeeds(oracleProgram, adminKeypair, closingPrices);
+
+  // ---- Step 3: Settle markets ----
+  const allMarkets = await loadUnsettledMarkets(meridianProgram);
+  const now = Math.floor(Date.now() / 1000);
+  const expiredUnsettled = allMarkets.filter((m) => {
+    if (m.account.isSettled) return false;
+    if (m.account.marketCloseUnix.toNumber() > now) return false;
+    const ticker = tickerFromBytes(m.account.ticker);
+    if (!closingPrices.has(ticker)) {
+      log.warn(`Skipping settlement for ${ticker} — no closing price available`);
+      return false;
+    }
+    return true;
+  });
+
+  log.info(`${expiredUnsettled.length} markets eligible for settlement`);
+
+  const settlementResult = await settleMarkets(meridianProgram, expiredUnsettled);
+
+  log.info(
+    `Settlement complete: ${settlementResult.settled.length} settled, ${settlementResult.failed.length} failed`,
+  );
+
+  // ---- Step 4: Crank cancel on settled markets ----
+  const settledMarkets = allMarkets.filter(
+    (m) =>
+      m.account.isSettled ||
+      settlementResult.settled.some((s) => s.publicKey.equals(m.publicKey)),
+  );
+
+  if (settledMarkets.length > 0) {
+    log.info(`Running crank cancel on ${settledMarkets.length} settled markets`);
+    const crankResults = await crankCancelAll(meridianProgram, settledMarkets, usdcMint);
+
+    for (const r of crankResults) {
+      if (r.error) {
+        log.error(`Crank failed for ${r.market}: ${r.error}`);
+      } else if (r.cancelled > 0) {
+        log.info(`Cranked ${r.cancelled} orders for ${r.market}`);
+      }
+    }
+  } else {
+    log.info("No settled markets to crank");
+  }
+
+  // ---- Step 5: Close eligible markets ----
+  log.info("Checking for markets eligible to close");
+  const closeResult = await closeEligibleMarkets(meridianProgram, adminKeypair, connection);
+  if (closeResult.closed.length > 0) {
+    log.info(`Closed ${closeResult.closed.length} markets: ${closeResult.closed.join(", ")}`);
+  }
+  if (closeResult.failed.length > 0) {
+    log.error(`Failed to close ${closeResult.failed.length} markets`, {
+      failed: closeResult.failed,
+    });
+  }
+
+  // ---- Step 6: Auto-create next-day markets ----
+  log.info("Creating markets for next trading day");
   try {
-    // ---- Load on-chain state ----
-    const [configPda] = findGlobalConfig();
-    const globalConfig = await meridianProgram.account.globalConfig.fetch(configPda);
-    const usdcMint = globalConfig.usdcMint as PublicKey;
+    const initResults = await initializeMarkets();
+    const totalCreated = initResults.reduce((s, r) => s + r.strikesCreated, 0);
+    const totalSkipped = initResults.reduce((s, r) => s + r.strikesSkipped, 0);
+    const initErrors = initResults.flatMap((r) => r.errors);
 
-    // Extract active tickers from GlobalConfig
-    const tickerCount = (globalConfig.tickerCount as number) ?? 0;
-    const tickerArrays = globalConfig.tickers as number[][];
-    const activeTickers: string[] = [];
-    for (let i = 0; i < tickerCount; i++) {
-      const t = Buffer.from(tickerArrays[i]).toString("utf-8").replace(/\0+$/, "");
-      if (t.length > 0) activeTickers.push(t);
+    if (totalCreated > 0) {
+      log.info(`Next-day markets created: ${totalCreated} new, ${totalSkipped} skipped`, {
+        results: initResults.map((r) => ({
+          ticker: r.ticker,
+          previousClose: r.previousClose,
+          created: r.strikesCreated,
+          skipped: r.strikesSkipped,
+        })),
+      });
+    } else if (totalSkipped > 0) {
+      log.info(`Next-day markets already exist (${totalSkipped} skipped)`);
     }
 
-    if (activeTickers.length === 0) {
-      log.warn("No active tickers found in GlobalConfig, nothing to settle");
+    if (initErrors.length > 0) {
+      log.error(`Market creation had ${initErrors.length} errors`, { errors: initErrors });
+    }
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    log.error(`Failed to create next-day markets: ${errMsg}`, {
+      stack: err instanceof Error ? err.stack : undefined,
+    });
+    // Non-fatal — settlement was successful, markets can be created by morning-init
+  }
+
+  // ---- Summary ----
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  const summary = {
+    elapsed: `${elapsed}s`,
+    settled: settlementResult.settled.map((m) => tickerFromBytes(m.account.ticker)),
+    failed: settlementResult.failed.map((f) => ({
+      ticker: tickerFromBytes(f.market.account.ticker),
+      error: f.error,
+    })),
+  };
+
+  if (settlementResult.failed.length > 0) {
+    log.critical(
+      `Settlement completed with ${settlementResult.failed.length} failures — manual override may be required`,
+      summary,
+    );
+    return { ok: false, error: `${settlementResult.failed.length} settlement failures`, summary };
+  }
+
+  log.info(`Settlement completed successfully in ${elapsed}s`, summary);
+  return { ok: true, summary };
+}
+
+// ---------------------------------------------------------------------------
+// Synthetic mode: HTTP trigger server
+// ---------------------------------------------------------------------------
+
+import http from "node:http";
+
+function startTriggerServer(): void {
+  const port = parseInt(process.env.TRIGGER_PORT ?? "4002", 10);
+  let running = false;
+
+  const server = http.createServer(async (req, res) => {
+    if (req.url !== "/trigger") {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not found" }));
       return;
     }
 
-    log.info(`Active tickers: ${activeTickers.join(", ")}`);
-
-    // ---- Step 1: Fetch closing prices ----
-    const closingPrices = await fetchClosingPrices(tradier, activeTickers);
-
-    // ---- Step 2: Update oracle feeds ----
-    await updateOracleFeeds(oracleProgram, adminKeypair, closingPrices);
-
-    // ---- Step 3: Settle markets ----
-    const allMarkets = await loadUnsettledMarkets(meridianProgram);
-    const now = Math.floor(Date.now() / 1000);
-    const expiredUnsettled = allMarkets.filter((m) => {
-      if (m.account.isSettled) return false;
-      if (m.account.marketCloseUnix.toNumber() > now) return false;
-      const ticker = tickerFromBytes(m.account.ticker);
-      if (!closingPrices.has(ticker)) {
-        log.warn(`Skipping settlement for ${ticker} — no closing price available`);
-        return false;
-      }
-      return true;
-    });
-
-    log.info(`${expiredUnsettled.length} markets eligible for settlement`);
-
-    const settlementResult = await settleMarkets(meridianProgram, expiredUnsettled);
-
-    log.info(
-      `Settlement complete: ${settlementResult.settled.length} settled, ${settlementResult.failed.length} failed`,
-    );
-
-    // ---- Step 4: Crank cancel on settled markets ----
-    // Include both freshly-settled and previously-settled markets
-    const settledMarkets = allMarkets.filter(
-      (m) =>
-        m.account.isSettled ||
-        settlementResult.settled.some((s) => s.publicKey.equals(m.publicKey)),
-    );
-
-    if (settledMarkets.length > 0) {
-      log.info(`Running crank cancel on ${settledMarkets.length} settled markets`);
-      const crankResults = await crankCancelAll(meridianProgram, settledMarkets, usdcMint);
-
-      for (const r of crankResults) {
-        if (r.error) {
-          log.error(`Crank failed for ${r.market}: ${r.error}`);
-        } else if (r.cancelled > 0) {
-          log.info(`Cranked ${r.cancelled} orders for ${r.market}`);
-        }
-      }
-    } else {
-      log.info("No settled markets to crank");
+    if (req.method !== "POST") {
+      res.writeHead(405, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Method not allowed — use POST" }));
+      return;
     }
 
-    // ---- Step 5: Close eligible markets ----
-    log.info("Checking for markets eligible to close");
-    const closeResult = await closeEligibleMarkets(meridianProgram, adminKeypair, connection);
-    if (closeResult.closed.length > 0) {
-      log.info(`Closed ${closeResult.closed.length} markets: ${closeResult.closed.join(", ")}`);
-    }
-    if (closeResult.failed.length > 0) {
-      log.error(`Failed to close ${closeResult.failed.length} markets`, {
-        failed: closeResult.failed,
-      });
+    if (running) {
+      res.writeHead(409, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Settlement cycle already in progress" }));
+      return;
     }
 
-    // ---- Step 6: Auto-create next-day markets ----
-    log.info("Creating markets for next trading day");
+    running = true;
     try {
-      const initResults = await initializeMarkets();
-      const totalCreated = initResults.reduce((s, r) => s + r.strikesCreated, 0);
-      const totalSkipped = initResults.reduce((s, r) => s + r.strikesSkipped, 0);
-      const initErrors = initResults.flatMap((r) => r.errors);
-
-      if (totalCreated > 0) {
-        log.info(`Next-day markets created: ${totalCreated} new, ${totalSkipped} skipped`, {
-          results: initResults.map((r) => ({
-            ticker: r.ticker,
-            previousClose: r.previousClose,
-            created: r.strikesCreated,
-            skipped: r.strikesSkipped,
-          })),
-        });
-      } else if (totalSkipped > 0) {
-        log.info(`Next-day markets already exist (${totalSkipped} skipped)`);
-      }
-
-      if (initErrors.length > 0) {
-        log.error(`Market creation had ${initErrors.length} errors`, { errors: initErrors });
-      }
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      log.error(`Failed to create next-day markets: ${errMsg}`, {
-        stack: err instanceof Error ? err.stack : undefined,
-      });
-      // Non-fatal — settlement was successful, markets can be created by morning-init
+      const result = await runSettlementCycle();
+      const status = result.ok ? 200 : 500;
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(result));
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error("Trigger settlement cycle failed", { error: msg });
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: msg }));
+    } finally {
+      running = false;
     }
+  });
 
-    // ---- Step 7: Summary ----
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    const summary = {
-      elapsed: `${elapsed}s`,
-      settled: settlementResult.settled.map((m) => tickerFromBytes(m.account.ticker)),
-      failed: settlementResult.failed.map((f) => ({
-        ticker: tickerFromBytes(f.market.account.ticker),
-        error: f.error,
-      })),
-    };
+  server.listen(port, () => {
+    log.info(`Settlement trigger server listening on port ${port} (POST /trigger)`);
+  });
+}
 
-    if (settlementResult.failed.length > 0) {
-      log.critical(
-        `Settlement completed with ${settlementResult.failed.length} failures — manual override may be required`,
-        summary,
-      );
-    } else {
-      log.info(`Settlement completed successfully in ${elapsed}s`, summary);
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+async function main(): Promise<void> {
+  const isSynthetic = process.env.MARKET_DATA_SOURCE === "synthetic";
+
+  if (isSynthetic) {
+    log.info("=== Settlement Service starting in SYNTHETIC mode — trigger server ===");
+    startTriggerServer();
+    return; // Keep process alive (HTTP server)
+  }
+
+  // Live mode: one-shot
+  log.info("=== Settlement Service starting (live mode) ===");
+  try {
+    const result = await runSettlementCycle();
+    if (!result.ok) {
+      process.exit(1);
     }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);

@@ -11,6 +11,7 @@ import bs58 from "bs58";
 import { createLogger } from "../../shared/src/alerting.js";
 import { findGlobalConfig } from "../../shared/src/pda.js";
 import { startFeeder, type FeederHandle } from "./feeder.js";
+import { startSyntheticFeeder } from "./synthetic-feeder.js";
 
 import type { Meridian } from "../../shared/src/idl/meridian.js";
 import MeridianIDL from "../../shared/src/idl/meridian.json" with { type: "json" };
@@ -106,7 +107,14 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const feeder = await startFeeder(tickers, connection, authority);
+  const isSynthetic = process.env.MARKET_DATA_SOURCE === "synthetic";
+  const feeder = isSynthetic
+    ? await startSyntheticFeeder(tickers, connection, authority)
+    : await startFeeder(tickers, connection, authority);
+
+  if (isSynthetic) {
+    log.info("Running in SYNTHETIC mode — no Tradier API dependency");
+  }
 
   // Graceful shutdown
   let shuttingDown = false;

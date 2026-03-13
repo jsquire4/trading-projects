@@ -1,7 +1,15 @@
-import { openDB, type IDBPDatabase } from "idb";
+/**
+ * Portfolio DB types.
+ *
+ * Previously backed by IndexedDB for client-side P&L snapshots.
+ * Now the event-indexer API provides portfolio data server-side.
+ *
+ * This file is kept for type re-exports consumed by usePortfolioSnapshot
+ * and PnlTab. The IndexedDB dependency has been removed.
+ */
 
 // ---------------------------------------------------------------------------
-// Types
+// Types (unchanged — consumers depend on these shapes)
 // ---------------------------------------------------------------------------
 
 export interface PositionSnapshot {
@@ -32,145 +40,33 @@ export interface DailySummary {
 }
 
 // ---------------------------------------------------------------------------
-// DB setup
+// Stubs — no-ops for any remaining call sites
 // ---------------------------------------------------------------------------
 
-const DB_NAME = "meridian-portfolio";
-const DB_VERSION = 1;
-
-let dbPromise: Promise<IDBPDatabase> | null = null;
-
-function getDb(): Promise<IDBPDatabase> {
-  if (!dbPromise) {
-    dbPromise = openDB(DB_NAME, DB_VERSION, {
-      upgrade(db) {
-        // Intraday snapshots — indexed by [wallet, ts] for range queries
-        if (!db.objectStoreNames.contains("snapshots")) {
-          const store = db.createObjectStore("snapshots", { autoIncrement: true });
-          store.createIndex("by-wallet-ts", ["wallet", "ts"]);
-        }
-        // Daily summaries — keyed by "wallet:date"
-        if (!db.objectStoreNames.contains("daily_summaries")) {
-          db.createObjectStore("daily_summaries", { keyPath: "id" });
-        }
-      },
-    });
-  }
-  return dbPromise;
+/** @deprecated No longer writes to IndexedDB. Data comes from event-indexer. */
+export async function writeSnapshot(_snapshot: PnlSnapshot): Promise<void> {
+  // no-op
 }
 
-// ---------------------------------------------------------------------------
-// Snapshot operations
-// ---------------------------------------------------------------------------
-
-export async function writeSnapshot(snapshot: PnlSnapshot): Promise<void> {
-  const db = await getDb();
-  await db.add("snapshots", snapshot);
+/** @deprecated No longer needed. Data comes from event-indexer. */
+export async function consolidateOldSnapshots(_wallet: string): Promise<void> {
+  // no-op
 }
 
+/** @deprecated No longer reads from IndexedDB. Data comes from event-indexer. */
 export async function getIntradaySnapshots(
-  wallet: string,
-  dayStartMs: number,
+  _wallet: string,
+  _dayStartMs: number,
 ): Promise<PnlSnapshot[]> {
-  const db = await getDb();
-  const range = IDBKeyRange.bound([wallet, dayStartMs], [wallet, Number.MAX_SAFE_INTEGER]);
-  return db.getAllFromIndex("snapshots", "by-wallet-ts", range);
+  return [];
 }
 
-// ---------------------------------------------------------------------------
-// Consolidation — collapse old intraday ticks to daily summaries
-// ---------------------------------------------------------------------------
-
-export async function consolidateOldSnapshots(wallet: string): Promise<void> {
-  const db = await getDb();
-
-  // Use ET midnight for day boundary (consistent with usePortfolioSnapshot)
-  const now = new Date();
-  const etDate = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(now);
-  const etMidnightUtc = new Date(`${etDate}T00:00:00Z`);
-  const etNowStr = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    hour: "numeric", minute: "numeric", hour12: false,
-  }).formatToParts(now);
-  const etH = parseInt(etNowStr.find(p => p.type === "hour")?.value ?? "0", 10);
-  const etM = parseInt(etNowStr.find(p => p.type === "minute")?.value ?? "0", 10);
-  const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
-  const etMinutes = (etH % 24) * 60 + etM;
-  const rawDiff = utcMinutes - etMinutes;
-  const offsetMs = (((rawDiff % 1440) + 1440) % 1440) * 60_000;
-  const todayMs = etMidnightUtc.getTime() + offsetMs;
-
-  // Get all snapshots before today for this wallet
-  const range = IDBKeyRange.bound([wallet, 0], [wallet, todayMs], false, true);
-  const tx = db.transaction(["snapshots", "daily_summaries"], "readwrite");
-  const snapshotStore = tx.objectStore("snapshots");
-  const summaryStore = tx.objectStore("daily_summaries");
-  const index = snapshotStore.index("by-wallet-ts");
-
-  const oldSnapshots: PnlSnapshot[] = await index.getAll(range);
-  const keysToDelete: IDBValidKey[] = await index.getAllKeys(range);
-
-  if (oldSnapshots.length === 0) {
-    await tx.done;
-    return;
-  }
-
-  // Group by date
-  const byDate = new Map<string, PnlSnapshot[]>();
-  for (const snap of oldSnapshots) {
-    const date = new Date(snap.ts).toISOString().split("T")[0];
-    const arr = byDate.get(date) ?? [];
-    arr.push(snap);
-    byDate.set(date, arr);
-  }
-
-  // Write daily summaries
-  for (const [date, snaps] of byDate) {
-    const sorted = snaps.sort((a, b) => a.ts - b.ts);
-    const values = sorted.map((s) => s.totalValue);
-    const summary: DailySummary & { id: string } = {
-      id: `${wallet}:${date}`,
-      date,
-      wallet,
-      openValue: values[0],
-      closeValue: values[values.length - 1],
-      highValue: Math.max(...values),
-      lowValue: Math.min(...values),
-      pnl: values[values.length - 1] - values[0],
-      positionCount: sorted[sorted.length - 1].positions.length,
-    };
-    await summaryStore.put(summary);
-  }
-
-  // Delete old intraday ticks
-  for (const key of keysToDelete) {
-    await snapshotStore.delete(key);
-  }
-
-  await tx.done;
+/** @deprecated No longer reads from IndexedDB. Data comes from event-indexer. */
+export async function getDailySummaries(_wallet: string): Promise<DailySummary[]> {
+  return [];
 }
 
-// ---------------------------------------------------------------------------
-// Daily summary queries
-// ---------------------------------------------------------------------------
-
-export async function getDailySummaries(wallet: string): Promise<DailySummary[]> {
-  const db = await getDb();
-  const all = await db.getAll("daily_summaries");
-  return (all as (DailySummary & { id: string })[])
-    .filter((s) => s.wallet === wallet)
-    .sort((a, b) => a.date.localeCompare(b.date));
-}
-
+/** @deprecated No longer needed. */
 export async function clearAllData(): Promise<void> {
-  const db = await getDb();
-  const tx = db.transaction(["snapshots", "daily_summaries"], "readwrite");
-  await tx.objectStore("snapshots").clear();
-  await tx.objectStore("daily_summaries").clear();
-  await tx.done;
+  // no-op
 }

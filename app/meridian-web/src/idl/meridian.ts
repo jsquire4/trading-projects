@@ -474,6 +474,67 @@ export type Meridian = {
       ]
     },
     {
+      "name": "crankRedeem",
+      "discriminator": [
+        140,
+        55,
+        201,
+        8,
+        210,
+        41,
+        220,
+        213
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "yesMint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "noMint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "usdcVault",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "batchSize",
+          "type": "u8"
+        }
+      ]
+    },
+    {
       "name": "createStrikeMarket",
       "discriminator": [
         21,
@@ -487,12 +548,13 @@ export type Meridian = {
       ],
       "accounts": [
         {
-          "name": "admin",
+          "name": "creator",
+          "docs": [
+            "Market creator — can be anyone (admin or regular user).",
+            "Non-admin creators pay a strike_creation_fee if configured."
+          ],
           "writable": true,
-          "signer": true,
-          "relations": [
-            "config"
-          ]
+          "signer": true
         },
         {
           "name": "config"
@@ -726,6 +788,23 @@ export type Meridian = {
           "name": "usdcMint"
         },
         {
+          "name": "creatorUsdcAta",
+          "docs": [
+            "Creator's USDC ATA — fee is deducted from here for non-admin creators.",
+            "Optional: only required when creator != admin && strike_creation_fee > 0."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "feeVault",
+          "docs": [
+            "Fee vault — receives strike creation fees."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
           "name": "tokenProgram",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -828,6 +907,31 @@ export type Meridian = {
                   117,
                   114,
                   121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "feeVault",
+          "docs": [
+            "Fee vault USDC account owned by config PDA — receives protocol fees from fills"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  101,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
                 ]
               }
             ]
@@ -1304,6 +1408,31 @@ export type Meridian = {
           "writable": true
         },
         {
+          "name": "feeVault",
+          "docs": [
+            "Fee vault — collects protocol fees from fills"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  101,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "tokenProgram",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -1631,6 +1760,94 @@ export type Meridian = {
           }
         }
       ]
+    },
+    {
+      "name": "updateFeeBps",
+      "discriminator": [
+        43,
+        158,
+        104,
+        51,
+        236,
+        96,
+        178,
+        195
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "newFeeBps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "updateStrikeCreationFee",
+      "discriminator": [
+        206,
+        218,
+        90,
+        67,
+        214,
+        245,
+        93,
+        181
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "newFee",
+          "type": "u64"
+        }
+      ]
     }
   ],
   "accounts": [
@@ -1686,6 +1903,19 @@ export type Meridian = {
         69,
         0,
         178
+      ]
+    },
+    {
+      "name": "crankRedeemEvent",
+      "discriminator": [
+        177,
+        221,
+        43,
+        194,
+        105,
+        216,
+        144,
+        194
       ]
     },
     {
@@ -2060,6 +2290,26 @@ export type Meridian = {
       "code": 6120,
       "name": "altAlreadySet",
       "msg": "Market ALT address has already been set"
+    },
+    {
+      "code": 6130,
+      "name": "feeBpsOutOfRange",
+      "msg": "Fee basis points exceeds maximum (1000 = 10%)"
+    },
+    {
+      "code": 6131,
+      "name": "feeTransferFailed",
+      "msg": "Fee vault CPI transfer failed"
+    },
+    {
+      "code": 6140,
+      "name": "crankRedeemOverrideActive",
+      "msg": "Redemption blocked — override window still active"
+    },
+    {
+      "code": 6141,
+      "name": "crankRedeemEmpty",
+      "msg": "No tokens were redeemed in this batch"
     }
   ],
   "types": [
@@ -2075,6 +2325,26 @@ export type Meridian = {
           {
             "name": "cancelledCount",
             "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "crankRedeemEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "redeemedCount",
+            "type": "u32"
+          },
+          {
+            "name": "totalUsdcRedeemed",
+            "type": "u64"
           }
         ]
       }
@@ -2132,6 +2402,13 @@ export type Meridian = {
           {
             "name": "timestamp",
             "type": "i64"
+          },
+          {
+            "name": "fee",
+            "docs": [
+              "Protocol fee deducted from USDC flow on this fill"
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -2229,6 +2506,13 @@ export type Meridian = {
             "type": "u8"
           },
           {
+            "name": "feeBps",
+            "docs": [
+              "Protocol fee in basis points (max 1000 = 10%), applied to both sides of every fill"
+            ],
+            "type": "u16"
+          },
+          {
             "name": "padding",
             "docs": [
               "Alignment padding"
@@ -2236,9 +2520,16 @@ export type Meridian = {
             "type": {
               "array": [
                 "u8",
-                4
+                2
               ]
             }
+          },
+          {
+            "name": "strikeCreationFee",
+            "docs": [
+              "Fee in USDC lamports charged to non-admin users creating strike markets"
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -2421,7 +2712,7 @@ export type Meridian = {
                     "name": "orderSlot"
                   }
                 },
-                16
+                32
               ]
             }
           },

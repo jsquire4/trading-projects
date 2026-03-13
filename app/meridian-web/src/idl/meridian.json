@@ -468,6 +468,67 @@
       ]
     },
     {
+      "name": "crank_redeem",
+      "discriminator": [
+        140,
+        55,
+        201,
+        8,
+        210,
+        41,
+        220,
+        213
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "yes_mint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "no_mint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "usdc_vault",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "batch_size",
+          "type": "u8"
+        }
+      ]
+    },
+    {
       "name": "create_strike_market",
       "discriminator": [
         21,
@@ -481,12 +542,13 @@
       ],
       "accounts": [
         {
-          "name": "admin",
+          "name": "creator",
+          "docs": [
+            "Market creator — can be anyone (admin or regular user).",
+            "Non-admin creators pay a strike_creation_fee if configured."
+          ],
           "writable": true,
-          "signer": true,
-          "relations": [
-            "config"
-          ]
+          "signer": true
         },
         {
           "name": "config"
@@ -720,6 +782,23 @@
           "name": "usdc_mint"
         },
         {
+          "name": "creator_usdc_ata",
+          "docs": [
+            "Creator's USDC ATA — fee is deducted from here for non-admin creators.",
+            "Optional: only required when creator != admin && strike_creation_fee > 0."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "fee_vault",
+          "docs": [
+            "Fee vault — receives strike creation fees."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -822,6 +901,31 @@
                   117,
                   114,
                   121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "fee_vault",
+          "docs": [
+            "Fee vault USDC account owned by config PDA — receives protocol fees from fills"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  101,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
                 ]
               }
             ]
@@ -1298,6 +1402,31 @@
           "writable": true
         },
         {
+          "name": "fee_vault",
+          "docs": [
+            "Fee vault — collects protocol fees from fills"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  101,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -1625,6 +1754,94 @@
           }
         }
       ]
+    },
+    {
+      "name": "update_fee_bps",
+      "discriminator": [
+        43,
+        158,
+        104,
+        51,
+        236,
+        96,
+        178,
+        195
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_fee_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "update_strike_creation_fee",
+      "discriminator": [
+        206,
+        218,
+        90,
+        67,
+        214,
+        245,
+        93,
+        181
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_fee",
+          "type": "u64"
+        }
+      ]
     }
   ],
   "accounts": [
@@ -1680,6 +1897,19 @@
         69,
         0,
         178
+      ]
+    },
+    {
+      "name": "CrankRedeemEvent",
+      "discriminator": [
+        177,
+        221,
+        43,
+        194,
+        105,
+        216,
+        144,
+        194
       ]
     },
     {
@@ -2054,6 +2284,26 @@
       "code": 6120,
       "name": "AltAlreadySet",
       "msg": "Market ALT address has already been set"
+    },
+    {
+      "code": 6130,
+      "name": "FeeBpsOutOfRange",
+      "msg": "Fee basis points exceeds maximum (1000 = 10%)"
+    },
+    {
+      "code": 6131,
+      "name": "FeeTransferFailed",
+      "msg": "Fee vault CPI transfer failed"
+    },
+    {
+      "code": 6140,
+      "name": "CrankRedeemOverrideActive",
+      "msg": "Redemption blocked — override window still active"
+    },
+    {
+      "code": 6141,
+      "name": "CrankRedeemEmpty",
+      "msg": "No tokens were redeemed in this batch"
     }
   ],
   "types": [
@@ -2069,6 +2319,26 @@
           {
             "name": "cancelled_count",
             "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CrankRedeemEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "redeemed_count",
+            "type": "u32"
+          },
+          {
+            "name": "total_usdc_redeemed",
+            "type": "u64"
           }
         ]
       }
@@ -2126,6 +2396,13 @@
           {
             "name": "timestamp",
             "type": "i64"
+          },
+          {
+            "name": "fee",
+            "docs": [
+              "Protocol fee deducted from USDC flow on this fill"
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -2223,6 +2500,13 @@
             "type": "u8"
           },
           {
+            "name": "fee_bps",
+            "docs": [
+              "Protocol fee in basis points (max 1000 = 10%), applied to both sides of every fill"
+            ],
+            "type": "u16"
+          },
+          {
             "name": "_padding",
             "docs": [
               "Alignment padding"
@@ -2230,9 +2514,16 @@
             "type": {
               "array": [
                 "u8",
-                4
+                2
               ]
             }
+          },
+          {
+            "name": "strike_creation_fee",
+            "docs": [
+              "Fee in USDC lamports charged to non-admin users creating strike markets"
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -2415,7 +2706,7 @@
                     "name": "OrderSlot"
                   }
                 },
-                16
+                32
               ]
             }
           },

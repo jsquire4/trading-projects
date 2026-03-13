@@ -128,6 +128,7 @@ export function PnlTab() {
     bottomPerformer,
     isReady,
     approximate,
+    unavailable,
   } = usePortfolioSnapshot(midPriceMap);
 
   const { costBasis } = useCostBasis();
@@ -188,6 +189,23 @@ export function PnlTab() {
       isWinner,
     };
   });
+
+  // Event-indexer unavailable state
+  if (unavailable) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 py-20 text-center">
+        <div className="w-14 h-14 rounded-full bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-2xl">
+          !
+        </div>
+        <p className="text-white/50 text-sm">
+          Portfolio data unavailable
+        </p>
+        <p className="text-white/30 text-xs max-w-xs">
+          The event indexer service is not reachable. P&amp;L data will appear when the service is back online.
+        </p>
+      </div>
+    );
+  }
 
   // Empty state — no data yet
   if (isReady && intradayData.length === 0 && positions.length === 0) {

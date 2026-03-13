@@ -61,7 +61,7 @@ export function usePositions() {
       return positions;
     },
     enabled: !!publicKey && connected && markets.length > 0,
-    refetchInterval: 15_000,
-    staleTime: 10_000,
+    refetchInterval: 5_000,
+    staleTime: 3_000,
   });
 }

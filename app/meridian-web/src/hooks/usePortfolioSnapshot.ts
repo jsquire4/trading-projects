@@ -1,35 +1,59 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { usePositions } from "@/hooks/usePositions";
-import {
-  writeSnapshot,
-  consolidateOldSnapshots,
-  getIntradaySnapshots,
-  getDailySummaries,
-  type PnlSnapshot,
-  type PositionSnapshot,
-  type DailySummary,
+import type {
+  PnlSnapshot,
+  DailySummary,
 } from "@/lib/portfolioDb";
 
-// NOTE: useOrderBook only works for a single market. For portfolio-wide snapshots,
-// we'll use position data directly without live mid-price valuation.
-// The snapshot stores the token balances and a rough value estimate.
+// Re-export types for consumers
+export type { PnlSnapshot, DailySummary };
+
+const EVENT_INDEXER_URL = process.env.NEXT_PUBLIC_EVENT_INDEXER_URL ?? "http://localhost:3001";
+
+// ---------------------------------------------------------------------------
+// API response types (from event-indexer)
+// ---------------------------------------------------------------------------
+
+interface PortfolioPosition {
+  market: string;
+  side: number;
+  totalQuantity: number;
+  totalCost: number;
+  avgPrice: number;
+  fillCount: number;
+}
+
+interface ApiDailySummary {
+  date: string;
+  totalVolume: number;
+  fillCount: number;
+  netCostBasis: number;
+}
+
+// ---------------------------------------------------------------------------
+// Hook
+// ---------------------------------------------------------------------------
 
 /**
- * Piggybacks on usePositions polling (15s) to write P&L snapshots to IndexedDB.
- * Runs consolidation on mount to compress old intraday data into daily summaries.
+ * Fetches portfolio P&L data from the event-indexer API.
+ *
+ * Returns the same shape as the old IndexedDB-based implementation so
+ * downstream components (PnlTab, etc.) don't need changes.
+ *
+ * Falls back to a graceful "unavailable" state if the event-indexer is
+ * unreachable (no crash, just empty data).
  */
 export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
   const { publicKey } = useWallet();
   const { data: positions = [] } = usePositions();
-  const [intradayData, setIntradayData] = useState<PnlSnapshot[]>([]);
+  const [apiPositions, setApiPositions] = useState<PortfolioPosition[]>([]);
   const [dailySummaries, setDailySummaries] = useState<DailySummary[]>([]);
   const [isReady, setIsReady] = useState(false);
   const [approximate, setApproximate] = useState(false);
-  const lastSnapshotRef = useRef<number>(0);
-  const consolidatedRef = useRef(false);
+  const [unavailable, setUnavailable] = useState(false);
 
   const wallet = publicKey?.toBase58() ?? "";
 
@@ -39,110 +63,61 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
     [midPrices],
   );
 
-  // Consolidate old data on mount (once per session)
-  useEffect(() => {
-    if (!wallet || consolidatedRef.current) return;
-    consolidateOldSnapshots(wallet)
-      .then(() => { consolidatedRef.current = true; })
-      .catch(() => {});
-  }, [wallet]);
-
-  // Write snapshot when positions change (throttled to max once per 10s)
-  useEffect(() => {
-    if (!wallet || positions.length === 0) return;
-
-    const now = Date.now();
-    if (now - lastSnapshotRef.current < 10_000) return;
-    lastSnapshotRef.current = now;
-
-    let usedFallback = false;
-    const posSnapshots: PositionSnapshot[] = positions.map((p) => {
-      const marketKey = p.market.publicKey.toBase58();
-      let yesMid: number;
-      let noMid: number;
-      if (p.market.isSettled) {
-        // Settled: winners get $1, losers get $0
-        yesMid = p.market.outcome === 1 ? 1.0 : 0.0;
-        noMid = 1 - yesMid;
-      } else {
-        const mid = midPrices?.get(marketKey);
-        yesMid = mid ?? 0.5;
-        noMid = 1 - yesMid;
-        if (mid === undefined) usedFallback = true;
-      }
-      return {
-        market: marketKey,
-        ticker: p.market.ticker,
-        yesBal: Number(p.yesBal) / 1_000_000,
-        noBal: Number(p.noBal) / 1_000_000,
-        yesValue: (Number(p.yesBal) / 1_000_000) * yesMid,
-        noValue: (Number(p.noBal) / 1_000_000) * noMid,
-      };
-    });
-
-    setApproximate(usedFallback);
-
-    const totalValue = posSnapshots.reduce(
-      (sum, ps) => sum + ps.yesValue + ps.noValue,
-      0,
-    );
-
-    const snapshot: PnlSnapshot = {
-      ts: now,
-      wallet,
-      totalValue,
-      positions: posSnapshots,
-    };
-
-    writeSnapshot(snapshot).catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wallet, positions, midPricesKey]);
-
-  // Load intraday data and daily summaries (clear on wallet disconnect)
+  // Fetch portfolio snapshot and history from event-indexer
   useEffect(() => {
     if (!wallet) {
-      setIntradayData([]);
+      setApiPositions([]);
       setDailySummaries([]);
       setIsReady(false);
+      setUnavailable(false);
       return;
     }
 
     let cancelled = false;
 
     async function load() {
-      // Use ET midnight for day boundary (markets are ET-based).
-      // Derive actual UTC offset from Intl (handles EST/EDT automatically).
-      const now = new Date();
-      const etDate = new Intl.DateTimeFormat("en-CA", {
-        timeZone: "America/New_York",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-      }).format(now);
-      // Create a Date at midnight in ET by parsing the ET date as UTC then
-      // adjusting by the actual ET offset (derived from the local/UTC delta).
-      const etMidnightUtc = new Date(`${etDate}T00:00:00Z`);
-      // Intl gives us the ET time for 'now'; the offset is (UTCtime - ETtime)
-      const etNowStr = new Intl.DateTimeFormat("en-US", {
-        timeZone: "America/New_York",
-        hour: "numeric", minute: "numeric", hour12: false,
-      }).formatToParts(now);
-      const etH = parseInt(etNowStr.find(p => p.type === "hour")?.value ?? "0", 10);
-      const etM = parseInt(etNowStr.find(p => p.type === "minute")?.value ?? "0", 10);
-      const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
-      const etMinutes = (etH % 24) * 60 + etM;
-      const rawDiff = utcMinutes - etMinutes;
-      const offsetMs = (((rawDiff % 1440) + 1440) % 1440) * 60_000;
-      const todayMs = etMidnightUtc.getTime() + offsetMs;
+      try {
+        const [snapshotRes, historyRes] = await Promise.all([
+          fetch(`${EVENT_INDEXER_URL}/api/portfolio/snapshot?wallet=${encodeURIComponent(wallet)}`),
+          fetch(`${EVENT_INDEXER_URL}/api/portfolio/history?wallet=${encodeURIComponent(wallet)}&days=30`),
+        ]);
 
-      const [intraday, summaries] = await Promise.all([
-        getIntradaySnapshots(wallet, todayMs),
-        getDailySummaries(wallet),
-      ]);
-      if (cancelled) return;
-      setIntradayData(intraday);
-      setDailySummaries(summaries);
-      setIsReady(true);
+        if (cancelled) return;
+
+        if (!snapshotRes.ok || !historyRes.ok) {
+          setUnavailable(true);
+          setIsReady(true);
+          return;
+        }
+
+        const snapshotJson = await snapshotRes.json();
+        const historyJson = await historyRes.json();
+
+        if (cancelled) return;
+
+        setApiPositions(snapshotJson.positions ?? []);
+
+        // Map API daily summaries to the DailySummary shape consumers expect
+        const mappedSummaries: DailySummary[] = (historyJson.dailySummaries ?? []).map((d: ApiDailySummary) => ({
+          date: d.date,
+          wallet,
+          openValue: 0,     // API provides volume-based data, not value snapshots
+          closeValue: 0,
+          highValue: 0,
+          lowValue: 0,
+          pnl: d.netCostBasis / (1_000_000 * 100), // micro-tokens * cents → USDC
+          positionCount: d.fillCount,
+        }));
+
+        setDailySummaries(mappedSummaries);
+        setUnavailable(false);
+        setIsReady(true);
+      } catch {
+        if (!cancelled) {
+          setUnavailable(true);
+          setIsReady(true);
+        }
+      }
     }
 
     load();
@@ -154,55 +129,106 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
     };
   }, [wallet]);
 
-  // Compute current portfolio value from positions directly (avoids cold start)
-  const liveValue = positions.reduce((sum, p) => {
-    const marketKey = p.market.publicKey.toBase58();
-    let yesMid: number;
-    let noMid: number;
-    if (p.market.isSettled) {
-      yesMid = p.market.outcome === 1 ? 1.0 : 0.0;
-      noMid = 1 - yesMid;
-    } else {
-      const mid = midPrices?.get(marketKey);
-      yesMid = mid ?? 0.5;
-      noMid = 1 - yesMid;
-    }
-    return sum + (Number(p.yesBal) / 1_000_000) * yesMid + (Number(p.noBal) / 1_000_000) * noMid;
-  }, 0);
+  // Compute current portfolio value from on-chain positions + mid prices
+  const liveValue = useMemo(() => {
+    let usedFallback = false;
+    const value = positions.reduce((sum, p) => {
+      const marketKey = p.market.publicKey.toBase58();
+      let yesMid: number;
+      let noMid: number;
+      if (p.market.isSettled) {
+        yesMid = p.market.outcome === 1 ? 1.0 : 0.0;
+        noMid = 1 - yesMid;
+      } else {
+        const mid = midPrices?.get(marketKey);
+        yesMid = mid ?? 0.5;
+        noMid = 1 - yesMid;
+        if (mid === undefined) usedFallback = true;
+      }
+      return sum + (Number(p.yesBal) / 1_000_000) * yesMid + (Number(p.noBal) / 1_000_000) * noMid;
+    }, 0);
+    setApproximate(usedFallback);
+    return value;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [positions, midPricesKey]);
 
-  // Compute current total P&L from today's data
-  const todayPnl =
-    intradayData.length >= 2
-      ? intradayData[intradayData.length - 1].totalValue -
-        intradayData[0].totalValue
-      : intradayData.length === 1
-        ? liveValue - intradayData[0].totalValue
-        : 0;
+  // Build intraday-like data from API positions for chart compatibility.
+  // The event-indexer provides aggregate fill data, not time-series snapshots,
+  // so we synthesize a single "now" snapshot from on-chain positions.
+  const intradayData: PnlSnapshot[] = useMemo(() => {
+    if (positions.length === 0) return [];
+    const posSnapshots = positions.map((p) => {
+      const marketKey = p.market.publicKey.toBase58();
+      let yesMid: number;
+      let noMid: number;
+      if (p.market.isSettled) {
+        yesMid = p.market.outcome === 1 ? 1.0 : 0.0;
+        noMid = 1 - yesMid;
+      } else {
+        yesMid = midPrices?.get(marketKey) ?? 0.5;
+        noMid = 1 - yesMid;
+      }
+      return {
+        market: marketKey,
+        ticker: p.market.ticker,
+        yesBal: Number(p.yesBal) / 1_000_000,
+        noBal: Number(p.noBal) / 1_000_000,
+        yesValue: (Number(p.yesBal) / 1_000_000) * yesMid,
+        noValue: (Number(p.noBal) / 1_000_000) * noMid,
+      };
+    });
+    return [{
+      ts: Date.now(),
+      wallet,
+      totalValue: liveValue,
+      positions: posSnapshots,
+    }];
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [positions, midPricesKey, liveValue, wallet]);
 
-  const currentValue =
-    intradayData.length > 0
-      ? intradayData[intradayData.length - 1].totalValue
-      : liveValue;
+  // With API-based data, today's P&L isn't time-series based anymore.
+  // We use liveValue as the current value; todayPnl is 0 unless we have
+  // cost basis from the API positions to compare against.
+  const totalCostFromApi = useMemo(() => {
+    return apiPositions.reduce((sum, p) => {
+      // totalCost is quantity * price (in micro-tokens * cents)
+      return sum + p.totalCost / (1_000_000 * 100);
+    }, 0);
+  }, [apiPositions]);
 
-  // Find top and bottom performers from latest snapshot
-  const latestSnapshot =
-    intradayData.length > 0 ? intradayData[intradayData.length - 1] : null;
+  const todayPnl = apiPositions.length > 0 ? liveValue - totalCostFromApi : 0;
+  const currentValue = liveValue;
 
-  const firstSnapshot = intradayData.length > 0 ? intradayData[0] : null;
-
+  // Find top and bottom performers from current positions
   let topPerformer: { ticker: string; pnl: number } | null = null;
   let bottomPerformer: { ticker: string; pnl: number } | null = null;
 
-  if (latestSnapshot && firstSnapshot) {
+  if (positions.length > 0 && apiPositions.length > 0) {
+    // Build cost basis map from API
+    const costByMarket = new Map<string, number>();
+    for (const ap of apiPositions) {
+      const existing = costByMarket.get(ap.market) ?? 0;
+      costByMarket.set(ap.market, existing + ap.totalCost / (1_000_000 * 100));
+    }
+
     const pnlByTicker = new Map<string, number>();
-    for (const pos of latestSnapshot.positions) {
-      const latestVal = pos.yesValue + pos.noValue;
-      const firstPos = firstSnapshot.positions.find(
-        (p) => p.market === pos.market,
-      );
-      const firstVal = firstPos ? firstPos.yesValue + firstPos.noValue : 0;
-      const existing = pnlByTicker.get(pos.ticker) ?? 0;
-      pnlByTicker.set(pos.ticker, existing + (latestVal - firstVal));
+    for (const pos of positions) {
+      const marketKey = pos.market.publicKey.toBase58();
+      let yesMid: number;
+      let noMid: number;
+      if (pos.market.isSettled) {
+        yesMid = pos.market.outcome === 1 ? 1.0 : 0.0;
+        noMid = 1 - yesMid;
+      } else {
+        yesMid = midPrices?.get(marketKey) ?? 0.5;
+        noMid = 1 - yesMid;
+      }
+      const currentVal = (Number(pos.yesBal) / 1_000_000) * yesMid + (Number(pos.noBal) / 1_000_000) * noMid;
+      const cost = costByMarket.get(marketKey) ?? 0;
+      const pnl = currentVal - cost;
+
+      const existing = pnlByTicker.get(pos.market.ticker) ?? 0;
+      pnlByTicker.set(pos.market.ticker, existing + pnl);
     }
 
     for (const [ticker, pnl] of pnlByTicker) {
@@ -222,5 +248,6 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
     bottomPerformer,
     isReady,
     approximate,
+    unavailable,
   };
 }

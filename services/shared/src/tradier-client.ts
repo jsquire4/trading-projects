@@ -143,7 +143,9 @@ class TokenBucket {
 
 // ---- Client ---------------------------------------------------------------
 
-export class TradierClient {
+import type { IMarketDataClient } from "./market-data.js";
+
+export class TradierClient implements IMarketDataClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly accountId: string;

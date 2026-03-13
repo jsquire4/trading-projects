@@ -1,9 +1,9 @@
 /**
  * Market data proxy dispatcher.
  *
- * Routes to synthetic-proxy or tradier-proxy at request time based on
- * the MARKET_DATA_SOURCE env var. Uses dynamic import() to avoid
- * loading Tradier dependencies in synthetic mode and vice versa.
+ * Routes to synthetic-proxy or tradier-proxy based on the MARKET_DATA_SOURCE
+ * env var (evaluated once at module load time). Uses dynamic import() to
+ * avoid loading Tradier dependencies in synthetic mode and vice versa.
  */
 
 import type { Quote, OHLCVBar, OptionsChainItem } from "./tradier-proxy";

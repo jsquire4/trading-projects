@@ -113,7 +113,9 @@ export async function startSyntheticFeeder(
   // Poll every 5 seconds
   pollInterval = setInterval(() => {
     if (!stopped) {
-      pollAndUpdate().catch(() => {});
+      pollAndUpdate().catch((err) => {
+        log.warn("Synthetic poll error", { error: err instanceof Error ? err.message : String(err) });
+      });
     }
   }, POLL_INTERVAL_MS);
 

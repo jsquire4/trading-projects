@@ -41,7 +41,8 @@ export function createMarketDataClient(options?: TradierClientOptions): IMarketD
   const source = process.env.MARKET_DATA_SOURCE ?? "live";
 
   if (source === "synthetic") {
-    const seed = parseInt(process.env.SYNTHETIC_SEED ?? "42", 10);
+    const rawSeed = parseInt(process.env.SYNTHETIC_SEED ?? "42", 10);
+    const seed = Number.isFinite(rawSeed) ? rawSeed : 42;
     return new SyntheticClient({ seed });
   }
 

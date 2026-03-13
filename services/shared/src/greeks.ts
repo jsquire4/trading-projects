@@ -20,6 +20,7 @@ export function d2(
   T: number,
   r: number = 0.05,
 ): number {
+  if (T <= 0 || sigma <= 0 || S <= 0 || K <= 0) return NaN;
   const sqrtT = Math.sqrt(T);
   return (Math.log(S / K) + (r - 0.5 * sigma * sigma) * T) / (sigma * sqrtT);
 }

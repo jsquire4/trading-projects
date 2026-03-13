@@ -10,6 +10,7 @@
 // 7. Log results + alert on failures
 // ---------------------------------------------------------------------------
 
+import http from "node:http";
 import { AnchorProvider, Program, Wallet } from "@coral-xyz/anchor";
 import BN from "bn.js";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
@@ -345,8 +346,6 @@ async function runSettlementCycle(): Promise<{ ok: boolean; error?: string; summ
 // Synthetic mode: HTTP trigger server
 // ---------------------------------------------------------------------------
 
-import http from "node:http";
-
 function startTriggerServer(): void {
   const port = parseInt(process.env.TRIGGER_PORT ?? "4002", 10);
   let running = false;
@@ -386,8 +385,8 @@ function startTriggerServer(): void {
     }
   });
 
-  server.listen(port, () => {
-    log.info(`Settlement trigger server listening on port ${port} (POST /trigger)`);
+  server.listen(port, "127.0.0.1", () => {
+    log.info(`Settlement trigger server listening on 127.0.0.1:${port} (POST /trigger)`);
   });
 }
 
@@ -420,4 +419,10 @@ async function main(): Promise<void> {
   }
 }
 
-main();
+main().catch((err) => {
+  log.critical("Fatal error in settlement service", {
+    error: err instanceof Error ? err.message : String(err),
+    stack: err instanceof Error ? err.stack : undefined,
+  });
+  process.exit(1);
+});

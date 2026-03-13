@@ -10,8 +10,8 @@
 // ---------------------------------------------------------------------------
 
 import http from "node:http";
-import { createLogger } from "../../shared/src/alerting.ts";
-import { initializeMarkets } from "./initializer.ts";
+import { createLogger } from "../../shared/src/alerting.js";
+import { initializeMarkets } from "./initializer.js";
 
 const log = createLogger("market-initializer");
 
@@ -96,8 +96,8 @@ function startTriggerServer(): void {
     }
   });
 
-  server.listen(port, () => {
-    log.info(`Trigger server listening on port ${port} (POST /trigger)`);
+  server.listen(port, "127.0.0.1", () => {
+    log.info(`Trigger server listening on 127.0.0.1:${port} (POST /trigger)`);
   });
 }
 

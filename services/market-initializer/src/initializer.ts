@@ -20,9 +20,9 @@ import {
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 import { createMarketDataClient, type IMarketDataClient } from "../../shared/src/market-data.js";
-import { createLogger } from "../../shared/src/alerting.ts";
+import { createLogger } from "../../shared/src/alerting.js";
 import { getETOffsetMinutes } from "../../automation/src/timezone.js";
-import { generateVolAwareStrikes } from "./strikeSelector.ts";
+import { generateVolAwareStrikes } from "./strikeSelector.js";
 import {
   findGlobalConfig,
   findStrikeMarket,
@@ -35,11 +35,11 @@ import {
   findOrderBook,
   findPriceFeed,
   padTicker,
-} from "../../shared/src/pda.ts";
+} from "../../shared/src/pda.js";
 
-import type { Meridian } from "../../shared/src/idl/meridian.ts";
-import MeridianIDL from "../../shared/src/idl/meridian.json";
-import { createMarketAlt, type MarketAccounts } from "./alt.ts";
+import type { Meridian } from "../../shared/src/idl/meridian.js";
+import MeridianIDL from "../../shared/src/idl/meridian.json" with { type: "json" };
+import { createMarketAlt, type MarketAccounts } from "./alt.js";
 
 const log = createLogger("market-initializer");
 

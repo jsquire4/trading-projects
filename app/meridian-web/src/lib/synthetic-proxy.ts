@@ -77,7 +77,7 @@ export async function getOptionsChain(
  * Generate synthetic expiration dates.
  * Returns weekly Fridays for the next 8 weeks.
  */
-export async function getExpirations(symbol: string): Promise<string[]> {
+export async function getExpirations(_symbol: string): Promise<string[]> {
   // Find next Friday from today
   const now = new Date();
   const dayOfWeek = now.getDay();

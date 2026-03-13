@@ -109,6 +109,8 @@ async function main(): Promise<void> {
   let marketDataClient: IMarketDataClient | null = null;
   if (isSynthetic || process.env.TRADIER_API_KEY) {
     marketDataClient = createMarketDataClient();
+  } else {
+    log.warn("No TRADIER_API_KEY and not in synthetic mode — HV lookup disabled, using flat BOT_VOL");
   }
   const riskFreeRate = parseFloat(process.env.BOT_RISK_FREE_RATE ?? "0.05");
 

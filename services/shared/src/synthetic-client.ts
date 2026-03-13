@@ -174,6 +174,8 @@ export class SyntheticClient implements IMarketDataClient {
     const sigma = DEFAULT_VOL;
     const r = 0.05;
     const items: OptionsChainItem[] = [];
+    // Per-call deterministic RNG for volume, open_interest, and IV jitter
+    const chainRng = new SeededRng(hashSeed(this.globalSeed, `chain:${symbol}:${expiration}`));
 
     for (const strike of strikes.strikes) {
       for (const optionType of ["call", "put"] as const) {
@@ -189,7 +191,7 @@ export class SyntheticClient implements IMarketDataClient {
           type: "option",
           last,
           change: null,
-          volume: Math.floor(100 + Math.random() * 900),
+          volume: Math.floor(100 + chainRng.next() * 900),
           open: last,
           high: Math.round((last + spread) * 100) / 100,
           low: Math.round(Math.max(0.01, last - spread) * 100) / 100,
@@ -211,7 +213,7 @@ export class SyntheticClient implements IMarketDataClient {
           asksize: 10,
           askexch: "SYNTH",
           ask_date: Math.floor(Date.now() / 1000),
-          open_interest: Math.floor(100 + Math.random() * 4900),
+          open_interest: Math.floor(100 + chainRng.next() * 4900),
           contract_size: 100,
           expiration_date: expiration,
           expiration_type: "standard",
@@ -226,7 +228,7 @@ export class SyntheticClient implements IMarketDataClient {
           const gamma = binaryGamma(spot, strike, sigma, T, r);
           const theta = binaryTheta(spot, strike, sigma, T, r);
           const vega = binaryVega(spot, strike, sigma, T, r);
-          const impliedVol = sigma + (Math.random() - 0.5) * 0.02; // small jitter
+          const impliedVol = sigma + (chainRng.next() - 0.5) * 0.02; // small jitter
 
           item.greeks = {
             delta: Math.round(delta * 10000) / 10000,

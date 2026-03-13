@@ -4,6 +4,7 @@ import { useMemo, useState, useEffect } from "react";
 import { useMarkets, useOrderBooks, type ParsedMarket, type OrderBookData } from "@/hooks/useMarkets";
 import { MarketCard, type MarketData } from "@/components/MarketCard";
 import { WatchlistStrip } from "@/components/WatchlistStrip";
+import { SyntheticControls } from "@/components/SyntheticControls";
 import { MAG7 } from "@/lib/tickers";
 
 // ---------------------------------------------------------------------------
@@ -267,6 +268,9 @@ export default function TradePage() {
           Binary outcomes on MAG7 stocks. Pick a side, win $1 per contract.
         </p>
       </div>
+
+      {/* Synthetic mode controls (hidden in live mode) */}
+      <SyntheticControls />
 
       {/* Live price strip */}
       <WatchlistStrip />

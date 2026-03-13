@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getQuotes } from "@/lib/tradier-proxy";
+import { getQuotes } from "@/lib/market-data-proxy";
 
 export async function GET(req: NextRequest) {
   const symbolsParam = req.nextUrl.searchParams.get("symbols");

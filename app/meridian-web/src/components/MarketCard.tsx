@@ -19,6 +19,15 @@ interface MarketCardProps {
   market: MarketData;
 }
 
+function formatSettlementDate(unix: number): string {
+  const d = new Date(unix * 1000);
+  return d.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 function statusBadge(isSettled: boolean, outcome: number, marketCloseUnix?: number) {
   if (!isSettled) {
     const now = Math.floor(Date.now() / 1000);
@@ -26,6 +35,14 @@ function statusBadge(isSettled: boolean, outcome: number, marketCloseUnix?: numb
       return (
         <span className="rounded-full bg-yellow-500/20 px-2 py-0.5 text-[10px] font-medium text-yellow-400">
           Awaiting Settlement
+        </span>
+      );
+    }
+    // Next-day market (>=12h until close)
+    if (marketCloseUnix != null && (marketCloseUnix - now) >= 12 * 3600) {
+      return (
+        <span className="rounded-full bg-blue-500/20 px-2 py-0.5 text-[10px] font-medium text-blue-400">
+          {formatSettlementDate(marketCloseUnix)}
         </span>
       );
     }

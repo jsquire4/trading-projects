@@ -206,38 +206,46 @@ export default function TradePage() {
   const { data: markets = [], isLoading, isError } = useMarkets();
   const [tickerFilter, setTickerFilter] = useState<string | null>(null);
 
-  // Group active markets by ticker
-  const { grouped, totalActive, perTicker, allTickers } = useMemo(() => {
-    const active = markets.filter((m) => !m.isSettled && !m.isClosed);
-    const map = new Map<string, ParsedMarket[]>();
-    for (const m of active) {
-      const list = map.get(m.ticker);
-      if (!list) map.set(m.ticker, [m]);
-      else list.push(m);
-    }
-    for (const list of map.values()) {
-      list.sort((a, b) => Number(a.strikePrice) - Number(b.strikePrice));
+  // Group non-closed markets into active (<12h to close) and upcoming (>=12h)
+  const { grouped, upcomingGrouped, totalActive, totalUpcoming, perTicker, allTickers } = useMemo(() => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const nonClosed = markets.filter((m) => !m.isClosed);
+    const active = nonClosed.filter((m) => !m.isSettled && (Number(m.marketCloseUnix) - nowSec) < 12 * 3600);
+    const upcoming = nonClosed.filter((m) => !m.isSettled && (Number(m.marketCloseUnix) - nowSec) >= 12 * 3600);
+
+    function groupByTicker(list: ParsedMarket[]) {
+      const map = new Map<string, ParsedMarket[]>();
+      for (const m of list) {
+        const arr = map.get(m.ticker);
+        if (!arr) map.set(m.ticker, [m]);
+        else arr.push(m);
+      }
+      for (const arr of map.values()) {
+        arr.sort((a, b) => Number(a.strikePrice) - Number(b.strikePrice));
+      }
+      // Sort tickers: MAG7 first (in canonical order), then alphabetical
+      const entries = Array.from(map.entries()).sort(([a], [b]) => {
+        const aIdx = MAG7.indexOf(a as (typeof MAG7)[number]);
+        const bIdx = MAG7.indexOf(b as (typeof MAG7)[number]);
+        if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
+        if (aIdx !== -1) return -1;
+        if (bIdx !== -1) return 1;
+        return a.localeCompare(b);
+      });
+      return entries.map(([ticker, mkts]) => ({ ticker, markets: mkts }));
     }
 
-    // Sort tickers: MAG7 first (in canonical order), then alphabetical
-    const entries = Array.from(map.entries()).sort(([a], [b]) => {
-      const aIdx = MAG7.indexOf(a as (typeof MAG7)[number]);
-      const bIdx = MAG7.indexOf(b as (typeof MAG7)[number]);
-      if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
-      if (aIdx !== -1) return -1;
-      if (bIdx !== -1) return 1;
-      return a.localeCompare(b);
-    });
-
-    const grouped = entries.map(([ticker, mkts]) => ({ ticker, markets: mkts }));
+    const grouped = groupByTicker(active);
+    const upcomingGrouped = groupByTicker(upcoming);
     const totalActive = active.length;
+    const totalUpcoming = upcoming.length;
     const perTicker = grouped.map(({ ticker, markets: mkts }) => ({
       ticker,
       count: mkts.length,
     }));
     const allTickers = grouped.map((g) => g.ticker);
 
-    return { grouped, totalActive, perTicker, allTickers };
+    return { grouped, upcomingGrouped, totalActive, totalUpcoming, perTicker, allTickers };
   }, [markets]);
 
   // Filtered groups
@@ -246,10 +254,19 @@ export default function TradePage() {
     [grouped, tickerFilter],
   );
 
-  // Batch-fetch order books for all visible active markets
+  // Filtered upcoming groups
+  const filteredUpcomingGroups = useMemo(
+    () => tickerFilter ? upcomingGrouped.filter((g) => g.ticker === tickerFilter) : upcomingGrouped,
+    [upcomingGrouped, tickerFilter],
+  );
+
+  // Batch-fetch order books for all visible markets (active + upcoming)
   const visibleMarketKeys = useMemo(
-    () => filteredGroups.flatMap((g) => g.markets.map((m) => m.publicKey)),
-    [filteredGroups],
+    () => [
+      ...filteredGroups.flatMap((g) => g.markets.map((m) => m.publicKey)),
+      ...filteredUpcomingGroups.flatMap((g) => g.markets.map((m) => m.publicKey)),
+    ],
+    [filteredGroups, filteredUpcomingGroups],
   );
   const { data: orderBooks } = useOrderBooks(visibleMarketKeys);
 
@@ -281,7 +298,7 @@ export default function TradePage() {
         <div className="rounded-xl bg-white/5 border border-white/10 px-6 py-12 text-center text-white/40 text-sm">
           Failed to load markets. Check your connection and try again.
         </div>
-      ) : totalActive === 0 ? (
+      ) : totalActive === 0 && totalUpcoming === 0 ? (
         <div className="rounded-xl bg-white/5 border border-white/10 px-6 py-12 text-center">
           <p className="text-white/50 text-sm">No active markets found.</p>
           <p className="text-white/30 text-xs mt-1">
@@ -294,32 +311,66 @@ export default function TradePage() {
           <UrgencyBanner markets={markets} />
 
           {/* Summary bar */}
-          <SummaryBar totalActive={totalActive} perTicker={perTicker} />
+          {totalActive > 0 && (
+            <SummaryBar totalActive={totalActive} perTicker={perTicker} />
+          )}
 
           {/* Ticker filter tabs */}
-          <TickerFilterTabs
-            tickers={allTickers}
-            selected={tickerFilter}
-            onSelect={setTickerFilter}
-            counts={tickerCounts}
-          />
+          {allTickers.length > 0 && (
+            <TickerFilterTabs
+              tickers={allTickers}
+              selected={tickerFilter}
+              onSelect={setTickerFilter}
+              counts={tickerCounts}
+            />
+          )}
 
-          {/* Market cards grouped by ticker */}
-          <div className="flex flex-col gap-8">
-            {filteredGroups.map(({ ticker, markets: mkts }) => (
-              <div key={ticker}>
-                <h2 className="text-lg font-bold text-white mb-3">{ticker}</h2>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {mkts.map((m) => (
-                    <MarketCard
-                      key={m.publicKey.toBase58()}
-                      market={toMarketData(m, orderBooks?.get(m.publicKey.toBase58()))}
-                    />
-                  ))}
+          {/* Active market cards grouped by ticker */}
+          {filteredGroups.length > 0 && (
+            <div className="flex flex-col gap-8">
+              {filteredGroups.map(({ ticker, markets: mkts }) => (
+                <div key={ticker}>
+                  <h2 className="text-lg font-bold text-white mb-3">{ticker}</h2>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {mkts.map((m) => (
+                      <MarketCard
+                        key={m.publicKey.toBase58()}
+                        market={toMarketData(m, orderBooks?.get(m.publicKey.toBase58()))}
+                      />
+                    ))}
+                  </div>
                 </div>
+              ))}
+            </div>
+          )}
+
+          {/* Next Trading Day section */}
+          {filteredUpcomingGroups.length > 0 && (
+            <div className="flex flex-col gap-6 mt-4">
+              <div className="flex items-center gap-3">
+                <div className="h-px flex-1 bg-white/10" />
+                <h2 className="text-sm font-semibold text-white/50 uppercase tracking-wider">
+                  Next Trading Day
+                </h2>
+                <div className="h-px flex-1 bg-white/10" />
               </div>
-            ))}
-          </div>
+              <div className="flex flex-col gap-8">
+                {filteredUpcomingGroups.map(({ ticker, markets: mkts }) => (
+                  <div key={ticker}>
+                    <h2 className="text-lg font-bold text-white/70 mb-3">{ticker}</h2>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {mkts.map((m) => (
+                        <MarketCard
+                          key={m.publicKey.toBase58()}
+                          market={toMarketData(m, orderBooks?.get(m.publicKey.toBase58()))}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

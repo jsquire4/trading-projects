@@ -16,6 +16,8 @@ import {
   queryMarketVwaps,
   insertOrderIntent,
   queryFillsWithIntent,
+  queryPortfolioSnapshot,
+  queryPortfolioHistory,
 } from "./db.js";
 
 const log = createLogger("event-indexer:api");
@@ -215,6 +217,41 @@ function handleFillsWithIntent(
   jsonResponse(res, 200, { fills }, req);
 }
 
+function handlePortfolioSnapshot(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL,
+): void {
+  const params = parseQuery(url);
+  const wallet = params.wallet;
+  if (!wallet || !/^[A-HJ-NP-Za-km-z1-9]{32,44}$/.test(wallet)) {
+    jsonResponse(res, 400, { error: "Invalid or missing wallet address" }, req);
+    return;
+  }
+  const positions = queryPortfolioSnapshot(wallet);
+  jsonResponse(res, 200, { wallet, positions }, req);
+}
+
+function handlePortfolioHistory(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL,
+): void {
+  const params = parseQuery(url);
+  const wallet = params.wallet;
+  if (!wallet || !/^[A-HJ-NP-Za-km-z1-9]{32,44}$/.test(wallet)) {
+    jsonResponse(res, 400, { error: "Invalid or missing wallet address" }, req);
+    return;
+  }
+  const days = params.days ? parseInt(params.days, 10) : 30;
+  if (isNaN(days) || days < 1 || days > 365) {
+    jsonResponse(res, 400, { error: "Invalid days parameter (must be 1-365)" }, req);
+    return;
+  }
+  const dailySummaries = queryPortfolioHistory(wallet, days);
+  jsonResponse(res, 200, { wallet, dailySummaries }, req);
+}
+
 function handleHealth(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -254,7 +291,11 @@ export function startApiServer(port: number): http.Server {
     const pathname = url.pathname;
 
     try {
-      if (pathname === "/api/order-intent") {
+      if (pathname === "/api/portfolio/snapshot") {
+        handlePortfolioSnapshot(req, res, url);
+      } else if (pathname === "/api/portfolio/history") {
+        handlePortfolioHistory(req, res, url);
+      } else if (pathname === "/api/order-intent") {
         handleOrderIntent(req, res);
       } else if (pathname === "/api/events/fills") {
         handleFillsWithIntent(req, res, url);

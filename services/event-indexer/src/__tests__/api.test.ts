@@ -331,6 +331,182 @@ describe("API Server", () => {
     });
   });
 
+  // ---- GET /api/portfolio/snapshot ----
+
+  describe("GET /api/portfolio/snapshot", () => {
+    const wallet = "Pf22Wa22etAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    const market = "Pf22Ma22etAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    beforeAll(() => {
+      insertEventsBatch([
+        {
+          type: "fill",
+          market,
+          data: JSON.stringify({ taker: wallet, maker: "OtherMaker1", takerSide: 0, makerSide: 0, price: 50, quantity: 1000000, makerOrderId: "200" }),
+          signature: "pf_snap_1",
+          slot: 300,
+          timestamp: 3000,
+        },
+        {
+          type: "fill",
+          market,
+          data: JSON.stringify({ taker: wallet, maker: "OtherMaker2", takerSide: 0, makerSide: 0, price: 60, quantity: 2000000, makerOrderId: "201" }),
+          signature: "pf_snap_2",
+          slot: 301,
+          timestamp: 3001,
+        },
+        {
+          type: "fill",
+          market,
+          data: JSON.stringify({ taker: wallet, maker: "OtherMaker3", takerSide: 1, makerSide: 1, price: 40, quantity: 500000, makerOrderId: "202" }),
+          signature: "pf_snap_3",
+          slot: 302,
+          timestamp: 3002,
+        },
+      ]);
+    });
+
+    it("returns aggregated positions for a valid wallet", async () => {
+      const { status, body } = await get(`/api/portfolio/snapshot?wallet=${wallet}`);
+      expect(status).toBe(200);
+      expect(body.wallet).toBe(wallet);
+      expect(body.positions).toBeInstanceOf(Array);
+      expect(body.positions.length).toBe(2); // side 0 and side 1
+
+      const side0 = body.positions.find((p: any) => p.side === 0);
+      expect(side0).toBeDefined();
+      expect(side0.totalQuantity).toBe(3000000); // 1M + 2M
+      expect(side0.fillCount).toBe(2);
+      // avgPrice = totalCost / totalQuantity = (1M*50 + 2M*60) / 3M = 170M / 3M ≈ 57
+      expect(side0.avgPrice).toBe(57); // Math.round(170000000 / 3000000)
+
+      const side1 = body.positions.find((p: any) => p.side === 1);
+      expect(side1).toBeDefined();
+      expect(side1.totalQuantity).toBe(500000);
+      expect(side1.fillCount).toBe(1);
+      expect(side1.avgPrice).toBe(40);
+    });
+
+    it("returns empty positions for a wallet with no fills", async () => {
+      const emptyWallet = "EmptyWa22etAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+      const { status, body } = await get(`/api/portfolio/snapshot?wallet=${emptyWallet}`);
+      expect(status).toBe(200);
+      expect(body.wallet).toBe(emptyWallet);
+      expect(body.positions).toEqual([]);
+    });
+
+    it("returns 400 when wallet param is missing", async () => {
+      const { status, body } = await get("/api/portfolio/snapshot");
+      expect(status).toBe(400);
+      expect(body.error).toMatch(/wallet/i);
+    });
+
+    it("returns 400 for invalid wallet address", async () => {
+      const { status, body } = await get("/api/portfolio/snapshot?wallet=!!bad!!");
+      expect(status).toBe(400);
+      expect(body.error).toMatch(/wallet/i);
+    });
+  });
+
+  // ---- GET /api/portfolio/history ----
+
+  describe("GET /api/portfolio/history", () => {
+    const wallet = "Hi22Wa22etAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    const market = "Hi22Ma22etAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    beforeAll(() => {
+      // Insert fills with recent timestamps (within last 30 days)
+      const now = Math.floor(Date.now() / 1000);
+      const oneDayAgo = now - 86400;
+      const twoDaysAgo = now - 86400 * 2;
+      insertEventsBatch([
+        {
+          type: "fill",
+          market,
+          data: JSON.stringify({ taker: wallet, maker: "HistOther1", takerSide: 0, makerSide: 0, price: 45, quantity: 1000000, makerOrderId: "300" }),
+          signature: "pf_hist_1",
+          slot: 400,
+          timestamp: oneDayAgo,
+        },
+        {
+          type: "fill",
+          market,
+          data: JSON.stringify({ taker: wallet, maker: "HistOther2", takerSide: 0, makerSide: 0, price: 55, quantity: 2000000, makerOrderId: "301" }),
+          signature: "pf_hist_2",
+          slot: 401,
+          timestamp: oneDayAgo + 60, // same day, a minute later
+        },
+        {
+          type: "fill",
+          market,
+          data: JSON.stringify({ taker: wallet, maker: "HistOther3", takerSide: 1, makerSide: 1, price: 30, quantity: 500000, makerOrderId: "302" }),
+          signature: "pf_hist_3",
+          slot: 402,
+          timestamp: twoDaysAgo,
+        },
+      ]);
+    });
+
+    it("returns daily summaries for a valid wallet", async () => {
+      const { status, body } = await get(`/api/portfolio/history?wallet=${wallet}`);
+      expect(status).toBe(200);
+      expect(body.wallet).toBe(wallet);
+      expect(body.dailySummaries).toBeInstanceOf(Array);
+      expect(body.dailySummaries.length).toBe(2); // 2 distinct days
+
+      // Summaries should be ordered by date ascending
+      expect(body.dailySummaries[0].date < body.dailySummaries[1].date).toBe(true);
+
+      // The more recent day has 2 fills
+      const recentDay = body.dailySummaries[1];
+      expect(recentDay.fillCount).toBe(2);
+      expect(recentDay.totalVolume).toBe(3000000); // 1M + 2M
+    });
+
+    it("respects the days parameter", async () => {
+      // With days=1, only the most recent day's fills should appear
+      const { status, body } = await get(`/api/portfolio/history?wallet=${wallet}&days=1`);
+      expect(status).toBe(200);
+      expect(body.dailySummaries.length).toBeLessThanOrEqual(1);
+    });
+
+    it("defaults to 30 days when days param is omitted", async () => {
+      const { status, body } = await get(`/api/portfolio/history?wallet=${wallet}`);
+      expect(status).toBe(200);
+      expect(body.dailySummaries).toBeInstanceOf(Array);
+      // All 2 days of test data are within 30 days
+      expect(body.dailySummaries.length).toBe(2);
+    });
+
+    it("returns empty summaries for a wallet with no fills", async () => {
+      const emptyWallet = "EmptyHi22etAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+      const { status, body } = await get(`/api/portfolio/history?wallet=${emptyWallet}`);
+      expect(status).toBe(200);
+      expect(body.wallet).toBe(emptyWallet);
+      expect(body.dailySummaries).toEqual([]);
+    });
+
+    it("returns 400 when wallet param is missing", async () => {
+      const { status, body } = await get("/api/portfolio/history");
+      expect(status).toBe(400);
+      expect(body.error).toMatch(/wallet/i);
+    });
+
+    it("returns 400 for invalid days parameter", async () => {
+      const wallet = "Hi22Wa22etAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+      const { status, body } = await get(`/api/portfolio/history?wallet=${wallet}&days=0`);
+      expect(status).toBe(400);
+      expect(body.error).toMatch(/days/i);
+    });
+
+    it("returns 400 for days exceeding 365", async () => {
+      const wallet = "Hi22Wa22etAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+      const { status, body } = await get(`/api/portfolio/history?wallet=${wallet}&days=500`);
+      expect(status).toBe(400);
+      expect(body.error).toMatch(/days/i);
+    });
+  });
+
   // ---- 404 ----
 
   describe("unknown routes", () => {

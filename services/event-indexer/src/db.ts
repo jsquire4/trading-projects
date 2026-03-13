@@ -370,6 +370,73 @@ export function queryFillsWithIntent(wallet: string, limit: number = 50): FillWi
   });
 }
 
+// --------------- Portfolio snapshot ---------------
+
+export interface PortfolioPosition {
+  market: string;
+  side: number;
+  totalQuantity: number;
+  totalCost: number;
+  avgPrice: number;
+  fillCount: number;
+}
+
+export function queryPortfolioSnapshot(wallet: string): PortfolioPosition[] {
+  const stmt = getDb().prepare(`
+    SELECT
+      market,
+      CASE
+        WHEN json_extract(data, '$.taker') = @wallet THEN CAST(json_extract(data, '$.takerSide') AS INTEGER)
+        ELSE CAST(json_extract(data, '$.makerSide') AS INTEGER)
+      END as side,
+      SUM(CAST(json_extract(data, '$.quantity') AS INTEGER)) as totalQuantity,
+      SUM(CAST(json_extract(data, '$.quantity') AS INTEGER) * CAST(json_extract(data, '$.price') AS INTEGER)) as totalCost,
+      COUNT(*) as fillCount
+    FROM events
+    WHERE type = 'fill'
+      AND (json_extract(data, '$.taker') = @wallet OR json_extract(data, '$.maker') = @wallet)
+    GROUP BY market, side
+  `);
+
+  const rows = stmt.all({ wallet }) as { market: string; side: number; totalQuantity: number; totalCost: number; fillCount: number }[];
+
+  return rows.map(r => ({
+    market: r.market,
+    side: r.side,
+    totalQuantity: r.totalQuantity,
+    totalCost: r.totalCost,
+    avgPrice: r.totalQuantity > 0 ? Math.round(r.totalCost / r.totalQuantity) : 0,
+    fillCount: r.fillCount,
+  }));
+}
+
+// --------------- Portfolio history ---------------
+
+export interface DailySummary {
+  date: string;
+  totalVolume: number;
+  fillCount: number;
+  netCostBasis: number;
+}
+
+export function queryPortfolioHistory(wallet: string, days: number): DailySummary[] {
+  const stmt = getDb().prepare(`
+    SELECT
+      date(timestamp, 'unixepoch') as date,
+      SUM(CAST(json_extract(data, '$.quantity') AS INTEGER)) as totalVolume,
+      COUNT(*) as fillCount,
+      SUM(CAST(json_extract(data, '$.quantity') AS INTEGER) * CAST(json_extract(data, '$.price') AS INTEGER)) as netCostBasis
+    FROM events
+    WHERE type = 'fill'
+      AND (json_extract(data, '$.taker') = @wallet OR json_extract(data, '$.maker') = @wallet)
+      AND timestamp >= unixepoch('now', '-' || @days || ' days')
+    GROUP BY date
+    ORDER BY date ASC
+  `);
+
+  return stmt.all({ wallet, days }) as DailySummary[];
+}
+
 export function signatureExists(signature: string): boolean {
   const row = getDb()
     .prepare("SELECT 1 FROM events WHERE signature = ? LIMIT 1")

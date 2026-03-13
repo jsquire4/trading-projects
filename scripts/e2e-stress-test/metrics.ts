@@ -1,5 +1,5 @@
 /**
- * metrics.ts — Transaction metrics collector for the Really Stressful Test.
+ * metrics.ts — Transaction metrics collector for the E2E Stress Test.
  * Tracks latencies, TPS over time, instruction types, success/failure rates,
  * and error frequencies.
  */

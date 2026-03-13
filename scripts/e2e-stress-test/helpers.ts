@@ -1,6 +1,6 @@
 /**
  * helpers.ts — Wallet funding, market state reading, order book parsing,
- * and transaction helpers for the Really Stressful Test.
+ * and transaction helpers for the E2E Stress Test.
  *
  * Extracted from scripts/stress-test/helpers.ts when the older stress tests
  * were removed.

@@ -1,5 +1,5 @@
 /**
- * report.ts — Report writer and console summary for the Really Stressful Test.
+ * report.ts — Report writer and console summary for the E2E Stress Test.
  *
  * Writes both HTML (via report-template) and JSON artifacts,
  * and prints a concise console summary.

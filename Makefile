@@ -61,7 +61,7 @@ local-stop:
 # E2E stress test against local validator
 stress-test:
 	@echo "Running Really Stressful Test against local validator..."
-	npx tsx scripts/really-stressful-test/index.ts --seed 42 --agents 20 --days 2
+	npx tsx scripts/e2e-stress-test/index.ts --seed 42 --agents 20 --days 2
 
 # Validate running stack (smoke test)
 validate:

@@ -1,5 +1,5 @@
 /**
- * act1-correctness.ts — Act 1 of the Really Stressful Test.
+ * act1-correctness.ts — Act 1 of the E2E Stress Test.
  *
  * Proves every instruction type works end-to-end. Creates 7 markets (one per
  * ticker), exercises all instruction types, then settles and closes everything.

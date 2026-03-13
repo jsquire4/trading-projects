@@ -1,5 +1,5 @@
 /**
- * oracle.ts — Oracle price simulator for the Really Stressful Test.
+ * oracle.ts — Oracle price simulator for the E2E Stress Test.
  * Uses GBM (Geometric Brownian Motion) to produce deterministic, realistic
  * price movements. Updates on-chain mock oracle feeds.
  */

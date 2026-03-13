@@ -1,8 +1,8 @@
 /**
- * index.ts — Really Stressful Test entry point.
+ * index.ts — E2E Stress Test entry point.
  *
  * Usage:
- *   npx ts-node scripts/really-stressful-test/index.ts [options]
+ *   npx ts-node scripts/e2e-stress-test/index.ts [options]
  *
  * Options:
  *   --seed <n>              Seed for deterministic RNG (default: 42)

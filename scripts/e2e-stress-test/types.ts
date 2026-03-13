@@ -1,5 +1,5 @@
 /**
- * types.ts — All shared interfaces and types for the Really Stressful Test.
+ * types.ts — All shared interfaces and types for the E2E Stress Test.
  * Pure interface definitions. No logic.
  */
 

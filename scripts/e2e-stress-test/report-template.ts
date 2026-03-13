@@ -104,7 +104,7 @@ export function renderHtmlReport(report: E2EReport): string {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Really Stressful Test — ${esc(report.runId)}</title>
+<title>E2E Stress Test — ${esc(report.runId)}</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -136,7 +136,7 @@ export function renderHtmlReport(report: E2EReport): string {
 
 <!-- Header -->
 <div class="header">
-  <h1>Really Stressful Test</h1>
+  <h1>E2E Stress Test</h1>
   <div class="verdict">${esc(report.verdict)}</div>
 </div>
 <div class="card">

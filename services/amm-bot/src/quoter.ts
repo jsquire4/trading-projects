@@ -1,25 +1,19 @@
 // ---------------------------------------------------------------------------
-// Quote Generator — Bid/Ask with spread and inventory skew
+// AMM Bot Quote Generator — wraps shared quoter with bot-specific behavior
 //
-// Generates two-sided quotes around a fair value, adjusting for current
-// inventory position to manage risk. When the bot is long, it shades quotes
-// down to encourage selling; when short, it shades up to encourage buying.
+// The shared quoter has no halfSpread floor. This wrapper adds a floor of
+// 0.005 to prevent zero-width quotes at extreme fair prices, which matters
+// for the AMM bot but not for the frontend display.
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+import {
+  type QuoteConfig,
+  DEFAULT_CONFIG,
+  shouldHalt,
+} from "../../shared/src/quoter.js";
 
-export interface QuoteConfig {
-  /** Half-spread in basis points of fair price. Default 500 = 5%. */
-  spreadBps: number;
-  /** Maximum inventory (in pairs) before circuit breaker halts. Default 1000. */
-  maxInventory: number;
-  /** Skew aggressiveness factor (0 = no skew, 1 = full skew). Default 0.5. */
-  skewFactor: number;
-  /** Minimum edge in price-cents (ensures bid < ask). Default 1 (= 1 cent). */
-  minEdge: number;
-}
+export { DEFAULT_CONFIG, shouldHalt };
+export type { QuoteConfig };
 
 export interface Quote {
   /** Bid price in cents [1, 99] */
@@ -32,24 +26,14 @@ export interface Quote {
   skew: number;
 }
 
-export const DEFAULT_CONFIG: QuoteConfig = {
-  spreadBps: 500,
-  maxInventory: 1000,
-  skewFactor: 0.5,
-  minEdge: 1,
-};
-
-// ---------------------------------------------------------------------------
-// Quote generation
-// ---------------------------------------------------------------------------
-
 /**
  * Generate a two-sided quote (bid/ask) around a fair value.
  *
- * @param fairPrice  Fair value probability in [0.01, 0.99]
- * @param inventory  Current net inventory (positive = long, negative = short)
- * @param config     Quote configuration parameters
- * @returns          Bid and ask prices in cents, plus diagnostics
+ * AMM-bot-specific: includes a halfSpread floor of 0.005 to prevent
+ * zero-width quotes after rounding to integer cents at extreme fair prices.
+ *
+ * Skew convention: positive inventory → positive skew value, subtracted
+ * from both bid and ask to shift quotes down (encourage selling).
  */
 export function generateQuotes(
   fairPrice: number,
@@ -58,20 +42,12 @@ export function generateQuotes(
 ): Quote {
   // Half-spread in probability units. Floor ensures at least 1 cent spread
   // when converted to cents: halfSpread * 100 >= 0.5 → rounds to at least 1c.
-  // At extreme fair prices (e.g. 0.01), the bps-based spread is tiny;
-  // the floor prevents zero-width quotes after rounding to integer cents.
   const rawHalfSpread = (fairPrice * config.spreadBps) / 10_000;
   const halfSpread = Math.max(rawHalfSpread, 0.005);
 
   // Inventory skew: shifts both bid and ask in the same direction.
-  //   Positive inventory (long) → negative skew → lower bid, lower ask (try to sell)
-  //   Negative inventory (short) → positive skew → raise bid, raise ask (try to buy)
-  //
-  // Trade-off: This mid-shift approach moves both sides equally, which preserves
-  // spread width but may be suboptimal for aggressive inventory reduction. An
-  // alternative would be to widen the skew-direction side and narrow the other,
-  // but that risks getting filled on the wrong side. The current approach is
-  // conservative and appropriate for a prototype AMM.
+  //   Positive inventory (long) → positive skew → lower bid, lower ask (try to sell)
+  //   Negative inventory (short) → negative skew → raise bid, raise ask (try to buy)
   const skew =
     (inventory / config.maxInventory) * config.skewFactor * halfSpread;
 
@@ -89,7 +65,6 @@ export function generateQuotes(
     const mid = Math.round((bidPrice + askPrice) / 2);
     bidPrice = Math.max(1, mid - config.minEdge);
     askPrice = Math.min(99, mid + config.minEdge);
-    // If still crossed (extreme edge at floor/ceiling), force apart
     if (bidPrice >= askPrice) {
       askPrice = Math.min(99, bidPrice + config.minEdge + 1);
       if (bidPrice >= askPrice) {
@@ -99,26 +74,4 @@ export function generateQuotes(
   }
 
   return { bidPrice, askPrice, fairPrice, skew };
-}
-
-// ---------------------------------------------------------------------------
-// Circuit breaker
-// ---------------------------------------------------------------------------
-
-/**
- * Determine whether the bot should halt quoting.
- *
- * @param inventory          Current net inventory
- * @param maxInventory       Maximum allowed inventory
- * @param consecutiveErrors  Number of consecutive on-chain errors
- * @returns                  true if the bot should stop quoting
- */
-export function shouldHalt(
-  inventory: number,
-  maxInventory: number,
-  consecutiveErrors: number,
-): boolean {
-  if (Math.abs(inventory) > maxInventory) return true;
-  if (consecutiveErrors > 5) return true;
-  return false;
 }

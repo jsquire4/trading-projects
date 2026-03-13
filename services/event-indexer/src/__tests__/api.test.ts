@@ -253,6 +253,12 @@ describe("API Server", () => {
       expect(body.error).toMatch(/Invalid market or wallet/);
     });
 
+    it("rejects too-short base58 addresses", async () => {
+      const { status, body } = await post(baseUrl, "/api/order-intent", { ...validIntent, market: "ABC123" });
+      expect(status).toBe(400);
+      expect(body.error).toMatch(/Invalid market or wallet/);
+    });
+
     it("returns 413 for oversized request body", async () => {
       const oversized = { ...validIntent, extra: "x".repeat(5000) };
       const { status, body } = await post(baseUrl, "/api/order-intent", oversized);

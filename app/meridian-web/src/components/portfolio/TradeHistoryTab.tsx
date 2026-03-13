@@ -116,7 +116,7 @@ export function TradeHistoryTab() {
               const qty = (f.quantity / 1_000_000).toFixed(0);
 
               return (
-                <tr key={`${f.orderId}-${i}`} className="border-b border-white/5 hover:bg-white/5">
+                <tr key={`${f.signature}-${i}`} className="border-b border-white/5 hover:bg-white/5">
                   <td className="py-2 px-2 text-white/50">
                     {new Date(f.timestamp * 1000).toLocaleString()}
                   </td>

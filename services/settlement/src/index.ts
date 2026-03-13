@@ -64,9 +64,11 @@ async function fetchClosingPrices(
     log.info(`${q.symbol}: $${price} (source: ${source})`);
   }
 
-  const missing = tickers.filter((t) => !prices.has(t));
-  if (missing.length > 0) {
-    log.error(`No closing price returned for: ${missing.join(", ")}. These tickers will be skipped.`);
+  // Check for tickers not returned by the API at all (zero-price skips already logged above)
+  const returned = new Set(quotes.map((q) => q.symbol));
+  const notReturned = tickers.filter((t) => !returned.has(t));
+  if (notReturned.length > 0) {
+    log.error(`Tradier returned no quote for: ${notReturned.join(", ")}. These tickers will be skipped.`);
   }
 
   return prices;

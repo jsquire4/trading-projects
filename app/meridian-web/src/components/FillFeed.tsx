@@ -61,7 +61,7 @@ export function FillFeed({ marketKey, limit = 20 }: FillFeedProps) {
             const agoStr = ago < 60 ? `${ago}s` : ago < 3600 ? `${Math.floor(ago / 60)}m` : `${Math.floor(ago / 3600)}h`;
 
             return (
-              <div key={`${fill.orderId}-${i}`} className="flex items-center justify-between text-[11px]">
+              <div key={`${fill.signature}-${fill.seq ?? i}`} className="flex items-center justify-between text-[11px]">
                 <span className={`font-medium ${tokenColor}`}>{tokenType}</span>
                 <span className="text-white/50 tabular-nums">{qty} @ {fill.price}c</span>
                 <span className="text-white/30">{agoStr} ago</span>

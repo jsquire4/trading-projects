@@ -440,14 +440,35 @@ describe("Database Layer", () => {
       expect(fills[0].viewerIntent).toBe("sell_no");
     });
 
-    it("returns 'unknown' for unrecognized side values", () => {
+    it("returns 'unknown' for unrecognized taker side values", () => {
       insertEvent(makeEvent({
         market,
-        signature: "fill_sig_unknown",
+        signature: "fill_sig_unknown_taker",
         data: JSON.stringify({
           taker: wallet,
           maker: "OtherWallet",
           takerSide: 99,
+          makerSide: 0,
+          price: 50,
+          quantity: 1000000,
+          makerOrderId: "998",
+        }),
+      }));
+
+      const fills = queryFillsWithIntent(wallet);
+      expect(fills).toHaveLength(1);
+      expect(fills[0].viewerIntent).toBe("unknown");
+    });
+
+    it("returns 'unknown' for unrecognized maker side values", () => {
+      const maker = "UnknownMkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+      insertEvent(makeEvent({
+        market,
+        signature: "fill_sig_unknown_maker",
+        data: JSON.stringify({
+          taker: "OtherWallet",
+          maker,
+          takerSide: 0,
           makerSide: 99,
           price: 50,
           quantity: 1000000,
@@ -455,9 +476,35 @@ describe("Database Layer", () => {
         }),
       }));
 
-      const fills = queryFillsWithIntent(wallet);
+      const fills = queryFillsWithIntent(maker);
       expect(fills).toHaveLength(1);
       expect(fills[0].viewerIntent).toBe("unknown");
+    });
+
+    it("filters fills to the queried wallet only", () => {
+      const otherWallet = "OtherWalAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+      // Insert fills for two different wallets
+      insertEvent(makeEvent({
+        market,
+        signature: "fill_sig_w1",
+        data: JSON.stringify({
+          taker: wallet, maker: otherWallet, takerSide: 0, makerSide: 0,
+          price: 50, quantity: 1000000, makerOrderId: "800",
+        }),
+      }));
+      insertEvent(makeEvent({
+        market,
+        signature: "fill_sig_w2",
+        data: JSON.stringify({
+          taker: otherWallet, maker: "ThirdWallet",  takerSide: 0, makerSide: 0,
+          price: 60, quantity: 2000000, makerOrderId: "801",
+        }),
+      }));
+
+      const walletFills = queryFillsWithIntent(wallet);
+      // wallet appears as taker in sig_w1 and maker in sig_w1 — but sig_w2 has neither
+      expect(walletFills).toHaveLength(1);
+      expect(walletFills[0].signature).toBe("fill_sig_w1");
     });
 
     it("derives maker perspective for merge fill (makerSide=2 = Sell No)", () => {

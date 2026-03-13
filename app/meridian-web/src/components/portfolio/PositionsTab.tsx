@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback, useEffect } from "react";
 import { PublicKey } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from "@solana/spl-token";
@@ -29,7 +29,11 @@ function PositionCard({ position, totalCost }: { position: Position; totalCost: 
   const noBal = Number(position.noBal) / 1_000_000;
   const strikeDollars = Number(position.market.strikePrice) / 1_000_000;
   const closeUnix = Number(position.market.marketCloseUnix);
-  const now = Math.floor(Date.now() / 1000);
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 15_000);
+    return () => clearInterval(id);
+  }, []);
   const remaining = Math.max(0, closeUnix - now);
 
   const midPrice = useMemo(() => {

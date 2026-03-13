@@ -142,9 +142,11 @@ function handleOrderIntent(
   let bodyOverflow = false;
   const MAX_BODY_SIZE = 4096; // 4KB — order intent payloads are ~200 bytes
   req.on("data", (chunk: Buffer) => {
+    if (bodyOverflow) return;
     body += chunk.toString();
-    if (body.length > MAX_BODY_SIZE && !bodyOverflow) {
+    if (body.length > MAX_BODY_SIZE) {
       bodyOverflow = true;
+      body = ""; // release accumulated data
       jsonResponse(res, 413, { error: "Request body too large" }, req);
       return;
     }

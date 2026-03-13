@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen } from "@testing-library/react";
 import { showTxToast } from "../TxToast";
 import { toast } from "sonner";
 
@@ -34,7 +35,6 @@ describe("showTxToast", () => {
 
     // Verify the description contains the explorer URL
     const callArgs = (toast.success as any).mock.calls[0][1];
-    // description is a React element — check it's defined
     expect(callArgs.description).toBeDefined();
   });
 
@@ -58,23 +58,24 @@ describe("showTxToast", () => {
     showTxToast({ signature: "abc", status: "error" });
 
     expect(toast.error).toHaveBeenCalledTimes(1);
-    // The description is a React element containing the error text
     const callArgs = (toast.error as any).mock.calls[0][1];
-    expect(callArgs.description).toBeDefined();
+    // Render the description element and verify fallback text
+    const { container } = render(callArgs.description);
+    expect(container.textContent).toBe("Unknown error");
   });
 
   it("constructs correct devnet explorer URL", () => {
-    // We'll render the description element to verify the URL
     const sig = "testSig123";
     showTxToast({ signature: sig, status: "confirmed" });
 
     const callArgs = (toast.success as any).mock.calls[0][1];
-    const description = callArgs.description;
-
-    // The description is a JSX <a> element — check its props
-    expect(description.props.href).toBe(
+    // Render the description element and verify link
+    const { container } = render(callArgs.description);
+    const link = container.querySelector("a");
+    expect(link).not.toBeNull();
+    expect(link!.href).toBe(
       `https://explorer.solana.com/tx/${sig}?cluster=devnet`,
     );
-    expect(description.props.target).toBe("_blank");
+    expect(link!.target).toBe("_blank");
   });
 });

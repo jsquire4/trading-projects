@@ -35,7 +35,7 @@ export function LiveFillTicker() {
           const agoStr = ago < 60 ? `${ago}s` : `${Math.floor(ago / 60)}m`;
 
           return (
-            <span key={`${fill.orderId}-${fill.timestamp}`} className="text-[11px] text-white/40">
+            <span key={`${fill.signature}-${fill.seq ?? fill.timestamp}`} className="text-[11px] text-white/40">
               <span className={tokenColor}>{qty} {tokenType}</span>
               {" @ "}{fill.price}c
               {" · "}{agoStr} ago

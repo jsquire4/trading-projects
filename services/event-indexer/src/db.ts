@@ -203,15 +203,19 @@ export interface CostBasisRow {
 export function queryCostBasis(wallet: string): CostBasisRow[] {
   // Acquisition fills (cost basis = tokens obtained):
   //   - Taker buys Yes: taker = wallet AND takerSide = 0 (USDC_BID)
+  //   - Taker buys No:  taker = wallet AND takerSide = 2 (NO_BID)
   //   - Maker bought Yes: maker = wallet AND makerSide = 0 (USDC_BID)
-  //     Uses makerSide (not takerSide) because takerSide=1 can match against
-  //     makerSide=0 (Buy Yes) OR makerSide=2 (Sell No / merge fill).
+  //   - Maker bought No:  maker = wallet AND makerSide = 2 (NO_BID, merge fill)
+  //   Uses makerSide (not takerSide) because takerSide=1 can match against
+  //   makerSide=0 (Buy Yes) OR makerSide=2 (Sell No / merge fill).
   const stmt = getDb().prepare(`
     SELECT
       market,
       CASE
         WHEN json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 0 THEN 'yes'
+        WHEN json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 2 THEN 'no'
         WHEN json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.makerSide') AS INTEGER) = 0 THEN 'yes'
+        WHEN json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.makerSide') AS INTEGER) = 2 THEN 'no'
       END as side,
       SUM(CAST(json_extract(data, '$.quantity') AS REAL)) as totalQuantity,
       SUM(CAST(json_extract(data, '$.quantity') AS REAL) * CAST(json_extract(data, '$.price') AS REAL)) as totalCost,
@@ -219,9 +223,9 @@ export function queryCostBasis(wallet: string): CostBasisRow[] {
     FROM events
     WHERE type = 'fill'
       AND (
-        (json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 0)
+        (json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) IN (0, 2))
         OR
-        (json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.makerSide') AS INTEGER) = 0)
+        (json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.makerSide') AS INTEGER) IN (0, 2))
       )
     GROUP BY market, side
     HAVING side IS NOT NULL

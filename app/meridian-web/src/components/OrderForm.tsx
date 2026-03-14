@@ -612,6 +612,13 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
         </div>
       )}
 
+      {/* Rent disclosure for limit orders */}
+      {orderType === "limit" && (
+        <div className="text-[10px] text-white/20">
+          ~0.002 SOL rent for new token accounts (one-time per market)
+        </div>
+      )}
+
       {/* Ticker / strike context */}
       <div className="text-[11px] text-white/40">
         {ticker} @ ${(strikePrice / 1_000_000).toFixed(2)} strike

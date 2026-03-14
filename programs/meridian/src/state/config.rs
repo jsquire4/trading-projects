@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 
 #[account]
 pub struct GlobalConfig {
+    // ── v1 fields (192 bytes) ─────────────────────────────────────────
     /// Admin authority
     pub admin: Pubkey,
     /// Mock USDC mint on devnet (real USDC on mainnet)
@@ -18,9 +19,9 @@ pub struct GlobalConfig {
     pub is_paused: bool,
     /// Oracle type: 0=Mock, 1=Pyth
     pub oracle_type: u8,
-    /// Supported tickers (7 MAG7, padded to 8 bytes each)
+    /// Supported tickers (7 MAG7, padded to 8 bytes each) — legacy, use TickerRegistry
     pub tickers: [[u8; 8]; 7],
-    /// Number of active tickers
+    /// Number of active tickers — legacy, use TickerRegistry
     pub ticker_count: u8,
     /// PDA bump
     pub bump: u8,
@@ -30,6 +31,18 @@ pub struct GlobalConfig {
     pub _padding: [u8; 2],
     /// Fee in USDC lamports charged to non-admin users creating strike markets
     pub strike_creation_fee: u64,
+
+    // ── v2 fields (56 bytes, appended by expand_config) ───────────────
+    /// Proposed new admin (two-step transfer). Pubkey::default() = no pending transfer.
+    pub pending_admin: Pubkey,
+    /// Admin-configurable SOL reserve for next-day market creation float
+    pub operating_reserve: u64,
+    /// Total USDC obligations owed to users from settled markets
+    pub obligations: u64,
+    /// Settlement blackout window in minutes (0 = no blackout)
+    pub settlement_blackout_minutes: u16,
+    /// Padding for 8-byte alignment
+    pub _padding2: [u8; 6],
 }
 
 impl GlobalConfig {
@@ -37,10 +50,11 @@ impl GlobalConfig {
     pub const TREASURY_SEED: &'static [u8] = b"treasury";
     pub const FEE_VAULT_SEED: &'static [u8] = b"fee_vault";
 
-    // Calculate exact size: verify with std::mem::size_of after compilation
-    // 3×32 (Pubkeys) + 4×8 (u64s) + 56 (tickers) + 4×1 (bool/u8s) + 2 (fee_bps) + 2 (padding) = 192
-    pub const LEN: usize = 32 + 32 + 32 + 8 + 8 + 8 + 1 + 1 + 56 + 1 + 1 + 2 + 2 + 8; // 192 bytes
+    // v1: 192 bytes, v2: 248 bytes (192 + 32 + 8 + 8 + 2 + 6)
+    pub const LEN: usize = 248;
+    pub const V1_LEN: usize = 192;
 
+    /// Check ticker against the legacy tickers array (for backward compat)
     pub fn is_valid_ticker(&self, ticker: &[u8; 8]) -> bool {
         self.tickers[..(self.ticker_count as usize).min(self.tickers.len())]
             .iter()

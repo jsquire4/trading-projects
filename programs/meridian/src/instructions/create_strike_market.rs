@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, spl_token, Mint, Token, TokenAccount, Transfer};
 use crate::error::MeridianError;
-use crate::state::{GlobalConfig, OrderBook, StrikeMarket};
+use crate::state::{GlobalConfig, OrderBook, StrikeMarket, TickerRegistry};
 
 #[derive(Accounts)]
 #[instruction(
@@ -131,6 +131,11 @@ pub struct CreateStrikeMarket<'info> {
     #[account(mut)]
     pub fee_vault: Option<UncheckedAccount<'info>>,
 
+    /// TickerRegistry — validates ticker is active.
+    /// Optional for backward compat: if not provided, falls back to GlobalConfig.tickers.
+    /// CHECK: Validated in handler via PDA derivation.
+    pub ticker_registry: Option<UncheckedAccount<'info>>,
+
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
@@ -146,8 +151,32 @@ pub fn handle_create_strike_market(
 ) -> Result<()> {
     let config = &ctx.accounts.config;
 
-    // Validate ticker is in the allowed list
-    require!(config.is_valid_ticker(&ticker), MeridianError::InvalidTicker);
+    // Validate ticker: prefer TickerRegistry if available, fall back to GlobalConfig.tickers
+    if let Some(ref registry_info) = ctx.accounts.ticker_registry {
+        // Verify PDA derivation
+        let (expected_pda, _) = Pubkey::find_program_address(
+            &[TickerRegistry::SEED_PREFIX],
+            ctx.program_id,
+        );
+        require!(
+            registry_info.key() == expected_pda,
+            MeridianError::InvalidTicker,
+        );
+        // Deserialize and validate
+        let registry_data = registry_info.try_borrow_data()?;
+        if registry_data.len() >= 8 {
+            let registry = TickerRegistry::try_deserialize(&mut &registry_data[..])?;
+            require!(
+                registry.is_active_ticker(&ticker),
+                MeridianError::InvalidTicker,
+            );
+        } else {
+            // Fallback if registry exists but has no data
+            require!(config.is_valid_ticker(&ticker), MeridianError::InvalidTicker);
+        }
+    } else {
+        require!(config.is_valid_ticker(&ticker), MeridianError::InvalidTicker);
+    }
     require!(strike_price > 0, MeridianError::InvalidStrikePrice);
 
     // Enforce expiry_day == floor(market_close_unix / 86400) so that

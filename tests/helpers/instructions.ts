@@ -146,6 +146,8 @@ export interface CreateStrikeMarketParams {
   creatorUsdcAta?: PublicKey;
   /** Fee vault PDA (pass null/program ID to skip) */
   feeVault?: PublicKey;
+  /** TickerRegistry PDA (pass null/program ID to skip for legacy mode) */
+  tickerRegistry?: PublicKey;
   /** 8-byte ticker (use padTicker) */
   ticker: Buffer;
   /** Strike price in USDC lamports */
@@ -181,6 +183,7 @@ export function buildCreateStrikeMarketIx(
   //   token_program, system_program, rent
   const creatorUsdcAta = params.creatorUsdcAta ?? MERIDIAN_PROGRAM_ID;
   const feeVault = params.feeVault ?? MERIDIAN_PROGRAM_ID;
+  const tickerRegistry = params.tickerRegistry ?? MERIDIAN_PROGRAM_ID;
   const keys = [
     { pubkey: params.admin, isSigner: true, isWritable: true },
     { pubkey: params.config, isSigner: false, isWritable: false },
@@ -196,6 +199,7 @@ export function buildCreateStrikeMarketIx(
     { pubkey: params.usdcMint, isSigner: false, isWritable: false },
     { pubkey: creatorUsdcAta, isSigner: false, isWritable: true },
     { pubkey: feeVault, isSigner: false, isWritable: true },
+    { pubkey: tickerRegistry, isSigner: false, isWritable: false },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
@@ -844,7 +848,7 @@ export function buildCloseMarketIx(
   //   token_program, system_program
   const keys = [
     { pubkey: params.admin, isSigner: true, isWritable: true },
-    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.config, isSigner: false, isWritable: true },
     { pubkey: params.market, isSigner: false, isWritable: true },
     { pubkey: params.orderBook, isSigner: false, isWritable: true },
     { pubkey: params.usdcVault, isSigner: false, isWritable: true },
@@ -891,7 +895,7 @@ export function buildTreasuryRedeemIx(
   //   user_usdc_ata, user_yes_ata, user_no_ata, token_program
   const keys = [
     { pubkey: params.user, isSigner: true, isWritable: true },
-    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.config, isSigner: false, isWritable: true },
     { pubkey: params.market, isSigner: false, isWritable: true },
     { pubkey: params.yesMint, isSigner: false, isWritable: true },
     { pubkey: params.noMint, isSigner: false, isWritable: true },
@@ -1044,5 +1048,338 @@ export function buildCrankRedeemIx(
     programId: MERIDIAN_PROGRAM_ID,
     keys,
     data,
+  });
+}
+
+// ===========================================================================
+// Phase 6A: Admin V2 instruction builders
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Meridian: transfer_admin
+// ---------------------------------------------------------------------------
+
+export interface TransferAdminParams {
+  admin: PublicKey;
+  config: PublicKey;
+  newAdmin: PublicKey;
+}
+
+export function buildTransferAdminIx(
+  params: TransferAdminParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("transfer_admin");
+  const data = Buffer.concat([disc, params.newAdmin.toBuffer()]);
+
+  const keys = [
+    { pubkey: params.admin, isSigner: true, isWritable: false },
+    { pubkey: params.config, isSigner: false, isWritable: true },
+  ];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Meridian: accept_admin
+// ---------------------------------------------------------------------------
+
+export interface AcceptAdminParams {
+  newAdmin: PublicKey;
+  config: PublicKey;
+}
+
+export function buildAcceptAdminIx(
+  params: AcceptAdminParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("accept_admin");
+
+  const keys = [
+    { pubkey: params.newAdmin, isSigner: true, isWritable: false },
+    { pubkey: params.config, isSigner: false, isWritable: true },
+  ];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data: disc,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Meridian: withdraw_fees
+// ---------------------------------------------------------------------------
+
+export interface WithdrawFeesParams {
+  admin: PublicKey;
+  config: PublicKey;
+  feeVault: PublicKey;
+  adminUsdcAta: PublicKey;
+}
+
+export function buildWithdrawFeesIx(
+  params: WithdrawFeesParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("withdraw_fees");
+
+  const keys = [
+    { pubkey: params.admin, isSigner: true, isWritable: false },
+    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.feeVault, isSigner: false, isWritable: true },
+    { pubkey: params.adminUsdcAta, isSigner: false, isWritable: true },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+  ];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data: disc,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Meridian: withdraw_treasury
+// ---------------------------------------------------------------------------
+
+export interface WithdrawTreasuryParams {
+  admin: PublicKey;
+  config: PublicKey;
+  treasury: PublicKey;
+  adminUsdcAta: PublicKey;
+  amount: BN;
+}
+
+export function buildWithdrawTreasuryIx(
+  params: WithdrawTreasuryParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("withdraw_treasury");
+  const amountBuf = params.amount.toArrayLike(Buffer, "le", 8);
+  const data = Buffer.concat([disc, amountBuf]);
+
+  const keys = [
+    { pubkey: params.admin, isSigner: true, isWritable: false },
+    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.treasury, isSigner: false, isWritable: true },
+    { pubkey: params.adminUsdcAta, isSigner: false, isWritable: true },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+  ];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Meridian: update_config
+// ---------------------------------------------------------------------------
+
+export interface UpdateConfigParams {
+  admin: PublicKey;
+  config: PublicKey;
+  stalenessThreshold?: BN | null;
+  settlementStaleness?: BN | null;
+  confidenceBps?: BN | null;
+  operatingReserve?: BN | null;
+  settlementBlackoutMinutes?: number | null;
+}
+
+/** Encode Anchor Option<u64>: 0x00 = None, 0x01 + le_bytes = Some */
+function optU64(val?: BN | null): Buffer {
+  if (val == null) return Buffer.from([0]);
+  return Buffer.concat([Buffer.from([1]), val.toArrayLike(Buffer, "le", 8)]);
+}
+
+function optU16(val?: number | null): Buffer {
+  if (val == null) return Buffer.from([0]);
+  const buf = Buffer.alloc(3);
+  buf[0] = 1;
+  buf.writeUInt16LE(val, 1);
+  return buf;
+}
+
+export function buildUpdateConfigIx(
+  params: UpdateConfigParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("update_config");
+
+  const data = Buffer.concat([
+    disc,
+    optU64(params.stalenessThreshold),
+    optU64(params.settlementStaleness),
+    optU64(params.confidenceBps),
+    optU64(params.operatingReserve),
+    optU16(params.settlementBlackoutMinutes),
+  ]);
+
+  const keys = [
+    { pubkey: params.admin, isSigner: true, isWritable: false },
+    { pubkey: params.config, isSigner: false, isWritable: true },
+  ];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Meridian: add_ticker
+// ---------------------------------------------------------------------------
+
+export interface AddTickerParams {
+  payer: PublicKey;
+  config: PublicKey;
+  tickerRegistry: PublicKey;
+  ticker: Buffer; // 8-byte padded ticker
+  /** Pyth price account (only when oracle_type == Pyth) */
+  pythFeed?: PublicKey;
+}
+
+export function buildAddTickerIx(
+  params: AddTickerParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("add_ticker");
+  const data = Buffer.concat([disc, params.ticker]);
+
+  const keys = [
+    { pubkey: params.payer, isSigner: true, isWritable: true },
+    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.tickerRegistry, isSigner: false, isWritable: true },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+  ];
+
+  const remainingAccounts = params.pythFeed
+    ? [{ pubkey: params.pythFeed, isSigner: false, isWritable: false }]
+    : [];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys: [...keys, ...remainingAccounts],
+    data,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Meridian: deactivate_ticker
+// ---------------------------------------------------------------------------
+
+export interface DeactivateTickerParams {
+  admin: PublicKey;
+  config: PublicKey;
+  tickerRegistry: PublicKey;
+  ticker: Buffer; // 8-byte padded ticker
+}
+
+export function buildDeactivateTickerIx(
+  params: DeactivateTickerParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("deactivate_ticker");
+  const data = Buffer.concat([disc, params.ticker]);
+
+  const keys = [
+    { pubkey: params.admin, isSigner: true, isWritable: false },
+    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.tickerRegistry, isSigner: false, isWritable: true },
+  ];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Meridian: circuit_breaker
+// ---------------------------------------------------------------------------
+
+export interface CircuitBreakerParams {
+  admin: PublicKey;
+  config: PublicKey;
+  /** Pairs of (market, orderBook) accounts to pause + cancel */
+  marketBookPairs?: Array<{ market: PublicKey; orderBook: PublicKey }>;
+}
+
+export function buildCircuitBreakerIx(
+  params: CircuitBreakerParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("circuit_breaker");
+
+  const keys = [
+    { pubkey: params.admin, isSigner: true, isWritable: false },
+    { pubkey: params.config, isSigner: false, isWritable: true },
+  ];
+
+  const remainingAccounts = (params.marketBookPairs ?? []).flatMap((pair) => [
+    { pubkey: pair.market, isSigner: false, isWritable: true },
+    { pubkey: pair.orderBook, isSigner: false, isWritable: true },
+  ]);
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys: [...keys, ...remainingAccounts],
+    data: disc,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Meridian: expand_config
+// ---------------------------------------------------------------------------
+
+export interface ExpandConfigParams {
+  admin: PublicKey;
+  config: PublicKey;
+}
+
+export function buildExpandConfigIx(
+  params: ExpandConfigParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("expand_config");
+
+  const keys = [
+    { pubkey: params.admin, isSigner: true, isWritable: true },
+    { pubkey: params.config, isSigner: false, isWritable: true },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+  ];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data: disc,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Meridian: initialize_ticker_registry
+// ---------------------------------------------------------------------------
+
+export interface InitializeTickerRegistryParams {
+  admin: PublicKey;
+  config: PublicKey;
+  tickerRegistry: PublicKey;
+}
+
+export function buildInitializeTickerRegistryIx(
+  params: InitializeTickerRegistryParams,
+): TransactionInstruction {
+  const disc = anchorDiscriminator("initialize_ticker_registry");
+
+  const keys = [
+    { pubkey: params.admin, isSigner: true, isWritable: true },
+    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.tickerRegistry, isSigner: false, isWritable: true },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+  ];
+
+  return new TransactionInstruction({
+    programId: MERIDIAN_PROGRAM_ID,
+    keys,
+    data: disc,
   });
 }

@@ -30,6 +30,17 @@ pub use instructions::cleanup_market::*;
 pub use instructions::update_fee_bps::*;
 pub use instructions::update_strike_creation_fee::*;
 pub use instructions::crank_redeem::*;
+// Phase 6A: Admin V2
+pub use instructions::transfer_admin::*;
+pub use instructions::accept_admin::*;
+pub use instructions::withdraw_fees::*;
+pub use instructions::withdraw_treasury::*;
+pub use instructions::update_config::*;
+pub use instructions::add_ticker::*;
+pub use instructions::deactivate_ticker::*;
+pub use instructions::circuit_breaker::*;
+pub use instructions::expand_config::*;
+pub use instructions::initialize_ticker_registry::*;
 
 declare_id!("7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth");
 
@@ -171,5 +182,66 @@ pub mod meridian {
         batch_size: u8,
     ) -> Result<()> {
         instructions::crank_redeem::handle_crank_redeem(ctx, batch_size)
+    }
+
+    // ── Phase 6A: Admin V2 ───────────────────────────────────────────
+
+    pub fn transfer_admin(ctx: Context<TransferAdmin>, new_admin: Pubkey) -> Result<()> {
+        instructions::transfer_admin::handle_transfer_admin(ctx, new_admin)
+    }
+
+    pub fn accept_admin(ctx: Context<AcceptAdmin>) -> Result<()> {
+        instructions::accept_admin::handle_accept_admin(ctx)
+    }
+
+    pub fn withdraw_fees(ctx: Context<WithdrawFees>) -> Result<()> {
+        instructions::withdraw_fees::handle_withdraw_fees(ctx)
+    }
+
+    pub fn withdraw_treasury(ctx: Context<WithdrawTreasury>, amount: u64) -> Result<()> {
+        instructions::withdraw_treasury::handle_withdraw_treasury(ctx, amount)
+    }
+
+    pub fn update_config(
+        ctx: Context<UpdateConfig>,
+        staleness_threshold: Option<u64>,
+        settlement_staleness: Option<u64>,
+        confidence_bps: Option<u64>,
+        operating_reserve: Option<u64>,
+        settlement_blackout_minutes: Option<u16>,
+    ) -> Result<()> {
+        instructions::update_config::handle_update_config(
+            ctx,
+            staleness_threshold,
+            settlement_staleness,
+            confidence_bps,
+            operating_reserve,
+            settlement_blackout_minutes,
+        )
+    }
+
+    pub fn add_ticker<'info>(
+        ctx: Context<'_, '_, '_, 'info, AddTicker<'info>>,
+        ticker: [u8; 8],
+    ) -> Result<()> {
+        instructions::add_ticker::handle_add_ticker(ctx, ticker)
+    }
+
+    pub fn deactivate_ticker(ctx: Context<DeactivateTicker>, ticker: [u8; 8]) -> Result<()> {
+        instructions::deactivate_ticker::handle_deactivate_ticker(ctx, ticker)
+    }
+
+    pub fn circuit_breaker<'info>(
+        ctx: Context<'_, '_, 'info, 'info, CircuitBreaker<'info>>,
+    ) -> Result<()> {
+        instructions::circuit_breaker::handle_circuit_breaker(ctx)
+    }
+
+    pub fn expand_config(ctx: Context<ExpandConfig>) -> Result<()> {
+        instructions::expand_config::handle_expand_config(ctx)
+    }
+
+    pub fn initialize_ticker_registry(ctx: Context<InitializeTickerRegistry>) -> Result<()> {
+        instructions::initialize_ticker_registry::handle_initialize_ticker_registry(ctx)
     }
 }

@@ -8,6 +8,7 @@ pub struct TreasuryRedeem<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
+    #[account(mut)]
     pub config: Box<Account<'info, GlobalConfig>>,
 
     #[account(
@@ -153,6 +154,20 @@ pub fn handle_treasury_redeem(ctx: Context<TreasuryRedeem>) -> Result<()> {
         .total_redeemed
         .checked_add(pair_count.checked_add(winner_remainder).ok_or(MeridianError::ArithmeticOverflow)?)
         .ok_or(MeridianError::ArithmeticOverflow)?;
+
+    // Decrement obligations: payout + loser tokens (burned, no longer owed)
+    let loser_remainder = match outcome {
+        1 => no_remainder,  // Yes wins → No tokens are losers
+        2 => yes_remainder, // No wins → Yes tokens are losers
+        _ => 0,
+    };
+    let total_obligation_released = total_payout
+        .checked_add(loser_remainder)
+        .ok_or(MeridianError::ArithmeticOverflow)?;
+    if total_obligation_released > 0 {
+        let config = &mut ctx.accounts.config;
+        config.obligations = config.obligations.saturating_sub(total_obligation_released);
+    }
 
     msg!(
         "Treasury redeem: user={}, market={}, yes_burned={}, no_burned={}, payout={}",

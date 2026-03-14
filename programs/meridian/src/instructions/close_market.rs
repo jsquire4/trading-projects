@@ -9,6 +9,7 @@ pub struct CloseMarket<'info> {
     pub admin: Signer<'info>,
 
     #[account(
+        mut,
         has_one = admin @ MeridianError::Unauthorized,
     )]
     pub config: Box<Account<'info, GlobalConfig>>,
@@ -254,6 +255,15 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
         // Set is_closed flag — keep StrikeMarket, YesMint, NoMint alive
         let market = &mut ctx.accounts.market;
         market.is_closed = true;
+
+        // Track USDC obligations: vault balance swept to treasury is owed to holders
+        if vault_balance > 0 {
+            let config = &mut ctx.accounts.config;
+            config.obligations = config
+                .obligations
+                .checked_add(vault_balance)
+                .ok_or(MeridianError::ArithmeticOverflow)?;
+        }
 
         msg!(
             "Market partial-closed: market={}, vault_swept={}, 5 accounts closed, 3 kept",

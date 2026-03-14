@@ -18,6 +18,17 @@ pub mod cleanup_market;
 pub mod update_fee_bps;
 pub mod update_strike_creation_fee;
 pub mod crank_redeem;
+// Phase 6A: Admin V2
+pub mod transfer_admin;
+pub mod accept_admin;
+pub mod withdraw_fees;
+pub mod withdraw_treasury;
+pub mod update_config;
+pub mod add_ticker;
+pub mod deactivate_ticker;
+pub mod circuit_breaker;
+pub mod expand_config;
+pub mod initialize_ticker_registry;
 
 pub use allocate_order_book::*;
 pub use initialize_config::*;
@@ -39,3 +50,14 @@ pub use cleanup_market::*;
 pub use update_fee_bps::*;
 pub use update_strike_creation_fee::*;
 pub use crank_redeem::*;
+// Phase 6A: Admin V2
+pub use transfer_admin::*;
+pub use accept_admin::*;
+pub use withdraw_fees::*;
+pub use withdraw_treasury::*;
+pub use update_config::*;
+pub use add_ticker::*;
+pub use deactivate_ticker::*;
+pub use circuit_breaker::*;
+pub use expand_config::*;
+pub use initialize_ticker_registry::*;

@@ -180,4 +180,34 @@ pub enum MeridianError {
     CrankRedeemOverrideActive = 140,
     #[msg("No tokens were redeemed in this batch")]
     CrankRedeemEmpty = 141,
+
+    // === Admin V2 (on-chain: 6150-6163) ===
+    #[msg("No pending admin transfer to accept")]
+    NoPendingAdmin = 150,
+    #[msg("Signer does not match pending admin")]
+    NotPendingAdmin = 151,
+    #[msg("Withdrawal exceeds available balance (balance - obligations - reserve)")]
+    WithdrawalExceedsAvailable = 152,
+    #[msg("Ticker already exists in the registry")]
+    TickerAlreadyExists = 153,
+    #[msg("Ticker not found in the registry")]
+    TickerNotFound = 154,
+    #[msg("Ticker has been deactivated")]
+    TickerDeactivated = 155,
+    #[msg("GlobalConfig already expanded to v2")]
+    ConfigAlreadyExpanded = 156,
+    #[msg("Invalid oracle type for Pyth feed validation")]
+    PythValidationRequired = 157,
+    #[msg("Pyth price account is not valid or has no recent data")]
+    InvalidPythFeed = 158,
+    #[msg("Cannot switch to Mock oracle while unsettled markets exist")]
+    UnsettledMarketsExist = 159,
+    #[msg("Invalid operating reserve value")]
+    InvalidOperatingReserve = 160,
+    #[msg("Settlement blackout must be 0-60 minutes")]
+    InvalidBlackoutMinutes = 161,
+    #[msg("Treasury has insufficient SOL for rent")]
+    InsufficientTreasuryRent = 162,
+    #[msg("Admin signer required when oracle_type is Mock")]
+    MockOracleAdminRequired = 163,
 }

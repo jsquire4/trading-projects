@@ -132,6 +132,13 @@ export function findFeeVault(): [PublicKey, number] {
   );
 }
 
+export function findTickerRegistry(): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("tickers")],
+    MERIDIAN_PROGRAM_ID,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Mock Oracle PDAs
 // ---------------------------------------------------------------------------

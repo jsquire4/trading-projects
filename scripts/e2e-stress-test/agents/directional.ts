@@ -99,8 +99,9 @@ export class Directional extends BaseAgent {
         });
 
         const bidTx = new Transaction().add(bidIx);
-        await this.sendTimed(bidTx, [this.keypair], "place_order");
+        const sig = await this.sendTimed(bidTx, [this.keypair], "place_order");
         this.state.ordersPlaced++;
+        if (sig && makerAccounts.length > 0) this.state.ordersFilled++;
       } else {
         // Bearish: "Buy No" via atomic mint-pair + sell-Yes flow
         // Step 1: Mint pairs if we don't have No tokens
@@ -168,8 +169,9 @@ export class Directional extends BaseAgent {
           });
 
           const sellTx = new Transaction().add(sellYesIx);
-          await this.sendTimed(sellTx, [this.keypair], "place_order");
+          const sellSig = await this.sendTimed(sellTx, [this.keypair], "place_order");
           this.state.ordersPlaced++;
+          if (sellSig && makerAccounts.length > 0) this.state.ordersFilled++;
         }
       }
 
@@ -211,8 +213,9 @@ export class Directional extends BaseAgent {
             });
 
             const exitTx = new Transaction().add(exitIx);
-            await this.sendTimed(exitTx, [this.keypair], "place_order");
+            const exitSig = await this.sendTimed(exitTx, [this.keypair], "place_order");
             this.state.ordersPlaced++;
+            if (exitSig && makerAccounts.length > 0) this.state.ordersFilled++;
           }
         }
       }

@@ -32,8 +32,10 @@ export const USDC_DECIMALS = 6;
 export const MIN_MINT_QUANTITY = 1_000_000n;
 export const DEFAULT_MINT_QUANTITY = 50_000_000n;
 export const MAX_FILLS = 5;
-export const CRANK_CANCEL_BATCH_SIZE = 32;
-export const CRANK_REDEEM_MAX_USERS = 16;
+// Max remaining accounts per tx ≈ (1232 - ~300 base) / 34 ≈ 27
+// Keep well under to avoid "Transaction too large" errors
+export const CRANK_CANCEL_BATCH_SIZE = 20;
+export const CRANK_REDEEM_MAX_USERS = 8; // 2 accounts per user = 16 remaining accounts
 export const ALT_WARMUP_SLEEP_MS = 500;
 export const CONFIDENCE_BPS_OF_PRICE = 40;
 export const SOL_PER_AGENT = 5;

@@ -418,13 +418,17 @@ async function crankRedeemDay(
       await sendTx(ctx.connection, tx, [ctx.admin]);
       ctx.metrics.instructionTypes.add("crank_redeem");
     } catch (e: any) {
-      errors.push({
-        timestamp: Date.now(),
-        agentId: -1,
-        instruction: "crank_redeem",
-        market: m.ticker,
-        message: e.message,
-      });
+      // CrankRedeemEmpty (0x17fd) is expected when tokens were already drained — not an error
+      const isCrankEmpty = e.message?.includes("0x17fd");
+      if (!isCrankEmpty) {
+        errors.push({
+          timestamp: Date.now(),
+          agentId: -1,
+          instruction: "crank_redeem",
+          market: m.ticker,
+          message: e.message,
+        });
+      }
     }
   }
 }
@@ -608,8 +612,12 @@ export async function runAct3(ctx: SharedContext): Promise<ActResult> {
   const oracle = new OracleSimulator(ctx.config.tickers, ctx.config.seed);
   const loopRng = new SeededRng(hashSeed(ctx.config.seed, "trading-loop"));
   const metricsCollector = new MetricsCollector();
-  // Wire metrics collector data into ctx.metrics
+  // Preserve instruction types from earlier acts, then wire metrics collector
+  const priorInstructionTypes = new Set(ctx.metrics.instructionTypes);
   ctx.metrics = metricsCollector.data;
+  for (const t of priorInstructionTypes) {
+    ctx.metrics.instructionTypes.add(t);
+  }
 
   let totalPlaced = 0;
   let totalFilled = 0;
@@ -681,6 +689,12 @@ export async function runAct3(ctx: SharedContext): Promise<ActResult> {
     console.log(`    Trading complete: ${dayOrdersPlaced} orders in ${loopIterations} agent actions`);
     details.push(`Day ${day + 1}: ${dayOrdersPlaced} orders placed during trading`);
 
+    // Collect ALL markets for this day (includes strike-creator markets added during trading)
+    const allDayMarkets = ctx.markets.filter((m) => m.day === day);
+    if (allDayMarkets.length > dayMarkets.length) {
+      console.log(`    (+${allDayMarkets.length - dayMarkets.length} markets created by strike-creator agents)`);
+    }
+
     // 6. Wait for market close
     const waitCloseMs = (marketCloseUnix * 1000) - Date.now() + 2000;
     if (waitCloseMs > 0 && waitCloseMs < 300_000) {
@@ -688,13 +702,13 @@ export async function runAct3(ctx: SharedContext): Promise<ActResult> {
       await sleep(waitCloseMs);
     }
 
-    // 7. Settle
-    console.log("    Settling markets...");
-    const outcomes = await settleDay(ctx, dayMarkets, oracle, errors);
+    // 7. Settle all day's markets (including strike-creator ones)
+    console.log(`    Settling ${allDayMarkets.length} markets...`);
+    const outcomes = await settleDay(ctx, allDayMarkets, oracle, errors);
 
     // 8. Wait for override window
-    if (dayMarkets.length > 0) {
-      const state = await readMarketState(ctx.connection, dayMarkets[0].market);
+    if (allDayMarkets.length > 0) {
+      const state = await readMarketState(ctx.connection, allDayMarkets[0].market);
       if (state) {
         const waitSec = Number(state.overrideDeadline) - Math.floor(Date.now() / 1000) + 1;
         if (waitSec > 0 && waitSec <= 30) {
@@ -706,19 +720,19 @@ export async function runAct3(ctx: SharedContext): Promise<ActResult> {
 
     // 9. Crank cancel
     console.log("    Cranking cancels...");
-    await crankCancelDay(ctx, dayMarkets, errors);
+    await crankCancelDay(ctx, allDayMarkets, errors);
 
     // 10. Crank redeem
     console.log("    Cranking redeems...");
-    await crankRedeemDay(ctx, dayMarkets, errors);
+    await crankRedeemDay(ctx, allDayMarkets, errors);
 
     // 10b. Bulk redeem remaining agent tokens (pair burn + winner redeem)
     console.log("    Draining remaining tokens...");
-    await bulkRedeemDay(ctx, dayMarkets);
+    await bulkRedeemDay(ctx, allDayMarkets);
 
     // 10c. Wait for grace period (stress-test: 5s after settled_at)
-    if (dayMarkets.length > 0) {
-      const state = await readMarketState(ctx.connection, dayMarkets[0].market);
+    if (allDayMarkets.length > 0) {
+      const state = await readMarketState(ctx.connection, allDayMarkets[0].market);
       if (state && state.isSettled) {
         const graceWait = Number(state.settledAt) + 6 - Math.floor(Date.now() / 1000);
         if (graceWait > 0 && graceWait <= 30) {
@@ -730,13 +744,13 @@ export async function runAct3(ctx: SharedContext): Promise<ActResult> {
 
     // 11. Close markets
     console.log("    Closing markets...");
-    const closedCount = await closeDay(ctx, dayMarkets, errors);
+    const closedCount = await closeDay(ctx, allDayMarkets, errors);
 
     // 12. Build day result
     const dayFilled = ctx.agents.reduce((s, a) => s + a.ordersFilled, 0) - totalFilled;
     const dayResult: DayResult = {
       day,
-      marketsCreated: dayMarkets.length,
+      marketsCreated: allDayMarkets.length,
       marketsSettled: outcomes.size,
       marketsClosed: closedCount,
       tokensMinted: 0n, // TODO: read from market state

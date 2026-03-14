@@ -39,15 +39,12 @@ export async function verifyDayEnd(
 
   const dayMarkets = ctx.markets.filter((m) => m.day === day);
 
-  // 1. All markets for this day must be settled
+  // 1. All markets for this day must be settled (or fully closed/destroyed)
   for (const m of dayMarkets) {
     try {
       const state = await readMarketState(ctx.connection, m.market);
       if (!state) {
-        violations.push(
-          `[Day ${day}] Market ${m.ticker} (${m.market.toBase58().slice(0, 8)}…) ` +
-            `account not found on-chain`,
-        );
+        // Account not found = destroyed by close_market — this is correct behavior
         continue;
       }
       if (!state.isSettled) {

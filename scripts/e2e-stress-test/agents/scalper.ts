@@ -96,8 +96,9 @@ export class Scalper extends BaseAgent {
         });
 
         const crossTx = new Transaction().add(crossIx);
-        await this.sendTimed(crossTx, [this.keypair], "place_order");
+        const crossSig = await this.sendTimed(crossTx, [this.keypair], "place_order");
         this.state.ordersPlaced++;
+        if (crossSig && makerAccounts.length > 0) this.state.ordersFilled++;
       }
 
       // Step 2: If holding Yes tokens, re-list higher via side=1 (no constraint)

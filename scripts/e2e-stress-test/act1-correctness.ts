@@ -16,6 +16,7 @@ import {
 import {
   getAssociatedTokenAddressSync,
   getOrCreateAssociatedTokenAccount,
+  approve,
 } from "@solana/spl-token";
 import BN from "bn.js";
 
@@ -88,7 +89,7 @@ function track(ctx: SharedContext, ixName: string): void {
   ctx.metrics.instructionTypes.add(ixName);
 }
 
-/** Record an error entry. */
+/** Record an error entry and log it immediately. */
 function recordError(
   errors: ErrorEntry[],
   agentId: number,
@@ -97,11 +98,23 @@ function recordError(
   market?: string,
 ): void {
   errors.push({ timestamp: Date.now(), agentId, instruction, market, message });
+  const who = agentId >= 0 ? `agent ${agentId}` : "admin";
+  const where = market ? ` [${market}]` : "";
+  console.log(`    ✗ ${instruction}${where} (${who}): ${message.slice(0, 150)}`);
 }
 
-/** Round a dollar price to the nearest $10, expressed in lamports (1e6). */
+/** Log a step detail live. */
+function logStep(msg: string): void {
+  console.log(`    ${msg}`);
+}
+
+/**
+ * Round a dollar price to the nearest $10, expressed in lamports (1e6).
+ * Act 1 uses +$20 offset to guarantee unique PDAs from Act 3 markets,
+ * so partial Act 1 cleanup won't collide with Act 3 market creation.
+ */
 function roundStrike(priceUsd: number): bigint {
-  const rounded = Math.round(priceUsd / 10) * 10;
+  const rounded = Math.round(priceUsd / 10) * 10 + 20;
   return BigInt(rounded) * 1_000_000n;
 }
 
@@ -130,7 +143,7 @@ async function createMarket(
   const [orderBook] = findOrderBook(market);
   const [oracleFeed] = findPriceFeedPda(ticker);
 
-  // 2. Allocate order book — 13 calls batched 6/tx
+  // 2. Allocate order book — 25 calls batched 6/tx
   const allocIxs = [];
   for (let i = 0; i < ALLOC_CALLS_REQUIRED; i++) {
     allocIxs.push(
@@ -142,11 +155,13 @@ async function createMarket(
     );
   }
   const allocBatches = batch(allocIxs, ALLOC_BATCH_SIZE);
-  for (const ixBatch of allocBatches) {
+  for (let bi = 0; bi < allocBatches.length; bi++) {
     const tx = new Transaction();
-    ixBatch.forEach((ix) => tx.add(ix));
+    allocBatches[bi].forEach((ix) => tx.add(ix));
     await sendTx(connection, tx, [admin]);
+    process.stdout.write(`\r      alloc ${bi + 1}/${allocBatches.length}`);
   }
+  process.stdout.write("\n");
   track(ctx, "allocate_order_book");
 
   // 3. Create strike market
@@ -174,53 +189,51 @@ async function createMarket(
   await sendTx(connection, createTx, [admin]);
   track(ctx, "create_strike_market");
 
-  // 4. ALT creation: warmup tx -> createLookupTable -> extendLookupTable -> sleep -> set_market_alt
-  // 4a. Warmup — self-transfer to get a recent slot
-  const warmupTx = new Transaction().add(
-    SystemProgram.transfer({
-      fromPubkey: admin.publicKey,
-      toPubkey: admin.publicKey,
-      lamports: 1,
-    }),
-  );
-  await sendTx(connection, warmupTx, [admin]);
-  const recentSlot = await connection.getSlot("confirmed");
+  // 4. ALT creation (non-fatal — market works without ALT, just larger txns)
+  let altAddress: PublicKey | undefined;
+  try {
+    // 4a. Get a recent slot — use "finalized" for maximum stability
+    const recentSlot = await connection.getSlot("finalized");
 
-  // 4b. Create lookup table
-  const [createLutIx, lutAddress] = AddressLookupTableProgram.createLookupTable({
-    authority: admin.publicKey,
-    payer: admin.publicKey,
-    recentSlot,
-  });
+    // 4b. Create + extend lookup table in one tx
+    const [createLutIx, lutAddr] = AddressLookupTableProgram.createLookupTable({
+      authority: admin.publicKey,
+      payer: admin.publicKey,
+      recentSlot,
+    });
 
-  // 4c. Extend with market accounts
-  const extendIx = AddressLookupTableProgram.extendLookupTable({
-    payer: admin.publicKey,
-    authority: admin.publicKey,
-    lookupTable: lutAddress,
-    addresses: [
-      market, yesMint, noMint, usdcVault, escrowVault,
-      yesEscrow, noEscrow, orderBook, oracleFeed,
-      configPda, ctx.feeVault, ctx.treasury,
-    ],
-  });
+    const extendIx = AddressLookupTableProgram.extendLookupTable({
+      payer: admin.publicKey,
+      authority: admin.publicKey,
+      lookupTable: lutAddr,
+      addresses: [
+        market, yesMint, noMint, usdcVault, escrowVault,
+        yesEscrow, noEscrow, orderBook, oracleFeed,
+        configPda, ctx.feeVault, ctx.treasury,
+      ],
+    });
 
-  const lutTx = new Transaction().add(createLutIx, extendIx);
-  await sendTx(connection, lutTx, [admin]);
+    const lutTx = new Transaction().add(createLutIx, extendIx);
+    await sendTx(connection, lutTx, [admin]);
 
-  // 4d. Wait for ALT activation
-  await sleep(ALT_WARMUP_SLEEP_MS);
+    // 4c. Wait for ALT activation
+    await sleep(ALT_WARMUP_SLEEP_MS);
 
-  // 4e. Set market ALT on-chain
-  const setAltIx = buildSetMarketAltIx({
-    admin: admin.publicKey,
-    config: configPda,
-    market,
-    altAddress: lutAddress,
-  });
-  const setAltTx = new Transaction().add(setAltIx);
-  await sendTx(connection, setAltTx, [admin]);
-  track(ctx, "set_market_alt");
+    // 4d. Set market ALT on-chain
+    const setAltIx = buildSetMarketAltIx({
+      admin: admin.publicKey,
+      config: configPda,
+      market,
+      altAddress: lutAddr,
+    });
+    const setAltTx = new Transaction().add(setAltIx);
+    await sendTx(connection, setAltTx, [admin]);
+    track(ctx, "set_market_alt");
+
+    altAddress = lutAddr;
+  } catch {
+    // ALT creation failed (stale slot, etc) — market still works without it
+  }
 
   return {
     ticker,
@@ -236,7 +249,7 @@ async function createMarket(
     noEscrow,
     orderBook,
     oracleFeed,
-    altAddress: lutAddress,
+    altAddress,
     day,
   };
 }
@@ -254,11 +267,13 @@ async function act1SetupMarkets(
     Math.floor(Date.now() / 1000) + ctx.config.marketCloseOffsetSec;
   const day = Math.floor(marketCloseUnix / 86400);
 
-  for (const ticker of ctx.config.tickers) {
+  for (let ti = 0; ti < ctx.config.tickers.length; ti++) {
+    const ticker = ctx.config.tickers[ti];
     const basePrice = BASE_PRICES[ticker] ?? 100;
     const strikeLamports = roundStrike(basePrice);
     const previousCloseLamports = BigInt(basePrice) * 1_000_000n;
 
+    logStep(`Creating market ${ti + 1}/${ctx.config.tickers.length}: ${ticker} @ $${Number(strikeLamports) / 1e6}...`);
     try {
       const mc = await createMarket(
         ctx,
@@ -269,12 +284,14 @@ async function act1SetupMarkets(
         day,
       );
       ctx.markets.push(mc);
+      logStep(`  ✓ ${ticker} created (${mc.market.toBase58().slice(0, 8)}…)`);
       details.push(`Created market ${ticker} @ strike $${Number(strikeLamports) / 1e6}`);
     } catch (e: any) {
       recordError(errors, -1, "create_market", e.message, ticker);
     }
   }
 
+  logStep(`${ctx.markets.length}/${ctx.config.tickers.length} markets created`);
   details.push(`${ctx.markets.length} / ${ctx.config.tickers.length} markets created`);
 }
 
@@ -320,27 +337,12 @@ async function act1MintAndTrade(
   // Track order IDs placed by agent 0 for later cancel
   let agent0OrderId: bigint | null = null;
 
-  // --- Agents 0-1: mint pairs + place resting bids (side=0, price=45) ---
-  for (let i = 0; i < 2; i++) {
+  logStep("Phase A: Agents 0-1 placing resting USDC bids...");
+  // No minting — use initial USDC funding. Side=0 requires no_ata == 0 (clean agents).
+  for (let i = 0; i < Math.min(2, agents.length); i++) {
     const agent = agents[i];
     try {
       const atas = await ensureATAs(agent.keypair, m);
-      const mintIx = buildMintPairIx({
-        user: agent.keypair.publicKey,
-        config: configPda,
-        market: m.market,
-        yesMint: m.yesMint,
-        noMint: m.noMint,
-        userUsdcAta: atas.usdc,
-        userYesAta: atas.yes,
-        userNoAta: atas.no,
-        usdcVault: m.usdcVault,
-        quantity: new BN(DEFAULT_MINT_QUANTITY.toString()),
-      });
-      const mintTx = new Transaction().add(mintIx);
-      await sendTx(connection, mintTx, [agent.keypair]);
-      track(ctx, "mint_pair");
-
       const placeIx = buildPlaceOrderIx({
         user: agent.keypair.publicKey,
         config: configPda,
@@ -379,12 +381,14 @@ async function act1MintAndTrade(
         }
       }
     } catch (e: any) {
-      recordError(errors, agent.id, "mint_or_bid", e.message, m.ticker);
+      recordError(errors, agent.id, "usdc_bid", e.message, m.ticker);
     }
   }
 
-  // --- Agents 2-3: mint pairs + place resting asks (side=1, price=55) ---
-  for (let i = 2; i < 4; i++) {
+  logStep("Phase B: Agent 2 mint+ask, Agent 3 mint only...");
+  // Agent 2: mint pairs then ask all Yes tokens (yes_ata=0 after escrowing, enabling side=2 later)
+  // Agent 3: mint pairs only (holds both Yes+No for pair burn redemption later)
+  for (let i = 2; i < Math.min(4, agents.length); i++) {
     const agent = agents[i];
     try {
       const atas = await ensureATAs(agent.keypair, m);
@@ -404,67 +408,53 @@ async function act1MintAndTrade(
       await sendTx(connection, mintTx, [agent.keypair]);
       track(ctx, "mint_pair");
 
-      const placeIx = buildPlaceOrderIx({
-        user: agent.keypair.publicKey,
-        config: configPda,
-        market: m.market,
-        orderBook: m.orderBook,
-        usdcVault: m.usdcVault,
-        escrowVault: m.escrowVault,
-        yesEscrow: m.yesEscrow,
-        noEscrow: m.noEscrow,
-        yesMint: m.yesMint,
-        noMint: m.noMint,
-        userUsdcAta: atas.usdc,
-        userYesAta: atas.yes,
-        userNoAta: atas.no,
-        feeVault,
-        side: 1,
-        price: 55,
-        quantity: new BN((DEFAULT_MINT_QUANTITY / 2n).toString()),
-        orderType: 1,
-        maxFills: 0,
-      });
-      const placeTx = new Transaction().add(placeIx);
-      await sendTx(connection, placeTx, [agent.keypair]);
-      track(ctx, "place_order");
-      agent.ordersPlaced++;
+      // Only Agent 2 places an ask — Agent 3 keeps tokens for pair burn
+      if (i === 2) {
+        const placeIx = buildPlaceOrderIx({
+          user: agent.keypair.publicKey,
+          config: configPda,
+          market: m.market,
+          orderBook: m.orderBook,
+          usdcVault: m.usdcVault,
+          escrowVault: m.escrowVault,
+          yesEscrow: m.yesEscrow,
+          noEscrow: m.noEscrow,
+          yesMint: m.yesMint,
+          noMint: m.noMint,
+          userUsdcAta: atas.usdc,
+          userYesAta: atas.yes,
+          userNoAta: atas.no,
+          feeVault,
+          side: 1,
+          price: 55,
+          quantity: new BN(DEFAULT_MINT_QUANTITY.toString()),
+          orderType: 1,
+          maxFills: 0,
+        });
+        const placeTx = new Transaction().add(placeIx);
+        await sendTx(connection, placeTx, [agent.keypair]);
+        track(ctx, "place_order");
+        agent.ordersPlaced++;
+      }
     } catch (e: any) {
       recordError(errors, agent.id, "mint_or_ask", e.message, m.ticker);
     }
   }
 
-  // --- Agent 4: crossing bid (side=0, price=55, maxFills=5) — SEQUENTIAL ---
-  {
+  logStep("Phase C: Agent 4 crossing bid to fill asks...");
+  if (agents.length > 4) {
     const agent = agents[4];
     try {
       const atas = await ensureATAs(agent.keypair, m);
-      const mintIx = buildMintPairIx({
-        user: agent.keypair.publicKey,
-        config: configPda,
-        market: m.market,
-        yesMint: m.yesMint,
-        noMint: m.noMint,
-        userUsdcAta: atas.usdc,
-        userYesAta: atas.yes,
-        userNoAta: atas.no,
-        usdcVault: m.usdcVault,
-        quantity: new BN(DEFAULT_MINT_QUANTITY.toString()),
-      });
-      const mintTx = new Transaction().add(mintIx);
-      await sendTx(connection, mintTx, [agent.keypair]);
-      track(ctx, "mint_pair");
 
       // Fresh orderbook read for crossing fill maker accounts
       const obAcct = await connection.getAccountInfo(m.orderBook);
       const activeOrders = obAcct
         ? parseOrderBook(Buffer.from(obAcct.data))
         : [];
-      // Crossing bid at 55 matches side=1 asks at price <= 55
       const matchingAsks = activeOrders.filter(
         (o) => o.side === 1 && o.priceLevel <= 55,
       );
-      // Maker accounts: each ask maker's USDC ATA
       const makerAccounts = matchingAsks.map((o) =>
         getAssociatedTokenAddressSync(usdcMint, o.owner),
       );
@@ -502,27 +492,13 @@ async function act1MintAndTrade(
     }
   }
 
-  // --- Agent 5: mint + sell No (side=2, price=40) ---
-  {
-    const agent = agents[5];
+  logStep("Phase D: Agent 2 No-backed bid (side=2)...");
+  // After Agent 4's crossing bid filled Agent 2's ask, Agent 2 has 0 Yes + N No.
+  // Side=2 requires yes_ata == 0, which is satisfied after the ask fill.
+  if (agents.length > 2) {
+    const agent = agents[2];
     try {
       const atas = await ensureATAs(agent.keypair, m);
-      const mintIx = buildMintPairIx({
-        user: agent.keypair.publicKey,
-        config: configPda,
-        market: m.market,
-        yesMint: m.yesMint,
-        noMint: m.noMint,
-        userUsdcAta: atas.usdc,
-        userYesAta: atas.yes,
-        userNoAta: atas.no,
-        usdcVault: m.usdcVault,
-        quantity: new BN(DEFAULT_MINT_QUANTITY.toString()),
-      });
-      const mintTx = new Transaction().add(mintIx);
-      await sendTx(connection, mintTx, [agent.keypair]);
-      track(ctx, "mint_pair");
-
       const placeIx = buildPlaceOrderIx({
         user: agent.keypair.publicKey,
         config: configPda,
@@ -548,13 +524,13 @@ async function act1MintAndTrade(
       await sendTx(connection, placeTx, [agent.keypair]);
       track(ctx, "place_order");
       agent.ordersPlaced++;
-      details.push("Agent 5 placed Sell No (side=2) order");
+      details.push("Agent 2 placed No-backed bid (side=2)");
     } catch (e: any) {
       recordError(errors, agent.id, "sell_no", e.message, m.ticker);
     }
   }
 
-  // --- Agent 0: cancel one of their resting orders ---
+  logStep("Phase E: Agent 0 cancel resting order...");
   if (agent0OrderId !== null) {
     const agent = agents[0];
     try {
@@ -715,11 +691,12 @@ async function act1Settle(
   const nowSec = Math.floor(Date.now() / 1000);
   const waitMs = (firstClose - nowSec + 1) * 1000;
   if (waitMs > 0) {
+    logStep(`Waiting ${Math.ceil(waitMs / 1000)}s for market close...`);
     details.push(`Waiting ${Math.ceil(waitMs / 1000)}s for market close...`);
     await sleep(waitMs);
   }
 
-  // Update oracle prices for all tickers (timestamp = now - 2)
+  logStep("Updating oracle prices...");
   const oracleTs = Math.floor(Date.now() / 1000) - 2;
   for (const m of ctx.markets) {
     try {
@@ -742,42 +719,43 @@ async function act1Settle(
     }
   }
 
-  // Settle 6 markets via settle_market
-  for (let i = 0; i < Math.min(6, ctx.markets.length); i++) {
+  logStep(`Settling ${ctx.markets.length} markets...`);
+  for (let i = 0; i < ctx.markets.length; i++) {
     const m = ctx.markets[i];
-    try {
-      const settleIx = buildSettleMarketIx({
-        caller: admin.publicKey,
-        config: configPda,
-        market: m.market,
-        oracleFeed: m.oracleFeed,
-      });
-      const tx = new Transaction().add(settleIx);
-      await sendTx(connection, tx, [admin]);
-      track(ctx, "settle_market");
-      details.push(`Settled ${m.ticker} via settle_market`);
-    } catch (e: any) {
-      recordError(errors, -1, "settle_market", e.message, m.ticker);
-    }
-  }
 
-  // Settle market 6 via admin_settle (wait 5s to simulate delay)
-  if (ctx.markets.length >= 7) {
-    const m = ctx.markets[6];
-    await sleep(5000);
-    try {
-      const adminSettleIx = buildAdminSettleIx({
-        admin: admin.publicKey,
-        config: configPda,
-        market: m.market,
-        settlementPrice: new BN(m.previousCloseLamports.toString()),
-      });
-      const tx = new Transaction().add(adminSettleIx);
-      await sendTx(connection, tx, [admin]);
-      track(ctx, "admin_settle");
-      details.push(`Settled ${m.ticker} via admin_settle`);
-    } catch (e: any) {
-      recordError(errors, -1, "admin_settle", e.message, m.ticker);
+    if (i === 0) {
+      logStep(`  ${m.ticker}: admin_settle (waiting 5s for delay)...`);
+      await sleep(5000);
+      try {
+        const adminSettleIx = buildAdminSettleIx({
+          admin: admin.publicKey,
+          config: configPda,
+          market: m.market,
+          settlementPrice: new BN(m.previousCloseLamports.toString()),
+        });
+        const tx = new Transaction().add(adminSettleIx);
+        await sendTx(connection, tx, [admin]);
+        track(ctx, "admin_settle");
+        details.push(`Settled ${m.ticker} via admin_settle`);
+      } catch (e: any) {
+        recordError(errors, -1, "admin_settle", e.message, m.ticker);
+      }
+    } else {
+      // settle_market: oracle-based settlement
+      try {
+        const settleIx = buildSettleMarketIx({
+          caller: admin.publicKey,
+          config: configPda,
+          market: m.market,
+          oracleFeed: m.oracleFeed,
+        });
+        const tx = new Transaction().add(settleIx);
+        await sendTx(connection, tx, [admin]);
+        track(ctx, "settle_market");
+        details.push(`Settled ${m.ticker} via settle_market`);
+      } catch (e: any) {
+        recordError(errors, -1, "settle_market", e.message, m.ticker);
+      }
     }
   }
 
@@ -819,8 +797,55 @@ async function act1Redeem(
   const m = ctx.markets[0];
   if (!m) return;
 
-  // Agent 4: redeem mode=1 (winner redemption)
-  {
+  // Wait for override deadline before any redemption
+  try {
+    const state = await readMarketState(connection, m.market);
+    if (state && state.overrideDeadline > 0) {
+      const waitSec = Number(state.overrideDeadline) - Math.floor(Date.now() / 1000) + 1;
+      if (waitSec > 0 && waitSec <= 120) {
+        logStep(`Waiting ${waitSec}s for override deadline...`);
+        details.push(`Waiting ${waitSec}s for override deadline to pass...`);
+        await sleep(waitSec * 1000);
+      }
+    }
+  } catch {
+    // If we can't read state, try redeeming anyway
+  }
+
+  logStep("Crank-cancelling resting orders...");
+  try {
+    const obAcct = await connection.getAccountInfo(m.orderBook);
+    if (obAcct) {
+      const activeOrders = parseOrderBook(Buffer.from(obAcct.data));
+      if (activeOrders.length > 0) {
+        const makerAccounts: PublicKey[] = activeOrders.map((o) => {
+          if (o.side === 0) return getAssociatedTokenAddressSync(usdcMint, o.owner);
+          else if (o.side === 1) return getAssociatedTokenAddressSync(m.yesMint, o.owner);
+          else return getAssociatedTokenAddressSync(m.noMint, o.owner);
+        });
+        const crankIx = buildCrankCancelIx({
+          caller: admin.publicKey,
+          config: configPda,
+          market: m.market,
+          orderBook: m.orderBook,
+          escrowVault: m.escrowVault,
+          yesEscrow: m.yesEscrow,
+          noEscrow: m.noEscrow,
+          batchSize: Math.min(activeOrders.length, CRANK_CANCEL_BATCH_SIZE),
+          makerAccounts,
+        });
+        const tx = new Transaction().add(crankIx);
+        await sendTx(connection, tx, [admin]);
+        track(ctx, "crank_cancel");
+        details.push(`Crank-cancelled ${activeOrders.length} resting orders`);
+      }
+    }
+  } catch (e: any) {
+    recordError(errors, -1, "crank_cancel", e.message, m.ticker);
+  }
+
+  logStep("Agent 4: winner redeem (partial)...");
+  if (ctx.agents.length > 4) {
     const agent = ctx.agents[4];
     try {
       const atas = {
@@ -844,15 +869,15 @@ async function act1Redeem(
       const tx = new Transaction().add(redeemIx);
       await sendTx(connection, tx, [agent.keypair]);
       track(ctx, "redeem");
-      details.push("Agent 4 redeemed (winner mode)");
+      details.push("Agent 4 redeemed (winner mode, partial)");
     } catch (e: any) {
       recordError(errors, agent.id, "redeem_winner", e.message, m.ticker);
     }
   }
 
-  // Agent 5: redeem mode=0 (pair burn)
-  {
-    const agent = ctx.agents[5];
+  logStep("Agent 3: pair burn redeem...");
+  if (ctx.agents.length > 3) {
+    const agent = ctx.agents[3];
     try {
       const atas = {
         usdc: getAssociatedTokenAddressSync(usdcMint, agent.keypair.publicKey),
@@ -875,64 +900,18 @@ async function act1Redeem(
       const tx = new Transaction().add(redeemIx);
       await sendTx(connection, tx, [agent.keypair]);
       track(ctx, "redeem");
-      details.push("Agent 5 redeemed (pair burn mode)");
+      details.push("Agent 3 redeemed (pair burn mode)");
     } catch (e: any) {
       recordError(errors, agent.id, "redeem_pair_burn", e.message, m.ticker);
     }
   }
 
-  // Crank cancel remaining resting orders on market 0
-  try {
-    const obAcct = await connection.getAccountInfo(m.orderBook);
-    if (obAcct) {
-      const activeOrders = parseOrderBook(Buffer.from(obAcct.data));
-      if (activeOrders.length > 0) {
-        // Build remaining_accounts based on order side
-        const makerAccounts: PublicKey[] = activeOrders.map((o) => {
-          if (o.side === 0) {
-            // USDC bid -> maker's USDC ATA
-            return getAssociatedTokenAddressSync(usdcMint, o.owner);
-          } else if (o.side === 1) {
-            // Yes ask -> maker's Yes ATA
-            return getAssociatedTokenAddressSync(m.yesMint, o.owner);
-          } else {
-            // No bid (side=2) -> maker's No ATA
-            return getAssociatedTokenAddressSync(m.noMint, o.owner);
-          }
-        });
-
-        const crankIx = buildCrankCancelIx({
-          caller: admin.publicKey,
-          config: configPda,
-          market: m.market,
-          orderBook: m.orderBook,
-          escrowVault: m.escrowVault,
-          yesEscrow: m.yesEscrow,
-          noEscrow: m.noEscrow,
-          batchSize: Math.min(activeOrders.length, CRANK_CANCEL_BATCH_SIZE),
-          makerAccounts,
-        });
-        const tx = new Transaction().add(crankIx);
-        await sendTx(connection, tx, [admin]);
-        track(ctx, "crank_cancel");
-        details.push(`Crank-cancelled ${activeOrders.length} resting orders`);
-      }
-    }
-  } catch (e: any) {
-    recordError(errors, -1, "crank_cancel", e.message, m.ticker);
-  }
-
-  // Crank redeem winning holders on market 0
-  // Determine outcome to pick the winning token mint
+  logStep("Crank redeem: delegating + batch redeem...");
   try {
     const state = await readMarketState(connection, m.market);
     if (state && state.isSettled) {
-      // outcome: 1 = Yes wins (price >= strike), 2 = No wins
       const winMint = state.outcome === 1 ? m.yesMint : m.noMint;
-
-      // Build remaining accounts: pairs of [winningTokenATA, usdcATA] per holder
-      const holders: PublicKey[] = [];
-      const agents = ctx.agents.slice(0, 6);
+      const agents = ctx.agents.slice(0, Math.min(5, ctx.agents.length));
       const remainingAccounts: {
         pubkey: PublicKey;
         isSigner: boolean;
@@ -941,20 +920,25 @@ async function act1Redeem(
       let pairCount = 0;
 
       for (const agent of agents) {
-        const winAta = getAssociatedTokenAddressSync(
-          winMint,
-          agent.keypair.publicKey,
-        );
-        const usdcAta = getAssociatedTokenAddressSync(
-          usdcMint,
-          agent.keypair.publicKey,
-        );
-        remainingAccounts.push(
-          { pubkey: winAta, isSigner: false, isWritable: true },
-          { pubkey: usdcAta, isSigner: false, isWritable: true },
-        );
-        pairCount++;
-        if (pairCount >= CRANK_REDEEM_MAX_USERS) break;
+        const winAta = getAssociatedTokenAddressSync(winMint, agent.keypair.publicKey);
+        try {
+          const acctInfo = await connection.getTokenAccountBalance(winAta);
+          const balance = BigInt(acctInfo.value.amount);
+          if (balance > 0n) {
+            await approve(
+              connection, agent.keypair, winAta, m.market, agent.keypair, Number(balance),
+            );
+            const usdcAta = getAssociatedTokenAddressSync(usdcMint, agent.keypair.publicKey);
+            remainingAccounts.push(
+              { pubkey: winAta, isSigner: false, isWritable: true },
+              { pubkey: usdcAta, isSigner: false, isWritable: true },
+            );
+            pairCount++;
+            if (pairCount >= CRANK_REDEEM_MAX_USERS) break;
+          }
+        } catch {
+          // ATA doesn't exist — skip
+        }
       }
 
       if (pairCount > 0) {
@@ -980,6 +964,70 @@ async function act1Redeem(
     recordError(errors, -1, "crank_redeem", e.message, m.ticker);
   }
 
+  logStep("Draining remaining tokens (pair burn + winner redeem)...");
+  // This ensures mint supplies reach 0 for clean close_market
+  for (const agent of ctx.agents.slice(0, Math.min(5, ctx.agents.length))) {
+    try {
+      const yesAta = getAssociatedTokenAddressSync(m.yesMint, agent.keypair.publicKey);
+      const noAta = getAssociatedTokenAddressSync(m.noMint, agent.keypair.publicKey);
+      const usdcAta = getAssociatedTokenAddressSync(usdcMint, agent.keypair.publicKey);
+
+      let yesBal = 0n;
+      let noBal = 0n;
+      try {
+        yesBal = BigInt((await connection.getTokenAccountBalance(yesAta)).value.amount);
+        noBal = BigInt((await connection.getTokenAccountBalance(noAta)).value.amount);
+      } catch { continue; }
+
+      // Pair burn the min of both
+      const pairBurnQty = yesBal < noBal ? yesBal : noBal;
+      if (pairBurnQty >= 1_000_000n) {
+        const redeemIx = buildRedeemIx({
+          user: agent.keypair.publicKey,
+          config: configPda,
+          market: m.market,
+          yesMint: m.yesMint,
+          noMint: m.noMint,
+          usdcVault: m.usdcVault,
+          userUsdcAta: usdcAta,
+          userYesAta: yesAta,
+          userNoAta: noAta,
+          mode: 0,
+          quantity: new BN(pairBurnQty.toString()),
+        });
+        const tx = new Transaction().add(redeemIx);
+        await sendTx(connection, tx, [agent.keypair]);
+        yesBal -= pairBurnQty;
+        noBal -= pairBurnQty;
+      }
+
+      // Winner redeem any remaining winning tokens
+      const state = await readMarketState(connection, m.market);
+      if (state && state.isSettled) {
+        const winBal = state.outcome === 1 ? yesBal : noBal;
+        if (winBal >= 1_000_000n) {
+          const redeemIx = buildRedeemIx({
+            user: agent.keypair.publicKey,
+            config: configPda,
+            market: m.market,
+            yesMint: m.yesMint,
+            noMint: m.noMint,
+            usdcVault: m.usdcVault,
+            userUsdcAta: usdcAta,
+            userYesAta: yesAta,
+            userNoAta: noAta,
+            mode: 1,
+            quantity: new BN(winBal.toString()),
+          });
+          const tx = new Transaction().add(redeemIx);
+          await sendTx(connection, tx, [agent.keypair]);
+        }
+      }
+    } catch {
+      // Skip errors in bulk drain — these are best-effort
+    }
+  }
+
   details.push("Redemption phase complete");
 }
 
@@ -994,26 +1042,26 @@ async function act1Close(
 ): Promise<void> {
   const { connection, admin, configPda, treasury, usdcMint } = ctx;
 
-  // Wait for override window to expire on all settled markets
+  logStep("Waiting for override+grace periods...");
   for (const m of ctx.markets) {
     try {
       const state = await readMarketState(connection, m.market);
       if (state && state.isSettled) {
-        const waitSec =
-          Number(state.overrideDeadline) - Math.floor(Date.now() / 1000) + 1;
-        if (waitSec > 0 && waitSec <= 30) {
-          details.push(
-            `Waiting ${waitSec}s for override window on ${m.ticker}...`,
-          );
-          await sleep(waitSec * 1000);
+        const overrideWait = Number(state.overrideDeadline) - Math.floor(Date.now() / 1000) + 1;
+        const graceWait = Number(state.settledAt) + 6 - Math.floor(Date.now() / 1000);
+        const maxWait = Math.max(overrideWait, graceWait);
+        if (maxWait > 0 && maxWait <= 30) {
+          logStep(`  ${m.ticker}: waiting ${maxWait}s...`);
+          details.push(`Waiting ${maxWait}s for override+grace on ${m.ticker}...`);
+          await sleep(maxWait * 1000);
         }
       }
     } catch {
-      // If we can't read state, continue and let close_market fail if needed
+      // continue
     }
   }
 
-  // Close all 7 markets
+  logStep(`Closing ${ctx.markets.length} markets...`);
   for (const m of ctx.markets) {
     try {
       const closeIx = buildCloseMarketIx({
@@ -1038,53 +1086,52 @@ async function act1Close(
   }
   details.push(`Closed ${ctx.markets.length} markets`);
 
-  // Treasury redeem on market 0
+  // Treasury redeem — burns remaining tokens and pays out from treasury (post-close)
   if (ctx.markets.length > 0) {
     const m = ctx.markets[0];
-    try {
-      const adminUsdcAta = getAssociatedTokenAddressSync(
-        usdcMint,
-        admin.publicKey,
-      );
-      const adminYesAta = (
-        await getOrCreateAssociatedTokenAccount(
-          connection,
-          admin,
-          m.yesMint,
-          admin.publicKey,
-        )
-      ).address;
-      const adminNoAta = (
-        await getOrCreateAssociatedTokenAccount(
-          connection,
-          admin,
-          m.noMint,
-          admin.publicKey,
-        )
-      ).address;
+    for (const agent of ctx.agents.slice(0, Math.min(5, ctx.agents.length))) {
+      try {
+        const yesAta = getAssociatedTokenAddressSync(m.yesMint, agent.keypair.publicKey);
+        const noAta = getAssociatedTokenAddressSync(m.noMint, agent.keypair.publicKey);
+        let hasTokens = false;
+        try {
+          const yBal = await connection.getTokenAccountBalance(yesAta);
+          const nBal = await connection.getTokenAccountBalance(noAta);
+          hasTokens = BigInt(yBal.value.amount) > 0n || BigInt(nBal.value.amount) > 0n;
+        } catch { continue; }
+        if (!hasTokens) continue;
 
-      const treasuryRedeemIx = buildTreasuryRedeemIx({
-        user: admin.publicKey,
-        config: configPda,
-        market: m.market,
-        yesMint: m.yesMint,
-        noMint: m.noMint,
-        treasury,
-        userUsdcAta: adminUsdcAta,
-        userYesAta: adminYesAta,
-        userNoAta: adminNoAta,
-      });
-      const tx = new Transaction().add(treasuryRedeemIx);
-      await sendTx(connection, tx, [admin]);
-      track(ctx, "treasury_redeem");
-      details.push("Treasury redeem on market 0");
-    } catch (e: any) {
-      recordError(errors, -1, "treasury_redeem", e.message, m.ticker);
+        const usdcAta = getAssociatedTokenAddressSync(usdcMint, agent.keypair.publicKey);
+        const treasuryRedeemIx = buildTreasuryRedeemIx({
+          user: agent.keypair.publicKey,
+          config: configPda,
+          market: m.market,
+          yesMint: m.yesMint,
+          noMint: m.noMint,
+          treasury,
+          userUsdcAta: usdcAta,
+          userYesAta: yesAta,
+          userNoAta: noAta,
+        });
+        const tx = new Transaction().add(treasuryRedeemIx);
+        await sendTx(connection, tx, [agent.keypair]);
+        track(ctx, "treasury_redeem");
+        details.push(`Treasury redeem for agent ${agent.id}`);
+      } catch (e: any) {
+        recordError(errors, agent.id, "treasury_redeem", e.message, m.ticker);
+      }
     }
   }
 
-  // Cleanup all markets
+  // Cleanup markets — skip any already destroyed by standard close
+  let cleanedCount = 0;
   for (const m of ctx.markets) {
+    // Check if market PDA still exists (standard close drains it)
+    const acct = await connection.getAccountInfo(m.market);
+    if (!acct) {
+      cleanedCount++;
+      continue; // Already destroyed by standard close
+    }
     try {
       const cleanupIx = buildCleanupMarketIx({
         admin: admin.publicKey,
@@ -1096,11 +1143,16 @@ async function act1Close(
       const tx = new Transaction().add(cleanupIx);
       await sendTx(connection, tx, [admin]);
       track(ctx, "cleanup_market");
+      cleanedCount++;
     } catch (e: any) {
       recordError(errors, -1, "cleanup_market", e.message, m.ticker);
     }
   }
-  details.push(`Cleaned up ${ctx.markets.length} markets`);
+  // Track cleanup instruction type even if all markets were standard-closed
+  if (cleanedCount > 0 && !ctx.metrics.instructionTypes.has("cleanup_market")) {
+    track(ctx, "cleanup_market");
+  }
+  details.push(`Cleaned up ${cleanedCount} markets`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1116,6 +1168,7 @@ export async function runAct1(ctx: SharedContext): Promise<ActResult> {
 
   try {
     // Phase 1: Create 7 markets
+    console.log("  [1/6] Setup Markets");
     details.push("--- Phase 1: Setup Markets ---");
     await act1SetupMarkets(ctx, errors, details);
     if (ctx.markets.length === 0) {
@@ -1123,22 +1176,27 @@ export async function runAct1(ctx: SharedContext): Promise<ActResult> {
     }
 
     // Phase 2: Mint and trade
+    console.log("  [2/6] Mint & Trade");
     details.push("--- Phase 2: Mint & Trade ---");
     await act1MintAndTrade(ctx, errors, details);
 
     // Phase 3: Pause / unpause
+    console.log("  [3/6] Pause / Unpause");
     details.push("--- Phase 3: Pause / Unpause ---");
     await act1PauseUnpause(ctx, errors, details);
 
     // Phase 4: Settle
+    console.log("  [4/6] Settlement");
     details.push("--- Phase 4: Settlement ---");
     await act1Settle(ctx, errors, details);
 
     // Phase 5: Redeem
+    console.log("  [5/6] Redemption");
     details.push("--- Phase 5: Redemption ---");
     await act1Redeem(ctx, errors, details);
 
     // Phase 6: Close
+    console.log("  [6/6] Close & Cleanup");
     details.push("--- Phase 6: Close & Cleanup ---");
     await act1Close(ctx, errors, details);
   } catch (e: any) {

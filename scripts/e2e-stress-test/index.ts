@@ -50,34 +50,44 @@ async function main(): Promise<void> {
 
   // Act 1: Correctness Gate
   if (!config.skipActs.includes(1)) {
-    console.log("\n[Act 1] Correctness Gate — proving every instruction type works...");
+    console.log("\n" + "─".repeat(60));
+    console.log("[Act 1] Correctness Gate — proving every instruction type works...");
+    console.log("─".repeat(60));
     const result = await runAct1(ctx);
     acts.push(result);
-    const badge = result.passed ? "PASS" : "FAIL";
-    console.log(`  Act 1: ${badge} (${(result.duration / 1000).toFixed(1)}s)`);
+    const badge = result.passed ? "✓ PASS" : "✗ FAIL";
+    console.log(`\n  Act 1 result: ${badge} | ${(result.duration / 1000).toFixed(1)}s | ${result.errors.length} errors | ${ctx.metrics.instructionTypes.size} ix types`);
     if (!result.passed && result.errors.length > 0) {
-      console.log(`  FAST-FAIL: ${result.errors.length} errors in correctness gate`);
+      console.log(`  Errors: ${result.errors.map((e) => e.instruction).join(", ")}`);
     }
+    // Clear markets so Act 2 creates its own fresh ones
+    ctx.markets = [];
   }
 
   // Act 2: User Flows
   if (!config.skipActs.includes(2)) {
-    console.log("\n[Act 2] User Flows — 8 named smoke tests...");
+    console.log("\n" + "─".repeat(60));
+    console.log("[Act 2] User Flows — 7 named smoke tests...");
+    console.log("─".repeat(60));
     const result = await runAct2(ctx);
     acts.push(result);
-    const badge = result.passed ? "PASS" : "FAIL";
-    console.log(`  Act 2: ${badge} (${(result.duration / 1000).toFixed(1)}s)`);
+    const badge = result.passed ? "✓ PASS" : "✗ FAIL";
+    console.log(`\n  Act 2 result: ${badge} | ${(result.duration / 1000).toFixed(1)}s | ${result.errors.length} errors`);
+    // Clear markets so Act 3 creates its own
+    ctx.markets = [];
   }
 
   // Act 3: Multi-day Simulation
   if (!config.skipActs.includes(3)) {
-    console.log("\n[Act 3] Simulation — multi-day trading...");
+    console.log("\n" + "─".repeat(60));
+    console.log("[Act 3] Simulation — multi-day trading...");
+    console.log("─".repeat(60));
     const result = await runAct3(ctx);
     acts.push(result);
-    const badge = result.passed ? "PASS" : "FAIL";
+    const badge = result.passed ? "✓ PASS" : "✗ FAIL";
     const durMin = Math.floor(result.duration / 60000);
     const durSec = Math.floor((result.duration % 60000) / 1000);
-    console.log(`  Act 3: ${badge} (${durMin}m ${durSec}s)`);
+    console.log(`\n  Act 3 result: ${badge} | ${durMin}m ${durSec}s | ${result.errors.length} errors`);
   }
 
   const endMs = Date.now();

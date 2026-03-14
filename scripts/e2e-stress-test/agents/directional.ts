@@ -1,17 +1,26 @@
 /**
  * directional.ts — Directional trader agent that takes bullish or bearish
  * positions. Occasionally exits by placing opposing orders.
+ *
+ * ConflictingPosition constraints:
+ *   side=0 (USDC bid / Buy Yes): requires no_ata == 0
+ *   side=1 (Yes ask / Sell Yes):  no constraint
+ *   side=2 (No bid / Buy No):    requires yes_ata == 0
+ *
+ * Bullish path: place side=0 bid (only if no_ata == 0)
+ * Bearish path: mint pairs → sell Yes via side=1 ask (atomic Buy No) → yes_ata=0
+ *               → optionally place side=2 No bid
+ * Exit path: sell Yes via side=1 ask (no constraint)
  */
 
 import { Transaction } from "@solana/web3.js";
-import { getAccount, getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
+import { getAccount, getOrCreateAssociatedTokenAccount, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import BN from "bn.js";
 import { BaseAgent } from "./base-agent";
 import type { MarketContext } from "../types";
 import { buildMintPairIx, buildPlaceOrderIx } from "../../../tests/helpers/instructions";
 import { parseOrderBook } from "../helpers";
 import { DEFAULT_MINT_QUANTITY, MAX_FILLS } from "../config";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 
 // ---------------------------------------------------------------------------
 // Directional
@@ -32,30 +41,34 @@ export class Directional extends BaseAgent {
 
       // Ensure ATAs exist
       await getOrCreateAssociatedTokenAccount(
-        this.ctx.connection,
-        this.keypair,
-        m.yesMint,
-        this.keypair.publicKey,
+        this.ctx.connection, this.keypair, m.yesMint, this.keypair.publicKey,
       );
       await getOrCreateAssociatedTokenAccount(
-        this.ctx.connection,
-        this.keypair,
-        m.noMint,
-        this.keypair.publicKey,
+        this.ctx.connection, this.keypair, m.noMint, this.keypair.publicKey,
       );
+
+      // Check current balances to respect constraints
+      let yesBalance = 0n;
+      let noBalance = 0n;
+      try { yesBalance = (await getAccount(this.ctx.connection, yesAtaAddr)).amount; } catch {}
+      try { noBalance = (await getAccount(this.ctx.connection, noAtaAddr)).amount; } catch {}
 
       const bullish = this.state.rng.next() > 0.5;
 
       if (bullish) {
-        // Buy Yes: crossing bid against resting asks
-        // Read fresh orderbook to find resting asks
+        // Buy Yes: side=0 USDC bid — requires no_ata == 0
+        if (noBalance > 0n) {
+          // Can't place side=0 while holding No tokens — skip this round
+          return;
+        }
+
+        // Read fresh orderbook to find resting asks for crossing fills
         const obAcct = await this.ctx.connection.getAccountInfo(m.orderBook);
         if (!obAcct) return;
 
         const orders = parseOrderBook(Buffer.from(obAcct.data));
         const asks = orders.filter((o) => o.side === 1 && o.isActive);
 
-        // Build maker accounts: each ask maker's USDC ATA
         const makerAccounts = asks.slice(0, MAX_FILLS).map((ask) =>
           getAssociatedTokenAddressSync(this.ctx.usdcMint, ask.owner),
         );
@@ -77,10 +90,10 @@ export class Directional extends BaseAgent {
           userYesAta: yesAtaAddr,
           userNoAta: noAtaAddr,
           feeVault: this.ctx.feeVault,
-          side: 0,             // USDC bid (Buy Yes)
+          side: 0,
           price,
           quantity: new BN(1_000_000),
-          orderType: 1,        // Limit
+          orderType: 1,
           maxFills: MAX_FILLS,
           makerAccounts,
         });
@@ -89,17 +102,12 @@ export class Directional extends BaseAgent {
         await this.sendTimed(bidTx, [this.keypair], "place_order");
         this.state.ordersPlaced++;
       } else {
-        // Bearish: Buy No via Sell No (side=2) — needs No tokens
-        let noBalance = 0n;
-        try {
-          const acct = await getAccount(this.ctx.connection, noAtaAddr);
-          noBalance = acct.amount;
-        } catch {
-          noBalance = 0n;
-        }
-
+        // Bearish: "Buy No" via atomic mint-pair + sell-Yes flow
+        // Step 1: Mint pairs if we don't have No tokens
         if (noBalance === 0n) {
-          // Mint pairs first to get No tokens
+          // mint_pair requires yes_ata == 0
+          if (yesBalance > 0n) return; // Can't mint while holding Yes — skip
+
           const mintIx = buildMintPairIx({
             user: this.keypair.publicKey,
             config: this.ctx.configPda,
@@ -116,55 +124,65 @@ export class Directional extends BaseAgent {
           const mintTx = new Transaction().add(mintIx);
           const sig = await this.sendTimed(mintTx, [this.keypair], "mint_pair");
           if (!sig) return;
+
+          // After minting: yesBalance > 0, noBalance > 0
+          try { yesBalance = (await getAccount(this.ctx.connection, yesAtaAddr)).amount; } catch {}
         }
 
-        const price = Math.max(1, Math.floor(25 + this.state.rng.next() * 20));
+        // Step 2: Sell all Yes tokens via side=1 ask (no constraint)
+        // This is the atomic "Buy No" flow — sell Yes to get USDC back, keep No
+        if (yesBalance > 0n) {
+          const obAcct = await this.ctx.connection.getAccountInfo(m.orderBook);
+          if (!obAcct) return;
 
-        const sellNoIx = buildPlaceOrderIx({
-          user: this.keypair.publicKey,
-          config: this.ctx.configPda,
-          market: m.market,
-          orderBook: m.orderBook,
-          usdcVault: m.usdcVault,
-          escrowVault: m.escrowVault,
-          yesEscrow: m.yesEscrow,
-          noEscrow: m.noEscrow,
-          yesMint: m.yesMint,
-          noMint: m.noMint,
-          userUsdcAta: usdcAtaAddr,
-          userYesAta: yesAtaAddr,
-          userNoAta: noAtaAddr,
-          feeVault: this.ctx.feeVault,
-          side: 2,             // No-backed bid (Sell No)
-          price,
-          quantity: new BN(1_000_000),
-          orderType: 1,        // Limit
-          maxFills: 0,         // Resting
-        });
+          const orders = parseOrderBook(Buffer.from(obAcct.data));
+          const bids = orders.filter((o) => o.side === 0 && o.isActive);
 
-        const sellTx = new Transaction().add(sellNoIx);
-        await this.sendTimed(sellTx, [this.keypair], "place_order");
-        this.state.ordersPlaced++;
+          const makerAccounts = bids.slice(0, MAX_FILLS).map((bid) =>
+            getAssociatedTokenAddressSync(m.yesMint, bid.owner),
+          );
+
+          const price = Math.max(1, Math.floor(25 + this.state.rng.next() * 20));
+
+          const sellYesIx = buildPlaceOrderIx({
+            user: this.keypair.publicKey,
+            config: this.ctx.configPda,
+            market: m.market,
+            orderBook: m.orderBook,
+            usdcVault: m.usdcVault,
+            escrowVault: m.escrowVault,
+            yesEscrow: m.yesEscrow,
+            noEscrow: m.noEscrow,
+            yesMint: m.yesMint,
+            noMint: m.noMint,
+            userUsdcAta: usdcAtaAddr,
+            userYesAta: yesAtaAddr,
+            userNoAta: noAtaAddr,
+            feeVault: this.ctx.feeVault,
+            side: 1,           // Yes ask — no constraint
+            price,
+            quantity: new BN(Math.min(Number(yesBalance), 1_000_000).toString()),
+            orderType: 1,
+            maxFills: MAX_FILLS,
+            makerAccounts,
+          });
+
+          const sellTx = new Transaction().add(sellYesIx);
+          await this.sendTimed(sellTx, [this.keypair], "place_order");
+          this.state.ordersPlaced++;
+        }
       }
 
       // 20% chance: try to exit — if holding Yes tokens, sell them
       if (this.state.rng.next() < 0.2) {
-        let yesBalance = 0n;
-        try {
-          const acct = await getAccount(this.ctx.connection, yesAtaAddr);
-          yesBalance = acct.amount;
-        } catch {
-          yesBalance = 0n;
-        }
+        try { yesBalance = (await getAccount(this.ctx.connection, yesAtaAddr)).amount; } catch { yesBalance = 0n; }
 
         if (yesBalance > 0n) {
-          // Read fresh orderbook to find bids
           const obAcct = await this.ctx.connection.getAccountInfo(m.orderBook);
           if (obAcct) {
             const orders = parseOrderBook(Buffer.from(obAcct.data));
             const bids = orders.filter((o) => o.side === 0 && o.isActive);
 
-            // Crossing side=1 (Sell Yes) against side=0 bids: maker receives Yes tokens
             const makerAccounts = bids.slice(0, MAX_FILLS).map((bid) =>
               getAssociatedTokenAddressSync(m.yesMint, bid.owner),
             );
@@ -184,9 +202,9 @@ export class Directional extends BaseAgent {
               userYesAta: yesAtaAddr,
               userNoAta: noAtaAddr,
               feeVault: this.ctx.feeVault,
-              side: 1,           // Yes ask (Sell Yes)
+              side: 1,           // Yes ask — no constraint
               price: Math.max(1, Math.floor(30 + this.state.rng.next() * 30)),
-              quantity: new BN(1_000_000),
+              quantity: new BN(Math.min(Number(yesBalance), 1_000_000).toString()),
               orderType: 1,
               maxFills: MAX_FILLS,
               makerAccounts,

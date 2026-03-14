@@ -43,3 +43,4 @@ test-ledger/
 
 # Stress test state
 scripts/stress-test/last-run.json
+stress-reports/

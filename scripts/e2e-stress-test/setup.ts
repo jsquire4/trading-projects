@@ -9,6 +9,12 @@ import {
   LAMPORTS_PER_SOL,
   Transaction,
 } from "@solana/web3.js";
+import {
+  createMint,
+  getMint,
+  getOrCreateAssociatedTokenAccount,
+  mintTo,
+} from "@solana/spl-token";
 import * as fs from "fs";
 import * as path from "path";
 // Manual .env loading (no dotenv dependency)
@@ -41,9 +47,24 @@ import {
   findTreasury,
   findPriceFeed,
 } from "../../services/shared/src/pda";
-import { buildInitializeFeedIx } from "../../tests/helpers/instructions";
+import { buildInitializeFeedIx, buildInitializeConfigIx, MOCK_ORACLE_PROGRAM_ID } from "../../tests/helpers/instructions";
 import { sendTx } from "./helpers";
 import { SeededRng, hashSeed } from "../../services/shared/src/synthetic-config";
+
+/** Update a single key in .env (in-place replacement or append). */
+function updateEnvVar(key: string, value: string): void {
+  const envPath = path.resolve(__dirname, "../../.env");
+  let content = "";
+  try { content = fs.readFileSync(envPath, "utf-8"); } catch {}
+  const regex = new RegExp(`^${key}=.*$`, "m");
+  if (regex.test(content)) {
+    content = content.replace(regex, `${key}=${value}`);
+  } else {
+    if (content.length > 0 && !content.endsWith("\n")) content += "\n";
+    content += `${key}=${value}\n`;
+  }
+  fs.writeFileSync(envPath, content);
+}
 
 // ── Setup ──────────────────────────────────────────────────────────────────
 
@@ -57,17 +78,7 @@ export async function setupTestEnvironment(config: RunConfig): Promise<SharedCon
   const adminSecret = JSON.parse(fs.readFileSync(adminPath, "utf-8"));
   const admin = Keypair.fromSecretKey(Uint8Array.from(adminSecret));
 
-  // 2. Read USDC mint and faucet keypair
-  const usdcMintStr = process.env.USDC_MINT;
-  if (!usdcMintStr) throw new Error("USDC_MINT not set in .env");
-  const usdcMint = new PublicKey(usdcMintStr);
-
-  const faucetJson = process.env.FAUCET_KEYPAIR;
-  if (!faucetJson) throw new Error("FAUCET_KEYPAIR not set in .env");
-  const faucetSecret = JSON.parse(faucetJson);
-  const faucet = Keypair.fromSecretKey(Uint8Array.from(faucetSecret));
-
-  // 3. Connect and verify
+  // 2. Connect and verify admin balance
   const connection = new Connection(config.rpcUrl, "confirmed");
   const balance = await connection.getBalance(admin.publicKey);
   console.log(`  Admin: ${admin.publicKey.toBase58()} (${balance / LAMPORTS_PER_SOL} SOL)`);
@@ -77,18 +88,66 @@ export async function setupTestEnvironment(config: RunConfig): Promise<SharedCon
     await connection.confirmTransaction(sig, "confirmed");
   }
 
-  // 4. Verify GlobalConfig PDA exists
-  const [configPda] = findGlobalConfig();
-  const configAcct = await connection.getAccountInfo(configPda);
-  if (!configAcct) {
-    throw new Error(
-      `GlobalConfig PDA not found at ${configPda.toBase58()}. ` +
-      "Run initialize_config first (e.g. via anchor test or the stress test setup)."
-    );
+  // 3. Read or create USDC mint + faucet (auto-bootstrap for fresh validators)
+  const faucetJson = process.env.FAUCET_KEYPAIR;
+  if (!faucetJson) throw new Error("FAUCET_KEYPAIR not set in .env");
+  const faucetSecret = JSON.parse(faucetJson);
+  const faucet = Keypair.fromSecretKey(Uint8Array.from(faucetSecret));
+
+  const usdcMintStr = process.env.USDC_MINT;
+  if (!usdcMintStr) throw new Error("USDC_MINT not set in .env");
+  let usdcMint = new PublicKey(usdcMintStr);
+
+  // Verify USDC mint exists on-chain; if not, create it fresh (validator was reset)
+  try {
+    await getMint(connection, usdcMint);
+  } catch {
+    console.log("  USDC mint not found on-chain — creating fresh mock USDC...");
+    // Fund faucet with SOL for signing
+    const faucetSig = await connection.requestAirdrop(faucet.publicKey, 1 * LAMPORTS_PER_SOL);
+    await connection.confirmTransaction(faucetSig, "confirmed");
+
+    usdcMint = await createMint(connection, admin, faucet.publicKey, null, 6);
+    console.log(`  Created mock USDC mint: ${usdcMint.toBase58()}`);
+
+    // Mint initial USDC to admin
+    const adminAta = await getOrCreateAssociatedTokenAccount(connection, admin, usdcMint, admin.publicKey);
+    const INITIAL_USDC = 1_000_000 * 1_000_000; // 1M USDC
+    await mintTo(connection, admin, usdcMint, adminAta.address, faucet, INITIAL_USDC);
+    console.log(`  Minted 1,000,000 USDC to admin`);
+
+    // Update .env for next run
+    updateEnvVar("USDC_MINT", usdcMint.toBase58());
+    updateEnvVar("NEXT_PUBLIC_USDC_MINT", usdcMint.toBase58());
+    // Reload so subsequent reads see the new value
+    process.env.USDC_MINT = usdcMint.toBase58();
+    process.env.NEXT_PUBLIC_USDC_MINT = usdcMint.toBase58();
   }
 
+  // 4. Bootstrap GlobalConfig PDA if needed
+  const [configPda] = findGlobalConfig();
   const [feeVault] = findFeeVault();
   const [treasury] = findTreasury();
+  const configAcct = await connection.getAccountInfo(configPda);
+  if (!configAcct) {
+    console.log("  GlobalConfig PDA not found — initializing...");
+    const initIx = buildInitializeConfigIx({
+      admin: admin.publicKey,
+      config: configPda,
+      usdcMint,
+      treasury,
+      feeVault,
+      oracleProgram: MOCK_ORACLE_PROGRAM_ID,
+      tickers: config.tickers.slice(0, 7),
+      tickerCount: Math.min(config.tickers.length, 7),
+      stalenessThreshold: 300,
+      settlementStaleness: 600,
+      confidenceBps: 500,
+      oracleType: 0,
+    });
+    await sendTx(connection, new Transaction().add(initIx), [admin]);
+    console.log(`  GlobalConfig initialized at ${configPda.toBase58()}`);
+  }
 
   // 5. Initialize oracle feeds for each ticker (idempotent)
   for (const ticker of config.tickers) {

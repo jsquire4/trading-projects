@@ -114,6 +114,7 @@ export interface MarketState {
   totalMinted: bigint;
   totalRedeemed: bigint;
   settlementPrice: bigint;
+  settledAt: bigint;
   overrideDeadline: bigint;
 }
 
@@ -133,6 +134,7 @@ export async function readMarketState(
     totalMinted: d.readBigUInt64LE(SM.TOTAL_MINTED),
     totalRedeemed: d.readBigUInt64LE(SM.TOTAL_REDEEMED),
     settlementPrice: d.readBigUInt64LE(SM.SETTLEMENT_PRICE),
+    settledAt: d.readBigInt64LE(SM.SETTLED_AT),
     overrideDeadline: d.readBigInt64LE(SM.OVERRIDE_DEADLINE),
   };
 }
@@ -235,9 +237,17 @@ export async function sendTx(
       });
     } catch (e: any) {
       const msg = e.message ?? "";
-      // Retry on blockhash / duplicate tx errors, not on program errors
-      const isTransient = msg.includes("blockhash") || msg.includes("was already processed");
+      const msgLower = msg.toLowerCase();
+      // Retry on blockhash / block height / timeout errors, not on program errors
+      const isTransient =
+        msgLower.includes("blockhash") ||
+        msgLower.includes("block height") ||
+        msgLower.includes("expired") ||
+        msgLower.includes("was already processed") ||
+        msgLower.includes("timeout") ||
+        msgLower.includes("socket hang up");
       if (attempt < maxRetries && isTransient) {
+        console.log(`    ↻ retry ${attempt + 1}/${maxRetries}: ${msg.slice(0, 80)}`);
         tx.recentBlockhash = (await connection.getLatestBlockhash("confirmed")).blockhash;
         continue;
       }

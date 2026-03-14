@@ -18,11 +18,11 @@ import {
   Transaction,
   PublicKey,
   AddressLookupTableProgram,
-  SystemProgram,
 } from "@solana/web3.js";
 import {
   getAssociatedTokenAddressSync,
   getAccount,
+  approve,
 } from "@solana/spl-token";
 import BN from "bn.js";
 
@@ -57,6 +57,7 @@ import {
   buildCloseMarketIx,
   buildTreasuryRedeemIx,
   buildCleanupMarketIx,
+  buildRedeemIx,
   buildUpdatePriceIx,
   padTicker,
 } from "../../tests/helpers/instructions";
@@ -102,12 +103,18 @@ async function createDayMarkets(
 ): Promise<MarketContext[]> {
   const markets: MarketContext[] = [];
 
-  for (const ticker of ctx.config.tickers) {
+  for (let ti = 0; ti < ctx.config.tickers.length; ti++) {
+    const ticker = ctx.config.tickers[ti];
     const priceLamports = oracle.getPriceLamports(ticker);
     // Round to nearest $10 (10_000_000 lamports)
-    const strikeLamports = BigInt(Math.round(Number(priceLamports) / 10_000_000) * 10_000_000);
+    // Offset strike by $1000 * day to prevent PDA collisions across simulated days
+    // (all days share the same real-world expiryDay since the test runs in minutes,
+    //  and oracle price drift can make $10 offsets collide)
+    const strikeOffset = BigInt(day) * 1_000_000_000n;
+    const strikeLamports = BigInt(Math.round(Number(priceLamports) / 10_000_000) * 10_000_000) + strikeOffset;
     const previousCloseLamports = priceLamports;
 
+    console.log(`      ${ti + 1}/${ctx.config.tickers.length}: ${ticker} @ $${Number(strikeLamports) / 1e6}...`);
     try {
       const m = await createMarket(ctx, ticker, strikeLamports, previousCloseLamports, marketCloseUnix, day);
       markets.push(m);
@@ -115,8 +122,9 @@ async function createDayMarkets(
       ctx.metrics.instructionTypes.add("allocate_order_book");
       ctx.metrics.instructionTypes.add("create_strike_market");
       ctx.metrics.instructionTypes.add("set_market_alt");
+      console.log(`      ✓ ${ticker} created`);
     } catch (e: any) {
-      console.log(`  WARNING: Failed to create market for ${ticker} day ${day}: ${e.message}`);
+      console.log(`      ✗ ${ticker} FAILED: ${e.message?.slice(0, 120)}`);
     }
   }
 
@@ -142,7 +150,7 @@ async function createMarket(
   const [orderBook] = findOrderBook(market);
   const [oracleFeed] = findPriceFeed(ticker);
 
-  // 1. Allocate order book (13 calls, batched 6/tx)
+  // 1. Allocate order book (25 calls, batched 6/tx)
   const allocIxs = [];
   for (let i = 0; i < ALLOC_CALLS_REQUIRED; i++) {
     allocIxs.push(
@@ -154,11 +162,13 @@ async function createMarket(
     );
   }
   const allocBatches = batch(allocIxs, ALLOC_BATCH_SIZE);
-  for (const group of allocBatches) {
+  for (let bi = 0; bi < allocBatches.length; bi++) {
     const tx = new Transaction();
-    for (const ix of group) tx.add(ix);
+    for (const ix of allocBatches[bi]) tx.add(ix);
     await sendTx(ctx.connection, tx, [ctx.admin]);
+    process.stdout.write(`\r      alloc ${ticker} ${bi + 1}/${allocBatches.length}`);
   }
+  process.stdout.write("\n");
 
   // 2. Create strike market
   const createIx = buildCreateStrikeMarketIx({
@@ -183,30 +193,17 @@ async function createMarket(
   const createTx = new Transaction().add(createIx);
   await sendTx(ctx.connection, createTx, [ctx.admin]);
 
-  // 3. ALT creation
+  // 3. ALT creation (non-fatal — market works without ALT)
   let altAddress: PublicKey | undefined;
   try {
-    // Warmup tx
-    const warmupTx = new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: ctx.admin.publicKey,
-        toPubkey: ctx.admin.publicKey,
-        lamports: 1,
-      }),
-    );
-    await sendTx(ctx.connection, warmupTx, [ctx.admin]);
-    const slot = await ctx.connection.getSlot("confirmed");
+    const slot = await ctx.connection.getSlot("finalized");
 
-    // Create ALT
+    // Create + extend ALT in one tx
     const [createAltIx, altPubkey] = AddressLookupTableProgram.createLookupTable({
       authority: ctx.admin.publicKey,
       payer: ctx.admin.publicKey,
       recentSlot: slot,
     });
-    const altTx = new Transaction().add(createAltIx);
-    await sendTx(ctx.connection, altTx, [ctx.admin]);
-
-    // Extend ALT
     const extendIx = AddressLookupTableProgram.extendLookupTable({
       lookupTable: altPubkey,
       authority: ctx.admin.publicKey,
@@ -216,8 +213,8 @@ async function createMarket(
         yesEscrow, noEscrow, orderBook, oracleFeed,
       ],
     });
-    const extendTx = new Transaction().add(extendIx);
-    await sendTx(ctx.connection, extendTx, [ctx.admin]);
+    const altTx = new Transaction().add(createAltIx, extendIx);
+    await sendTx(ctx.connection, altTx, [ctx.admin]);
 
     await sleep(ALT_WARMUP_SLEEP_MS);
 
@@ -386,6 +383,11 @@ async function crankRedeemDay(
           const winAta = getAssociatedTokenAddressSync(winningMint, agent.keypair.publicKey);
           const acct = await getAccount(ctx.connection, winAta);
           if (acct.amount > 0n) {
+            // Set market PDA as delegate so crank_redeem can burn tokens
+            await approve(
+              ctx.connection, agent.keypair, winAta,
+              m.market, agent.keypair, Number(acct.amount),
+            );
             const usdcAta = getAssociatedTokenAddressSync(ctx.usdcMint, agent.keypair.publicKey);
             remainingAccounts.push(
               { pubkey: winAta, isSigner: false, isWritable: true },
@@ -423,6 +425,75 @@ async function crankRedeemDay(
         market: m.ticker,
         message: e.message,
       });
+    }
+  }
+}
+
+// ── Bulk redeem helper (drain all agent tokens before close) ──────────
+
+async function bulkRedeemDay(
+  ctx: SharedContext,
+  dayMarkets: MarketContext[],
+): Promise<void> {
+  for (const m of dayMarkets) {
+    const state = await readMarketState(ctx.connection, m.market);
+    if (!state || !state.isSettled) continue;
+
+    for (const agent of ctx.agents) {
+      try {
+        const yesAta = getAssociatedTokenAddressSync(m.yesMint, agent.keypair.publicKey);
+        const noAta = getAssociatedTokenAddressSync(m.noMint, agent.keypair.publicKey);
+        const usdcAta = getAssociatedTokenAddressSync(ctx.usdcMint, agent.keypair.publicKey);
+
+        let yesBal = 0n;
+        let noBal = 0n;
+        try { yesBal = (await getAccount(ctx.connection, yesAta)).amount; } catch {}
+        try { noBal = (await getAccount(ctx.connection, noAta)).amount; } catch {}
+
+        if (yesBal === 0n && noBal === 0n) continue;
+
+        // Pair burn matched tokens
+        const pairBurnQty = yesBal < noBal ? yesBal : noBal;
+        if (pairBurnQty >= 1_000_000n) {
+          const ix = buildRedeemIx({
+            user: agent.keypair.publicKey,
+            config: ctx.configPda,
+            market: m.market,
+            yesMint: m.yesMint,
+            noMint: m.noMint,
+            usdcVault: m.usdcVault,
+            userUsdcAta: usdcAta,
+            userYesAta: yesAta,
+            userNoAta: noAta,
+            mode: 0,
+            quantity: new BN(pairBurnQty.toString()),
+          });
+          await sendTx(ctx.connection, new Transaction().add(ix), [agent.keypair]);
+          yesBal -= pairBurnQty;
+          noBal -= pairBurnQty;
+        }
+
+        // Winner redeem remaining winning tokens
+        const winBal = state.outcome === 1 ? yesBal : noBal;
+        if (winBal >= 1_000_000n) {
+          const ix = buildRedeemIx({
+            user: agent.keypair.publicKey,
+            config: ctx.configPda,
+            market: m.market,
+            yesMint: m.yesMint,
+            noMint: m.noMint,
+            usdcVault: m.usdcVault,
+            userUsdcAta: usdcAta,
+            userYesAta: yesAta,
+            userNoAta: noAta,
+            mode: 1,
+            quantity: new BN(winBal.toString()),
+          });
+          await sendTx(ctx.connection, new Transaction().add(ix), [agent.keypair]);
+        }
+      } catch {
+        // Best-effort drain
+      }
     }
   }
 }
@@ -489,9 +560,11 @@ async function closeDay(
     }
   }
 
-  // Cleanup markets
+  // Cleanup markets (skip already-destroyed PDAs from standard close)
   for (const m of dayMarkets) {
     try {
+      const acct = await ctx.connection.getAccountInfo(m.market);
+      if (!acct) continue; // Already destroyed by standard close
       const ix = buildCleanupMarketIx({
         admin: ctx.admin.publicKey,
         config: ctx.configPda,
@@ -565,14 +638,18 @@ export async function runAct3(ctx: SharedContext): Promise<ActResult> {
     }
 
     // 5. Trading loop
-    console.log("    Trading...");
+    const tradingDurationSec = Math.ceil((tradingEndsMs - Date.now()) / 1000);
+    console.log(`    Trading (${tradingDurationSec}s window)...`);
     let tpsFlush = Date.now() + 1000;
+    let progressFlush = Date.now() + 10_000; // progress every 10s
     const ordersBeforeTrading = ctx.agents.reduce((s, a) => s + a.ordersPlaced, 0);
+    let loopIterations = 0;
 
     while (Date.now() < tradingEndsMs) {
       // Pick random agent (seeded for determinism) — only pass current day's markets
       const agentIdx = Math.floor(loopRng.next() * agents.length);
       await agents[agentIdx].act(dayMarkets, oracle.getAllPrices());
+      loopIterations++;
 
       // Periodically step oracle prices
       if (loopRng.next() < 0.05) {
@@ -587,10 +664,21 @@ export async function runAct3(ctx: SharedContext): Promise<ActResult> {
         metricsCollector.flushTpsWindow();
         tpsFlush += 1000;
       }
+
+      // Progress update
+      if (Date.now() >= progressFlush) {
+        const elapsed = Math.floor((Date.now() - (tradingEndsMs - tradingDurationSec * 1000)) / 1000);
+        const remaining = Math.max(0, Math.ceil((tradingEndsMs - Date.now()) / 1000));
+        const currentOrders = ctx.agents.reduce((s, a) => s + a.ordersPlaced, 0) - ordersBeforeTrading;
+        const currentErrors = ctx.agents.reduce((s, a) => s + a.errors.length, 0);
+        console.log(`      ${elapsed}s elapsed, ${remaining}s left | ${loopIterations} acts, ${currentOrders} orders, ${currentErrors} errors`);
+        progressFlush += 10_000;
+      }
     }
 
     const ordersAfterTrading = ctx.agents.reduce((s, a) => s + a.ordersPlaced, 0);
     const dayOrdersPlaced = ordersAfterTrading - ordersBeforeTrading;
+    console.log(`    Trading complete: ${dayOrdersPlaced} orders in ${loopIterations} agent actions`);
     details.push(`Day ${day + 1}: ${dayOrdersPlaced} orders placed during trading`);
 
     // 6. Wait for market close
@@ -623,6 +711,22 @@ export async function runAct3(ctx: SharedContext): Promise<ActResult> {
     // 10. Crank redeem
     console.log("    Cranking redeems...");
     await crankRedeemDay(ctx, dayMarkets, errors);
+
+    // 10b. Bulk redeem remaining agent tokens (pair burn + winner redeem)
+    console.log("    Draining remaining tokens...");
+    await bulkRedeemDay(ctx, dayMarkets);
+
+    // 10c. Wait for grace period (stress-test: 5s after settled_at)
+    if (dayMarkets.length > 0) {
+      const state = await readMarketState(ctx.connection, dayMarkets[0].market);
+      if (state && state.isSettled) {
+        const graceWait = Number(state.settledAt) + 6 - Math.floor(Date.now() / 1000);
+        if (graceWait > 0 && graceWait <= 30) {
+          console.log(`    Waiting ${graceWait}s for grace period...`);
+          await sleep(graceWait * 1000);
+        }
+      }
+    }
 
     // 11. Close markets
     console.log("    Closing markets...");

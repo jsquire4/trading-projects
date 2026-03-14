@@ -112,14 +112,16 @@ export class StrikeCreator extends BaseAgent {
       }
 
       const allocBatches = batch(allocIxs, ALLOC_BATCH_SIZE);
-      for (const ixBatch of allocBatches) {
+      for (let bi = 0; bi < allocBatches.length; bi++) {
         const tx = new Transaction();
-        for (const ix of ixBatch) {
+        for (const ix of allocBatches[bi]) {
           tx.add(ix);
         }
         const sig = await this.sendTimed(tx, [admin], "allocate_order_book");
         if (!sig) return;
+        process.stdout.write(`\r      strike-creator alloc ${ticker} ${bi + 1}/${allocBatches.length}`);
       }
+      process.stdout.write("\n");
 
       // ── Step 2: Create Strike Market ─────────────────────────────────────
       const expiryDay = Math.floor(marketCloseUnix / 86400);

@@ -77,6 +77,7 @@ The core trading program. Two Solana programs deployed from a single Anchor work
 
 **GlobalConfig** (singleton, PDA `[b"config"]`)
 - Admin authority, USDC mint address, oracle program reference
+- Oracle type: 0 = Mock, 1 = Pyth (for mainnet swap)
 - 7 tickers (MAG7: AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA)
 - Staleness thresholds: 60s for trading, 120s for settlement
 - Oracle confidence band: 50 bps (0.5%)
@@ -107,10 +108,10 @@ The core trading program. Two Solana programs deployed from a single Anchor work
 | yes_mint | `[b"yes_mint", market]` | Yes outcome token (6 decimals) |
 | no_mint | `[b"no_mint", market]` | No outcome token (6 decimals) |
 
-#### Instructions (19 total)
+#### Instructions (20 total)
 
 **Setup & Admin:**
-- `initialize_config` — One-time: creates GlobalConfig with admin, USDC mint, oracle program, tickers, thresholds, fees
+- `initialize_config` — One-time: creates GlobalConfig with admin, USDC mint, oracle program, tickers, thresholds, fees, oracle_type (0=Mock, 1=Pyth)
 - `create_strike_market` — Creates market with all associated accounts (mints, vaults, escrows, order book)
 - `set_market_alt` — Attaches Address Lookup Table to market (post-creation optimization for tx size)
 - `allocate_order_book` — Incremental 10 KB allocs to build the 254 KB order book account
@@ -295,14 +296,17 @@ The oracle feeder connects to Tradier's WebSocket stream for real-time trade pri
 Solana Program Logs ──▶ Event Indexer ──▶ SQLite ──▶ REST API (:3001)
                          │                              │
                          ├── Live: onLogs subscription   ├── /api/events
-                         └── Backfill: walk tx history   ├── /api/fills?wallet=
-                              with checkpointing         ├── /api/cost-basis?wallet=
-                                                         ├── /api/portfolio?wallet=
-                                                         ├── /api/portfolio-history?wallet=
-                                                         └── /api/market-vwaps
+                         └── Backfill: walk tx history   ├── /api/events/fills?wallet=
+                              with checkpointing         ├── /api/events/cost-basis?wallet=
+                                                         ├── /api/portfolio/snapshot?wallet=
+                                                         ├── /api/portfolio/history?wallet=&days=
+                                                         ├── /api/events/market-vwaps
+                                                         ├── /api/events/latest
+                                                         ├── /api/order-intent (POST)
+                                                         └── /api/health
 ```
 
-The indexer subscribes to program logs in real-time and also backfills from the last checkpoint on startup. Events are deduplicated by (signature, type, market, seq). The frontend queries this REST API for fill history, cost basis, portfolio snapshots, and P&L history.
+The indexer subscribes to program logs in real-time and also backfills from the last checkpoint on startup. Events are deduplicated by (signature, type, market, seq). The frontend queries this REST API for fill history (via `/api/events?type=fill` or `/api/events/fills` with intent labels), cost basis, portfolio snapshots, and P&L history — all served server-side (no client-side IndexedDB).
 
 An `order-intent` endpoint lets the frontend label orders at submission time ("buy_yes", "sell_yes", "buy_no", "sell_no") so that fills can be displayed from the user's perspective — important because "Buy No" is a UI-level concept that maps to different on-chain sides depending on execution path.
 
@@ -352,7 +356,7 @@ Next.js 14 application with React 18, Tailwind CSS, TanStack Query, Recharts, an
 | `/trade` | Market hub — all active markets, ticker filtering, watchlist, countdown urgency |
 | `/trade/[ticker]` | Per-ticker cockpit — order book, order form, positions, fills, settlement status |
 | `/portfolio` | Portfolio dashboard — 4 tabs: Performance (P&L chart), Positions, Orders, History |
-| `/history` | Trade history — paginated fill log from event indexer |
+| `/history` | Trade history — paginated fill log from event indexer (wallet-filtered client-side) |
 | `/analytics` | Advanced analytics — Greeks, options chain comparison, price history, distribution |
 | `/admin` | Admin panel — create markets, settle, pause, override |
 
@@ -361,8 +365,10 @@ Next.js 14 application with React 18, Tailwind CSS, TanStack Query, Recharts, an
 **Trading:**
 - `OrderForm` — Side selector (Buy/Sell Yes/No), limit/market toggle, price + dollar amount inputs. "Buy No" is a compound transaction: mint pair → sell Yes → optional pair burn.
 - `OrderBook` — Dual-perspective display (Yes view / No view toggle), table or depth chart. Clicking a price populates the order form.
+- `TradeModal` / `TradeConfirmationModal` — Order flow modals for confirmation and status.
 - `MyOrders` / `MyPositions` — Active orders and token holdings for current market.
 - `RedeemPanel` — Post-settlement: pair-burn or winner redemption mode.
+- `SyntheticControls` — Dev/test toggle for synthetic market data mode (no Tradier API key).
 
 **Portfolio:**
 - `PnlTab` — Intraday P&L area chart, daily summaries, top/bottom performers.
@@ -373,6 +379,7 @@ Next.js 14 application with React 18, Tailwind CSS, TanStack Query, Recharts, an
 **Analytics:**
 - `OptionsComparison` — Binary market delta vs. Black-Scholes theoretical delta.
 - `GreeksDisplay` — Delta, gamma, theta, vega for binary options.
+- `SettlementAnalytics` — Calibration chart (implied probability vs realized settlement frequency), accuracy tracking.
 - `PriceHistory` — OHLCV chart from Tradier API.
 - `HistoricalOverlay` — Price distribution analysis.
 
@@ -420,7 +427,7 @@ Automated market maker providing continuous two-sided liquidity. Black-Scholes N
 Listens to Solana program logs, parses Anchor events (fills, settlements, crank cancels), stores in SQLite (WAL mode), and serves via REST API. Backfills from checkpoint on restart. Deduplicates by (signature, type, market, seq).
 
 ### Market Initializer
-Creates markets daily at 08:00 ET. Fetches previous close from Tradier, computes volatility-aware strikes at ±3%, ±6%, ±9%, and creates on-chain markets with all associated accounts. Idempotent — skips existing markets.
+Creates markets daily at 08:00 ET. Fetches previous close from Tradier, computes strikes via `strikeSelector`: baseline ±3%, ±6%, ±9% or vol-aware HV20 sigma levels (1σ, 1.5σ, 2σ). Creates on-chain markets with all associated accounts. Idempotent — skips existing markets.
 
 ### Settlement Service
 Runs at 16:05 ET. Updates oracle feeds with closing prices, settles expired markets, cranks order cancellation, auto-redeems winning tokens for delegated accounts, and closes eligible markets (90+ days post-settlement).
@@ -443,6 +450,7 @@ Common utilities imported by all services and the frontend (via `@shared/*` path
 - `tradier-client.ts` — Tradier REST/WebSocket client with token-bucket rate limiting
 - `market-data.ts` — Factory: returns TradierClient (live) or SyntheticClient based on env
 - `synthetic-client.ts` — Deterministic GBM price generator for dev/test (no API key needed)
+- `synthetic-config.ts` — Base prices, default tickers, seeded RNG for synthetic market data
 - `alerting.ts` — Structured logger with optional webhook dispatch
 
 ---
@@ -476,7 +484,7 @@ GitHub Actions on push/PR to main, three parallel jobs:
 |--------|---------|
 | `deploy-devnet.sh` | Idempotent 8-step devnet deploy (build → deploy → init state → create markets) |
 | `local-stack.sh` | Full local stack (validator → init → services → frontend) |
-| `stress-test.ts` | 6-phase load test (fund → mint → create → trade → settle → verify) |
+| `scripts/e2e-stress-test/index.ts` | E2E stress test: Act 1 (correctness), Act 2 (user flows), Act 3 (multi-day simulation) |
 | `validate-stack.ts` | Smoke test (check programs, accounts, oracle freshness) |
 
 ### Monorepo Structure
@@ -484,7 +492,7 @@ GitHub Actions on push/PR to main, three parallel jobs:
 ```
 peak6/
 ├── programs/              # Rust/Anchor (Cargo workspace)
-│   ├── meridian/          # Main program (18 instructions)
+│   ├── meridian/          # Main program (20 instructions)
 │   └── mock-oracle/       # Oracle program (2 instructions)
 ├── app/meridian-web/      # Next.js 14 frontend
 ├── services/              # Node.js microservices

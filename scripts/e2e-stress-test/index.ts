@@ -67,7 +67,7 @@ async function main(): Promise<void> {
   // Act 2: User Flows
   if (!config.skipActs.includes(2)) {
     console.log("\n" + "─".repeat(60));
-    console.log("[Act 2] User Flows — 7 named smoke tests...");
+    console.log("[Act 2] User Flows — 8 named smoke tests...");
     console.log("─".repeat(60));
     const result = await runAct2(ctx);
     acts.push(result);

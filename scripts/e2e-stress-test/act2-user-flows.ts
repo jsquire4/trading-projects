@@ -389,6 +389,35 @@ async function test4(ctx: SharedContext, m: MarketContext): Promise<TestResult> 
     orderAfterUnpause = false;
   }
 
+  // Cancel the resting order to avoid polluting the book for subsequent tests
+  if (orderAfterUnpause) {
+    try {
+      const orders = await readBook(ctx, m);
+      const myOrder = orders.find(
+        (o) => o.side === 0 && o.priceLevel === 50 && o.owner.equals(agent.publicKey),
+      );
+      if (myOrder) {
+        const cancelIx = buildCancelOrderIx({
+          user: agent.publicKey,
+          config: ctx.configPda,
+          market: m.market,
+          orderBook: m.orderBook,
+          escrowVault: m.escrowVault,
+          yesEscrow: m.yesEscrow,
+          noEscrow: m.noEscrow,
+          userUsdcAta: atas.usdc,
+          userYesAta: atas.yes,
+          userNoAta: atas.no,
+          price: 50,
+          orderId: bn(myOrder.orderId),
+        });
+        await sendTx(ctx.connection, new Transaction().add(cancelIx), [agent]);
+      }
+    } catch {
+      // Non-fatal: cleanup failure doesn't invalidate the test
+    }
+  }
+
   if (orderBlockedByPause && orderAfterUnpause) {
     return { passed: true, detail: "Pause blocked order, unpause allowed it" };
   }
@@ -664,8 +693,7 @@ const TESTS: TestDef[] = [
   { name: "Market maker spread gets swept", fn: test2 },
   { name: "Pair burn restores USDC", fn: test3 },
   { name: "Pause blocks orders; unpause resumes", fn: test4 },
-  // T5 (Sell Yes fills resting bid) skipped — InvalidMakerAccount under investigation
-  // { name: "Sell Yes fills resting bid", fn: test5 },
+  { name: "Sell Yes fills resting bid", fn: test5 },
   { name: "Sell No locks No tokens, cancel returns them", fn: test6 },
   { name: "Admin override flips outcome", fn: test8 },
   { name: "Winner redeems after settlement", fn: test7 },

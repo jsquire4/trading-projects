@@ -697,7 +697,7 @@ export async function runAct3(ctx: SharedContext): Promise<ActResult> {
 
     // 6. Wait for market close
     const waitCloseMs = (marketCloseUnix * 1000) - Date.now() + 2000;
-    if (waitCloseMs > 0 && waitCloseMs < 300_000) {
+    if (waitCloseMs > 0 && waitCloseMs < 600_000) {
       console.log(`    Waiting ${Math.ceil(waitCloseMs / 1000)}s for market close...`);
       await sleep(waitCloseMs);
     }

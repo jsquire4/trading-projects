@@ -107,11 +107,7 @@ async function main(): Promise<void> {
   // Use the market data factory — in synthetic mode this returns SyntheticClient (no API key needed)
   const isSynthetic = process.env.MARKET_DATA_SOURCE === "synthetic";
   let marketDataClient: IMarketDataClient | null = null;
-  if (isSynthetic || process.env.TRADIER_API_KEY) {
-    marketDataClient = createMarketDataClient();
-  } else {
-    log.warn("No TRADIER_API_KEY and not in synthetic mode — HV lookup disabled, using flat BOT_VOL");
-  }
+  marketDataClient = createMarketDataClient();
   const riskFreeRate = parseFloat(process.env.BOT_RISK_FREE_RATE ?? "0.05");
 
   const quoteConfig: QuoteConfig = {
@@ -249,7 +245,7 @@ async function main(): Promise<void> {
             const hv = historicalVolatility(bars, 30);
             if (hv > 0) tickerVol = hv;
           } catch (err) {
-            log.warn("Tradier HV lookup failed, using fallback vol", { ticker, error: String(err) });
+            log.warn("HV lookup failed, using fallback vol", { ticker, error: String(err) });
           }
         }
 

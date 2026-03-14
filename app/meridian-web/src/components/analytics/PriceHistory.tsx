@@ -16,7 +16,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
-import { useTradierHistory } from "@/hooks/useAnalyticsData";
+import { useHistory } from "@/hooks/useAnalyticsData";
 import {
   COLORS,
   AXIS_STYLE,
@@ -32,7 +32,7 @@ interface PriceHistoryProps {
 }
 
 export function PriceHistory({ ticker, days = 120 }: PriceHistoryProps) {
-  const { data: history, isLoading, isError } = useTradierHistory(ticker, days);
+  const { data: history, isLoading, isError } = useHistory(ticker, days);
 
   const chartData = useMemo(() => {
     if (!history || history.length === 0) return [];

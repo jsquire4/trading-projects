@@ -2,7 +2,7 @@
 // Oracle Feeder — Synthetic mode
 //
 // Simple polling feeder that evolves prices via SyntheticClient (GBM)
-// every 5 seconds. No WebSocket, no Tradier dependency.
+// every 5 seconds. No external API dependency.
 // ---------------------------------------------------------------------------
 
 import { Program, AnchorProvider, Wallet } from "@coral-xyz/anchor";

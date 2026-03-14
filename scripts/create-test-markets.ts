@@ -51,11 +51,11 @@ import {
   MERIDIAN_PROGRAM_ID,
   MOCK_ORACLE_PROGRAM_ID,
 } from "./shared";
-import { TradierClient } from "../services/shared/src/tradier-client";
+import { createMarketDataClient } from "../services/shared/src/market-data";
 import { binaryCallPrice, probToCents } from "../services/amm-bot/src/pricer";
 import { generateQuotes } from "../services/amm-bot/src/quoter";
 
-// Fallback prices — only used if Tradier API is unavailable
+// Fallback prices — only used if market data API is unavailable
 const MAG7_FALLBACK: Record<string, number> = {
   AAPL: 198, MSFT: 420, GOOGL: 175, AMZN: 200,
   NVDA: 130, META: 600, TSLA: 250,
@@ -363,31 +363,31 @@ function toScriptMarketAddrs(addrs: MarketAddresses) {
   const usdcMint = new PublicKey(env["USDC_MINT"]);
   console.log(`USDC Mint: ${usdcMint.toBase58()}`);
 
-  // Load env vars for TradierClient (scripts don't auto-load .env into process.env)
+  // Load env vars for market data client (scripts don't auto-load .env into process.env)
   for (const [k, v] of Object.entries(env)) {
     if (!process.env[k]) process.env[k] = v;
   }
 
-  // Fetch live prices from Tradier API
+  // Fetch live prices from market data API
   const MAG7_PRICES: Record<string, number> = {};
   try {
-    const tradier = new TradierClient();
-    const quotes = await tradier.getQuotes(TICKERS);
+    const client = createMarketDataClient();
+    const quotes = await client.getQuotes(TICKERS);
     for (const q of quotes) {
       if (q.prevclose && q.prevclose > 0) {
         MAG7_PRICES[q.symbol] = q.prevclose;
-        console.log(`  ${q.symbol}: prevclose=$${q.prevclose} (live from Tradier)`);
+        console.log(`  ${q.symbol}: prevclose=$${q.prevclose} (live from Yahoo Finance)`);
       }
     }
   } catch (err: any) {
-    console.warn(`Tradier API unavailable: ${err.message?.slice(0, 80)}`);
+    console.warn(`Market data API unavailable: ${err.message?.slice(0, 80)}`);
   }
 
   // Fill in any missing tickers with fallback prices
   for (const ticker of TICKERS) {
     if (!MAG7_PRICES[ticker]) {
       MAG7_PRICES[ticker] = MAG7_FALLBACK[ticker] ?? 200;
-      console.log(`  ${ticker}: prevclose=$${MAG7_PRICES[ticker]} (fallback — Tradier unavailable)`);
+      console.log(`  ${ticker}: prevclose=$${MAG7_PRICES[ticker]} (fallback — API unavailable)`);
     }
   }
 

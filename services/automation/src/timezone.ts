@@ -195,8 +195,7 @@ export function getTodayET(): string {
 /**
  * Checks if today is a US equity trading day (Mon-Fri, not an NYSE holiday).
  *
- * First tries the Tradier market calendar API. If that fails (no key, network
- * error), falls back to the hardcoded NYSE holiday list.
+ * Uses the hardcoded NYSE holiday list (maintained through 2028).
  */
 let _cachedDayKey: string | null = null;
 let _cachedResult: boolean | null = null;
@@ -214,46 +213,6 @@ export async function isMarketDay(date: Date = new Date()): Promise<boolean> {
   }
 
   const dateStr = `${et.year}-${String(et.month).padStart(2, "0")}-${String(et.day).padStart(2, "0")}`;
-
-  // Try Tradier calendar API
-  const apiKey = process.env.TRADIER_API_KEY;
-  if (apiKey) {
-    try {
-      const monthStr = `${et.year}-${String(et.month).padStart(2, "0")}`;
-      const resp = await fetch(
-        `https://api.tradier.com/v1/markets/calendar?month=${monthStr}`,
-        {
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            Accept: "application/json",
-          },
-        },
-      );
-      if (resp.ok) {
-        const data = (await resp.json()) as {
-          calendar?: {
-            days?: { day?: Array<{ date: string; status: string }> };
-          };
-        };
-        const days = data?.calendar?.days?.day;
-        if (Array.isArray(days)) {
-          const today = days.find((d) => d.date === dateStr);
-          if (today) {
-            const apiResult = today.status === "open";
-            _cachedDayKey = dayKey;
-            _cachedResult = apiResult;
-            return apiResult;
-          }
-        }
-      }
-    } catch (err) {
-      log.warn("Tradier calendar API failed, falling back to hardcoded holidays", {
-        error: String(err),
-      });
-    }
-  }
-
-  // Fallback: hardcoded holiday list
   const result = !NYSE_HOLIDAYS.has(dateStr);
   _cachedDayKey = dayKey;
   _cachedResult = result;

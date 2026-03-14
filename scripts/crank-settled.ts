@@ -29,7 +29,7 @@ import {
   MERIDIAN_PROGRAM_ID,
   MOCK_ORACLE_PROGRAM_ID,
 } from "./shared";
-import { TradierClient } from "../services/shared/src/tradier-client";
+import { createMarketDataClient } from "../services/shared/src/market-data";
 
 const RPC_URL = process.env.RPC_URL ?? "http://127.0.0.1:8899";
 const ENV_PATH = path.resolve(__dirname, "..", ".env");
@@ -66,16 +66,16 @@ function expiryDayFromUnix(unix: number): number {
   const env = readEnv(ENV_PATH);
   const usdcMint = new PublicKey(env["USDC_MINT"]);
 
-  // Load env vars for TradierClient
+  // Load env vars for market data client
   for (const [k, v] of Object.entries(env)) {
     if (!process.env[k]) process.env[k] = v;
   }
 
-  // Fetch live prices from Tradier
+  // Fetch live prices from market data API
   const MAG7_PRICES: Record<string, number> = {};
   try {
-    const tradier = new TradierClient();
-    const quotes = await tradier.getQuotes(TICKERS);
+    const client = createMarketDataClient();
+    const quotes = await client.getQuotes(TICKERS);
     for (const q of quotes) {
       if (q.prevclose && q.prevclose > 0) MAG7_PRICES[q.symbol] = q.prevclose;
     }

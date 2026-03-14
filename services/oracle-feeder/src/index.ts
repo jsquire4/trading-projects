@@ -2,7 +2,7 @@
 // Oracle Feeder — Entry point
 //
 // Reads active tickers from on-chain GlobalConfig (or TICKERS env override),
-// then streams real-time prices from Tradier and updates mock_oracle feeds.
+// then polls prices via Yahoo Finance and updates mock_oracle feeds.
 // ---------------------------------------------------------------------------
 
 import { Program, AnchorProvider, Wallet } from "@coral-xyz/anchor";
@@ -113,7 +113,7 @@ async function main(): Promise<void> {
     : await startFeeder(tickers, connection, authority);
 
   if (isSynthetic) {
-    log.info("Running in SYNTHETIC mode — no Tradier API dependency");
+    log.info("Running in SYNTHETIC mode — no external API dependency");
   }
 
   // Graceful shutdown

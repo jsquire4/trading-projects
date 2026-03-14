@@ -3,7 +3,7 @@
 import { useRef, useState, useCallback, useEffect } from "react";
 import Link from "next/link";
 import { useWatchlist } from "@/hooks/useWatchlist";
-import { useTradierQuotes } from "@/hooks/useAnalyticsData";
+import { useQuotes } from "@/hooks/useAnalyticsData";
 import { MAG7 } from "@/lib/tickers";
 
 // ---------------------------------------------------------------------------
@@ -119,7 +119,7 @@ function AddTickerInput({ onAdd, onCancel }: AddTickerInputProps) {
     setErrorMsg("");
 
     try {
-      const res = await fetch(`/api/tradier/quotes?symbols=${encodeURIComponent(upper)}`);
+      const res = await fetch(`/api/market-data/quotes?symbols=${encodeURIComponent(upper)}`);
       if (!res.ok) {
         setStatus("error");
         setErrorMsg(`Request failed (${res.status})`);
@@ -215,7 +215,7 @@ function AddTickerInput({ onAdd, onCancel }: AddTickerInputProps) {
 
 export function WatchlistStrip() {
   const { watchlist, addTicker, removeTicker } = useWatchlist();
-  const { data: quotes = [], isLoading } = useTradierQuotes(watchlist);
+  const { data: quotes = [], isLoading } = useQuotes(watchlist);
   const [adding, setAdding] = useState(false);
 
   // Build a quick lookup map: symbol → quote data

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { computeMarketCloseUnix } from "../initializer.ts";
 
 // ---------------------------------------------------------------------------
-// Mock isMarketDay to control weekend/holiday behavior without Tradier calls
+// Mock isMarketDay to control weekend/holiday behavior
 // ---------------------------------------------------------------------------
 
 vi.mock("../../../automation/src/timezone.js", async () => {

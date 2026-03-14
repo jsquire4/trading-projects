@@ -19,7 +19,7 @@ import {
 } from "../../shared/src/pda.js";
 import { computeMarketCloseUnix } from "./initializer.js";
 import { generateVolAwareStrikes } from "./strikeSelector.js";
-import { TradierClient } from "../../shared/src/tradier-client.js";
+import { createMarketDataClient } from "../../shared/src/market-data.js";
 
 import type { Meridian } from "../../shared/src/idl/meridian.js";
 import MeridianIDL from "../../shared/src/idl/meridian.json" with { type: "json" };
@@ -75,8 +75,8 @@ async function main(): Promise<void> {
   const marketCloseUnix = computeMarketCloseUnix();
 
   // ---- Fetch previous close prices for strike calculation ------------------
-  const tradier = new TradierClient();
-  const quotes = await tradier.getQuotes(activeTickers);
+  const client = createMarketDataClient();
+  const quotes = await client.getQuotes(activeTickers);
   const quoteMap = new Map(quotes.map((q) => [q.symbol, q]));
 
   // ---- Verify each ticker's strike markets exist on-chain ------------------
@@ -96,7 +96,7 @@ async function main(): Promise<void> {
     const now = new Date();
     const startDate = new Date(now);
     startDate.setDate(startDate.getDate() - 90);
-    const bars = await tradier.getHistory(
+    const bars = await client.getHistory(
       ticker,
       "daily",
       startDate.toISOString().slice(0, 10),

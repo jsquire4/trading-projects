@@ -21,7 +21,7 @@ async function main(): Promise<void> {
   log.info(`PID: ${process.pid}`);
   log.info(`Node: ${process.version}`);
   log.info(`RPC_URL: ${process.env.RPC_URL ? "set" : "NOT SET"}`);
-  log.info(`TRADIER_API_KEY: ${process.env.TRADIER_API_KEY ? "set" : "NOT SET"}`);
+  log.info(`MARKET_DATA_SOURCE: ${process.env.MARKET_DATA_SOURCE ?? "live (Yahoo Finance)"}`);
   log.info(`ADMIN_KEYPAIR: ${process.env.ADMIN_KEYPAIR ? "set" : "NOT SET"}`);
 
   const scheduler = new Scheduler();

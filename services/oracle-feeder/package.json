@@ -9,10 +9,6 @@
     "@coral-xyz/anchor": "^0.31.1",
     "@solana/web3.js": "^1.95.0",
     "bs58": "^6.0.0",
-    "tsx": "^4.0.0",
-    "ws": "^8.18.0"
-  },
-  "devDependencies": {
-    "@types/ws": "^8.5.0"
+    "tsx": "^4.0.0"
   }
 }

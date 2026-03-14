@@ -3,12 +3,15 @@
 /**
  * Shared data-fetching hooks for analytics components.
  *
- * All analytics components use these hooks to fetch Tradier and event indexer
- * data. Built on TanStack Query for caching and deduplication.
+ * All analytics components use these hooks to fetch market data and event
+ * indexer data. Built on TanStack Query for caching and deduplication.
  */
 
 import { useQuery } from "@tanstack/react-query";
-import type { OHLCVBar, Quote, OptionsChainItem } from "@/lib/tradier-proxy";
+import type { OHLCVBar, Quote } from "@/lib/yahoo-proxy";
+
+// Re-export types for consumers
+export type { OHLCVBar, Quote };
 
 // ---------------------------------------------------------------------------
 // Event indexer types
@@ -25,19 +28,19 @@ export interface IndexedEvent {
 }
 
 // ---------------------------------------------------------------------------
-// Tradier data hooks (fetch via /api/tradier/* routes)
+// Market data hooks (fetch via /api/market-data/* routes)
 // ---------------------------------------------------------------------------
 
 /**
  * Fetch quotes for one or more tickers.
  * Polls every 30s. Data served from server-side 60s TTL cache.
  */
-export function useTradierQuotes(symbols: string[]) {
+export function useQuotes(symbols: string[]) {
   return useQuery<Quote[]>({
-    queryKey: ["tradier-quotes", [...symbols].sort().join(",")],
+    queryKey: ["market-quotes", [...symbols].sort().join(",")],
     queryFn: async () => {
       if (symbols.length === 0) return [];
-      const res = await fetch(`/api/tradier/quotes?symbols=${encodeURIComponent(symbols.join(","))}`);
+      const res = await fetch(`/api/market-data/quotes?symbols=${encodeURIComponent(symbols.join(","))}`);
       if (!res.ok) throw new Error(`Quotes fetch failed: ${res.status}`);
       return res.json();
     },
@@ -51,9 +54,9 @@ export function useTradierQuotes(symbols: string[]) {
  * Fetch OHLCV history for a symbol (default: last 365 days).
  * Cached for 5 minutes — historical data doesn't change intraday.
  */
-export function useTradierHistory(symbol: string | null, days: number = 365) {
+export function useHistory(symbol: string | null, days: number = 365) {
   return useQuery<OHLCVBar[]>({
-    queryKey: ["tradier-history", symbol, days],
+    queryKey: ["market-history", symbol, days],
     queryFn: async () => {
       if (!symbol) return [];
       const end = new Date();
@@ -62,7 +65,7 @@ export function useTradierHistory(symbol: string | null, days: number = 365) {
       const startStr = start.toISOString().split("T")[0];
       const endStr = end.toISOString().split("T")[0];
       const res = await fetch(
-        `/api/tradier/history?symbol=${encodeURIComponent(symbol)}&start=${encodeURIComponent(startStr)}&end=${encodeURIComponent(endStr)}`,
+        `/api/market-data/history?symbol=${encodeURIComponent(symbol)}&start=${encodeURIComponent(startStr)}&end=${encodeURIComponent(endStr)}`,
       );
       if (!res.ok) throw new Error(`History fetch failed: ${res.status}`);
       return res.json();
@@ -70,54 +73,6 @@ export function useTradierHistory(symbol: string | null, days: number = 365) {
     enabled: !!symbol,
     staleTime: 5 * 60_000,
     refetchInterval: 5 * 60_000,
-  });
-}
-
-/**
- * Options chain result including the expiration date used.
- */
-export interface OptionsResult {
-  chain: OptionsChainItem[];
-  expiration: string | null;
-}
-
-/**
- * Fetch available expiration dates for a symbol.
- */
-export function useTradierExpirations(symbol: string | null) {
-  return useQuery<string[]>({
-    queryKey: ["tradier-expirations", symbol],
-    queryFn: async () => {
-      if (!symbol) return [];
-      const res = await fetch(`/api/tradier/expirations?symbol=${encodeURIComponent(symbol)}`);
-      if (!res.ok) throw new Error(`Expirations fetch failed: ${res.status}`);
-      return res.json();
-    },
-    enabled: !!symbol,
-    staleTime: 5 * 60_000,
-  });
-}
-
-/**
- * Fetch options chain for a symbol.
- * If no expiration specified, tries today (0DTE) first, then falls back to nearest.
- */
-export function useTradierOptions(symbol: string | null, expiration?: string | null) {
-  return useQuery<OptionsResult>({
-    queryKey: ["tradier-options", symbol, expiration ?? "auto"],
-    queryFn: async () => {
-      if (!symbol) return { chain: [], expiration: null };
-      let url = `/api/tradier/options?symbol=${encodeURIComponent(symbol)}`;
-      if (expiration) url += `&expiration=${encodeURIComponent(expiration)}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`Options fetch failed: ${res.status}`);
-      const exp = res.headers.get("X-Expiration");
-      const chain = await res.json();
-      return { chain: Array.isArray(chain) ? chain : [], expiration: exp };
-    },
-    enabled: !!symbol,
-    staleTime: 60_000,
-    refetchInterval: 60_000,
   });
 }
 

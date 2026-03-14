@@ -3,7 +3,7 @@ import { getHistory } from "@/lib/market-data-proxy";
 
 export async function GET(req: NextRequest) {
   const symbol = req.nextUrl.searchParams.get("symbol");
-  if (!symbol || !/^[A-Z]{1,10}$/.test(symbol.toUpperCase())) {
+  if (!symbol || !/^[A-Z][A-Z0-9.\-]{0,9}$/.test(symbol.toUpperCase())) {
     return NextResponse.json({ error: "Valid symbol parameter required" }, { status: 400 });
   }
 

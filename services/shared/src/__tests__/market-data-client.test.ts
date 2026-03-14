@@ -25,20 +25,18 @@ describe("createMarketDataClient", () => {
     expect(client.constructor.name).toBe("SyntheticClient");
   });
 
-  it("returns TradierClient when MARKET_DATA_SOURCE=live", async () => {
+  it("returns YahooClient when MARKET_DATA_SOURCE=live", async () => {
     process.env.MARKET_DATA_SOURCE = "live";
-    process.env.TRADIER_API_KEY = "test-key-123";
     const { createMarketDataClient } = await import("../market-data.js");
     const client = createMarketDataClient();
-    expect(client.constructor.name).toBe("TradierClient");
+    expect(client.constructor.name).toBe("YahooClient");
   });
 
-  it("returns TradierClient when MARKET_DATA_SOURCE is unset", async () => {
+  it("returns YahooClient when MARKET_DATA_SOURCE is unset", async () => {
     delete process.env.MARKET_DATA_SOURCE;
-    process.env.TRADIER_API_KEY = "test-key-123";
     const { createMarketDataClient } = await import("../market-data.js");
     const client = createMarketDataClient();
-    expect(client.constructor.name).toBe("TradierClient");
+    expect(client.constructor.name).toBe("YahooClient");
   });
 
   it("SyntheticClient uses SYNTHETIC_SEED env var", async () => {
@@ -63,20 +61,6 @@ describe("createMarketDataClient", () => {
     const qA = await clientA.getQuotes(["AAPL"]);
     const qB = await clientB.getQuotes(["AAPL"]);
     expect(qA).toEqual(qB);
-  });
-
-  it("TradierClient throws without API key", async () => {
-    process.env.MARKET_DATA_SOURCE = "live";
-    delete process.env.TRADIER_API_KEY;
-    const { createMarketDataClient } = await import("../market-data.js");
-    expect(() => createMarketDataClient()).toThrow("Tradier API key is required");
-  });
-
-  it("passes options through to TradierClient", async () => {
-    process.env.MARKET_DATA_SOURCE = "live";
-    const { createMarketDataClient } = await import("../market-data.js");
-    const client = createMarketDataClient({ apiKey: "custom-key", sandbox: true });
-    expect(client.constructor.name).toBe("TradierClient");
   });
 
   it("IMarketDataClient interface is satisfied by both implementations", async () => {

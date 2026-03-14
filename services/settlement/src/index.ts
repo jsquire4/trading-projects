@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Settlement Service — one-shot job, triggered ~4:05 PM ET
 //
-// 1. Fetch closing prices from Tradier
+// 1. Fetch closing prices from market data client
 // 2. Update mock oracle price feeds
 // 3. Settle all expired, unsettled markets (with oracle retry)
 // 4. Crank cancel resting orders on settled markets
@@ -38,7 +38,7 @@ import { initializeMarkets } from "../../market-initializer/src/initializer.js";
 const log = createLogger("settlement");
 
 // ---------------------------------------------------------------------------
-// Step 1: Fetch closing prices from Tradier
+// Step 1: Fetch closing prices from market data API
 // ---------------------------------------------------------------------------
 
 async function fetchClosingPrices(
@@ -71,7 +71,7 @@ async function fetchClosingPrices(
   const returned = new Set(quotes.map((q) => q.symbol));
   const notReturned = tickers.filter((t) => !returned.has(t));
   if (notReturned.length > 0) {
-    log.error(`Tradier returned no quote for: ${notReturned.join(", ")}. These tickers will be skipped.`);
+    log.error(`Market data API returned no quote for: ${notReturned.join(", ")}. These tickers will be skipped.`);
   }
 
   return prices;

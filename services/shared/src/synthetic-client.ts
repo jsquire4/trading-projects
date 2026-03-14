@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Synthetic Market Data Client
 //
-// Drop-in replacement for TradierClient that generates deterministic market
+// Drop-in replacement for YahooClient that generates deterministic market
 // data using geometric Brownian motion. No external API calls.
 //
 // Used when MARKET_DATA_SOURCE=synthetic for development/testing when
@@ -14,9 +14,8 @@ import type {
   MarketClock,
   CalendarDay,
   OptionsChainItem,
-} from "./tradier-client";
-
-import type { IMarketDataClient } from "./market-data";
+  IMarketDataClient,
+} from "./market-data";
 
 import {
   BASE_PRICES,

@@ -33,7 +33,7 @@ import {
   MERIDIAN_PROGRAM_ID,
   MOCK_ORACLE_PROGRAM_ID,
 } from "./shared";
-import { TradierClient } from "../services/shared/src/tradier-client";
+import { createMarketDataClient } from "../services/shared/src/market-data";
 import { binaryCallPrice, probToCents } from "../services/amm-bot/src/pricer";
 import { generateQuotes } from "../services/amm-bot/src/quoter";
 
@@ -96,22 +96,22 @@ function expiryDayFromUnix(unix: number): number {
   const marketCloseUnix = todayMarketCloseUnix();
   const expiryDay = expiryDayFromUnix(marketCloseUnix);
 
-  // Load env vars for TradierClient
+  // Load env vars for market data client
   for (const [k, v] of Object.entries(env)) {
     if (!process.env[k]) process.env[k] = v;
   }
 
-  // Fetch live prices from Tradier
+  // Fetch live prices from market data API
   const MAG7_PRICES: Record<string, number> = {};
   try {
-    const tradier = new TradierClient();
-    const quotes = await tradier.getQuotes(TICKERS);
+    const client = createMarketDataClient();
+    const quotes = await client.getQuotes(TICKERS);
     for (const q of quotes) {
       if (q.prevclose && q.prevclose > 0) MAG7_PRICES[q.symbol] = q.prevclose;
     }
     console.log(`Fetched live prices for ${Object.keys(MAG7_PRICES).length} tickers`);
   } catch (err: any) {
-    console.warn(`Tradier API unavailable: ${err.message?.slice(0, 80)}`);
+    console.warn(`Market data API unavailable: ${err.message?.slice(0, 80)}`);
   }
   for (const ticker of TICKERS) {
     if (!MAG7_PRICES[ticker]) {

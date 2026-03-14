@@ -3,7 +3,7 @@
 /**
  * HistoricalOverlay — Daily return distribution histogram with normal curve overlay.
  *
- * Fetches 1 year of OHLCV history from Tradier, computes daily (or weekly)
+ * Fetches 1 year of OHLCV history, computes daily (or weekly)
  * percentage returns, buckets them into a histogram, fits a normal distribution,
  * and projects forward from the current price using the mean return.
  */
@@ -21,7 +21,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
-import { useTradierHistory } from "@/hooks/useAnalyticsData";
+import { useHistory } from "@/hooks/useAnalyticsData";
 import {
   COLORS,
   AXIS_STYLE,
@@ -97,7 +97,7 @@ export function HistoricalOverlay({
   currentPrice,
 }: HistoricalOverlayProps) {
   const [period, setPeriod] = useState<Period>("daily");
-  const { data: history, isLoading, isError } = useTradierHistory(ticker, 365);
+  const { data: history, isLoading, isError } = useHistory(ticker, 365);
 
   // Compute returns
   const returns = useMemo(() => {

@@ -3,14 +3,11 @@
 import { Component, type ReactNode, useState, useRef, useCallback, useEffect } from "react";
 import Link from "next/link";
 import { useMarkets } from "@/hooks/useMarkets";
-import { OptionsComparison } from "@/components/analytics/OptionsComparison";
-import { OptionsChainTable } from "@/components/analytics/OptionsChainTable";
 import { HistoricalOverlay } from "@/components/analytics/HistoricalOverlay";
 import { SettlementAnalytics } from "@/components/analytics/SettlementAnalytics";
-import { GreeksDisplay } from "@/components/analytics/GreeksDisplay";
 import { PriceHistory } from "@/components/analytics/PriceHistory";
 import { TickerButton } from "@/components/analytics/TickerButton";
-import { useTradierQuotes } from "@/hooks/useAnalyticsData";
+import { useQuotes } from "@/hooks/useAnalyticsData";
 import { MAG7 } from "@/lib/tickers";
 
 // ---------------------------------------------------------------------------
@@ -79,11 +76,7 @@ function CollapsibleSection({
 }
 
 // ---------------------------------------------------------------------------
-// Page
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Inline ticker search (validates against Tradier)
+// Inline ticker search (validates via market data API)
 // ---------------------------------------------------------------------------
 
 function TickerSearch({ onSelect, onCancel }: { onSelect: (ticker: string) => void; onCancel: () => void }) {
@@ -103,7 +96,7 @@ function TickerSearch({ onSelect, onCancel }: { onSelect: (ticker: string) => vo
     setErrorMsg("");
 
     try {
-      const res = await fetch(`/api/tradier/quotes?symbols=${encodeURIComponent(upper)}`);
+      const res = await fetch(`/api/market-data/quotes?symbols=${encodeURIComponent(upper)}`);
       if (!res.ok) {
         setStatus("error");
         setErrorMsg(`Lookup failed (${res.status})`);
@@ -159,13 +152,12 @@ function TickerSearch({ onSelect, onCancel }: { onSelect: (ticker: string) => vo
 
 export default function AnalyticsPage() {
   const [selectedTicker, setSelectedTicker] = useState<string>(MAG7[0]);
-  const [selectedExpiration, setSelectedExpiration] = useState<string | null>(null);
   const [extraTickers, setExtraTickers] = useState<string[]>([]);
   const [searching, setSearching] = useState(false);
   const { data: markets } = useMarkets();
 
   const allTickers = [...MAG7, ...extraTickers];
-  const { data: quotes, isLoading: quotesLoading } = useTradierQuotes(allTickers);
+  const { data: quotes, isLoading: quotesLoading } = useQuotes(allTickers);
 
   const tickerMarkets = (markets ?? []).filter(
     (m) => m.ticker.toUpperCase() === selectedTicker.toUpperCase(),
@@ -196,7 +188,7 @@ export default function AnalyticsPage() {
               ticker={t}
               quote={quotes?.find((q) => q.symbol === t)}
               isSelected={t === selectedTicker}
-              onSelect={() => { setSelectedTicker(t); setSelectedExpiration(null); }}
+              onSelect={() => { setSelectedTicker(t); }}
             />
           ))}
 
@@ -211,10 +203,10 @@ export default function AnalyticsPage() {
                   ticker={t}
                   quote={quotes?.find((q) => q.symbol === t)}
                   isSelected={t === selectedTicker}
-                  onSelect={() => { setSelectedTicker(t); setSelectedExpiration(null); }}
+                  onSelect={() => { setSelectedTicker(t); }}
                   onRemove={() => {
                     setExtraTickers((prev) => prev.filter((x) => x !== t));
-                    if (selectedTicker === t) { setSelectedTicker(MAG7[0]); setSelectedExpiration(null); }
+                    if (selectedTicker === t) { setSelectedTicker(MAG7[0]); }
                   }}
                 />
               ))}
@@ -228,7 +220,6 @@ export default function AnalyticsPage() {
               onSelect={(ticker) => {
                 if (!allTickers.includes(ticker)) setExtraTickers((prev) => [...prev, ticker]);
                 setSelectedTicker(ticker);
-                setSelectedExpiration(null);
                 setSearching(false);
               }}
               onCancel={() => setSearching(false)}
@@ -386,27 +377,6 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
-      {/* ── Options Chain + Greeks ─────────────────────────────────────── */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <div className="xl:col-span-2 bg-white/5 rounded-xl p-4 sm:p-6 border border-white/10 card-accent-blue">
-          <h2 className="text-lg font-semibold mb-4">Options Chain</h2>
-          <AnalyticsErrorBoundary title="Options Chain">
-            <OptionsChainTable
-              ticker={selectedTicker}
-              selectedExpiration={selectedExpiration}
-              onExpirationChange={(exp) => setSelectedExpiration(exp)}
-            />
-          </AnalyticsErrorBoundary>
-        </div>
-
-        <div className="bg-white/5 rounded-xl p-4 sm:p-6 border border-white/10 card-accent-purple">
-          <h2 className="text-lg font-semibold mb-4">Greeks</h2>
-          <AnalyticsErrorBoundary title="Greeks">
-            <GreeksDisplay ticker={selectedTicker} selectedExpiration={selectedExpiration} />
-          </AnalyticsErrorBoundary>
-        </div>
-      </div>
-
       {/* ── Return Distribution (full width) ──────────────────────────── */}
       <div className="bg-white/5 rounded-xl p-4 sm:p-6 border border-white/10 card-accent-purple">
         <h2 className="text-lg font-semibold mb-4">Return Distribution</h2>
@@ -418,13 +388,7 @@ export default function AnalyticsPage() {
         </AnalyticsErrorBoundary>
       </div>
 
-      {/* ── Advanced (collapsible) ────────────────────────────────────── */}
-      <CollapsibleSection title="Delta Comparison (Market vs Black-Scholes)">
-        <AnalyticsErrorBoundary title="Options Comparison">
-          <OptionsComparison ticker={selectedTicker} markets={tickerMarkets} />
-        </AnalyticsErrorBoundary>
-      </CollapsibleSection>
-
+      {/* ── Settlement History (collapsible) ───────────────────────────── */}
       <CollapsibleSection title="Settlement History">
         <AnalyticsErrorBoundary title="Settlement Analytics">
           <SettlementAnalytics />

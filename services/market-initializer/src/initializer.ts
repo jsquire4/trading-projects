@@ -2,7 +2,7 @@
 // Market Initializer — core logic
 //
 // For each active ticker:
-//   1. Fetch previous close from Tradier
+//   1. Fetch previous close from market data client
 //   2. Calculate strikes (±3/6/9%, $10 rounding)
 //   3. Compute today's 4:00 PM ET close timestamp (DST-aware)
 //   4. For each strike, idempotently create on-chain market + ALT

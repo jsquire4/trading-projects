@@ -152,7 +152,7 @@ info "Starting services pointed at local validator..."
 export NEXT_PUBLIC_RPC_URL="$LOCAL_RPC"
 export NEXT_PUBLIC_SOLANA_RPC_URL="$LOCAL_RPC"
 
-# Source .env for USDC_MINT, TRADIER keys, etc.
+# Source .env for USDC_MINT, admin keys, etc.
 set -a
 source "$ENV_FILE"
 set +a

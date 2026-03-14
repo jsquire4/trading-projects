@@ -1,15 +1,14 @@
 // ---------------------------------------------------------------------------
 // Oracle Feeder — Core logic
 //
-// Streams real-time stock prices from Tradier and pushes them on-chain
-// to the mock_oracle PriceFeed accounts.
+// Polls real-time stock prices via the market data client (Yahoo Finance or
+// synthetic) and pushes them on-chain to mock_oracle PriceFeed accounts.
 // ---------------------------------------------------------------------------
 
 import { Program, AnchorProvider, Wallet } from "@coral-xyz/anchor";
 import BN from "bn.js";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
-import WebSocket from "ws";
-import { TradierClient } from "../../shared/src/tradier-client.js";
+import { createMarketDataClient, type IMarketDataClient } from "../../shared/src/market-data.js";
 import { createLogger } from "../../shared/src/alerting.js";
 import { findPriceFeed } from "../../shared/src/pda.js";
 import type { MockOracle } from "../../shared/src/idl/mock_oracle.js";
@@ -17,10 +16,11 @@ import MockOracleIDL from "../../shared/src/idl/mock_oracle.json" with { type: "
 
 const log = createLogger("oracle-feeder");
 
-const TRADIER_WS_URL = "wss://ws.tradier.com/v1/markets/events";
-
 // Rate limit: max 1 update per ticker per 5 seconds
 const RATE_LIMIT_MS = 5_000;
+
+// Poll interval (configurable via env)
+const POLL_INTERVAL_MS = parseInt(process.env.ORACLE_POLL_INTERVAL_MS ?? "10000", 10);
 
 // Retry config
 const MAX_RETRIES = 3;
@@ -45,7 +45,7 @@ async function sleepMs(ms: number): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export interface FeederHandle {
-  /** Gracefully shut down the streaming connection. */
+  /** Gracefully shut down the polling loop. */
   stop(): void;
 }
 
@@ -79,14 +79,9 @@ export async function startFeeder(
   // Rate-limit tracking: last update timestamp per ticker
   const lastUpdate = new Map<string, number>();
 
-  // Tradier client for session creation AND REST fallback
-  const tradierClient = new TradierClient();
+  // Market data client (Yahoo Finance or synthetic)
+  const client: IMarketDataClient = createMarketDataClient();
 
-  let ws: WebSocket | null = null;
-  let stopped = false;
-  let connecting = false;
-  let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
-  let reconnectDelay = 1_000; // exponential backoff: 1s, 2s, 4s, ... max 60s
   let pollInterval: ReturnType<typeof setInterval> | null = null;
 
   // ------ On-chain update with retry ------
@@ -140,11 +135,11 @@ export async function startFeeder(
     }
   }
 
-  // ------ REST-based price fetch (initial seed + polling fallback) ------
+  // ------ REST-based price fetch ------
 
   async function fetchAndUpdateViaREST(): Promise<void> {
     try {
-      const quotes = await tradierClient.getQuotes(tickers);
+      const quotes = await client.getQuotes(tickers);
       for (const q of quotes) {
         if (q.last > 0) {
           await updateOnChain(q.symbol, q.last);
@@ -160,98 +155,15 @@ export async function startFeeder(
   log.info("Seeding initial prices via REST API...");
   await fetchAndUpdateViaREST();
 
-  // Poll every 30s as a fallback when WebSocket is idle (e.g. outside market hours)
+  // Poll at configured interval
+  log.info(`Starting REST poll loop (interval: ${POLL_INTERVAL_MS}ms)`);
   pollInterval = setInterval(() => {
     fetchAndUpdateViaREST().catch(() => {});
-  }, 30_000);
-
-  // ------ WebSocket streaming ------
-
-  async function connect(): Promise<void> {
-    if (stopped || connecting) return;
-    connecting = true;
-
-    try {
-      let sessionId: string;
-      try {
-        sessionId = await tradierClient.createStreamSession();
-        log.info("Created Tradier streaming session");
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.error("Failed to create stream session, retrying in 10s", {
-          error: msg,
-        });
-        reconnectTimeout = setTimeout(() => connect(), 10_000);
-        return;
-      }
-
-      ws = new WebSocket(TRADIER_WS_URL);
-
-      ws.on("open", () => {
-        reconnectDelay = 1_000; // reset backoff on successful connection
-        log.info(`WebSocket connected, subscribing to: ${tickers.join(", ")}`);
-        ws!.send(
-          JSON.stringify({
-            symbols: tickers,
-            sessionid: sessionId,
-            filter: ["trade"],
-          }),
-        );
-      });
-
-      ws.on("message", (data: WebSocket.Data) => {
-        try {
-          const raw = data.toString();
-          // Tradier sends newline-delimited JSON
-          for (const line of raw.split("\n")) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-
-            const msg = JSON.parse(trimmed);
-
-            // Trade events have type "trade"
-            if (msg.type === "trade" && msg.symbol && typeof msg.price === "number") {
-              updateOnChain(msg.symbol, msg.price).catch((err) => {
-                log.error(`Unhandled updateOnChain error for ${msg.symbol}`, {
-                  error: err instanceof Error ? err.message : String(err),
-                });
-              });
-            }
-          }
-        } catch {
-          // Ignore parse errors on heartbeats or malformed messages
-        }
-      });
-
-      ws.on("close", (code: number) => {
-        if (stopped) return;
-        log.warn(`WebSocket closed (code ${code}), reconnecting in ${reconnectDelay / 1000}s`);
-        reconnectTimeout = setTimeout(() => connect(), reconnectDelay);
-        reconnectDelay = Math.min(reconnectDelay * 2, 60_000); // exponential backoff, cap 60s
-      });
-
-      ws.on("error", (err: Error) => {
-        log.error("WebSocket error", { error: err.message });
-        // close handler will trigger reconnect
-      });
-    } finally {
-      connecting = false;
-    }
-  }
-
-  // Start the connection
-  await connect();
+  }, POLL_INTERVAL_MS);
 
   return {
     stop() {
-      stopped = true;
-      if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (pollInterval) clearInterval(pollInterval);
-      if (ws) {
-        ws.removeAllListeners();
-        ws.close();
-        ws = null;
-      }
       log.info("Feeder stopped");
     },
   };

@@ -4,5 +4,8 @@
   "type": "module",
   "devDependencies": {
     "vitest": "^2.1.9"
+  },
+  "dependencies": {
+    "yahoo-finance2": "^3.13.2"
   }
 }

@@ -23,7 +23,8 @@
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "recharts": "^3.8.0",
-    "sonner": "^1.5.0"
+    "sonner": "^1.5.0",
+    "yahoo-finance2": "^3.13.2"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.1",

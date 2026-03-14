@@ -39,6 +39,8 @@ import {
   buildCleanupMarketIx,
   buildCrankRedeemIx,
   buildUpdatePriceIx,
+  buildUpdateFeeBpsIx,
+  buildUpdateStrikeCreationFeeIx,
   padTicker,
 } from "../../tests/helpers/instructions";
 
@@ -672,6 +674,33 @@ async function act1PauseUnpause(
     details.push("Order placed successfully after unpause");
   } catch (e: any) {
     recordError(errors, agent.id, "post_unpause_order", e.message, m.ticker);
+  }
+
+  // Update fee BPS (set to current value — exercises the instruction without side effects)
+  try {
+    const updateFeeIx = buildUpdateFeeBpsIx({
+      admin: admin.publicKey,
+      config: configPda,
+      newFeeBps: 50, // default fee
+    });
+    await sendTx(connection, new Transaction().add(updateFeeIx), [admin]);
+    track(ctx, "update_fee_bps");
+    details.push("Updated fee BPS");
+  } catch (e: any) {
+    recordError(errors, -1, "update_fee_bps", e.message);
+  }
+
+  // Update strike creation fee
+  try {
+    const updateStrikeFeeIx = buildUpdateStrikeCreationFeeIx(
+      { admin: admin.publicKey, config: configPda },
+      new BN(0),
+    );
+    await sendTx(connection, new Transaction().add(updateStrikeFeeIx), [admin]);
+    track(ctx, "update_strike_creation_fee");
+    details.push("Updated strike creation fee");
+  } catch (e: any) {
+    recordError(errors, -1, "update_strike_creation_fee", e.message);
   }
 }
 

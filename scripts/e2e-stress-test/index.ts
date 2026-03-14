@@ -157,8 +157,8 @@ function buildAcceptanceCriteria(
   return [
     {
       id: "AC-01",
-      description: ">= 18 instruction types exercised",
-      passed: instructionCount >= 18,
+      description: ">= 22 instruction types exercised",
+      passed: instructionCount >= 22,
       actual: `${instructionCount} types`,
     },
     {

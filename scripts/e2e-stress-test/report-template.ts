@@ -55,24 +55,35 @@ function fmtDuration(ms: number): string {
 // ─── Known instruction names for coverage checklist ───────────────────────────
 
 const KNOWN_INSTRUCTIONS = [
-  "initialize",
+  // Setup
+  "initialize_config",
+  "initialize_feed",
+  // Market lifecycle
+  "allocate_order_book",
   "create_strike_market",
-  "set_oracle_price",
+  "set_market_alt",
+  // Trading
   "mint_pair",
   "place_order",
   "cancel_order",
+  "update_price",
+  // Admin
+  "pause",
+  "unpause",
+  "update_fee_bps",
+  "update_strike_creation_fee",
+  // Settlement
   "settle_market",
-  "redeem_tokens",
+  "admin_settle",
+  "admin_override_settlement",
+  // Redemption
+  "redeem",
+  "crank_cancel",
+  "crank_redeem",
+  // Cleanup
   "close_market",
-  "pause_market",
-  "unpause_market",
-  "merge_tokens",
-  "override_settlement",
-  "create_alt",
-  "extend_alt",
-  "update_config",
-  "withdraw_fees",
-  "crank_expired",
+  "treasury_redeem",
+  "cleanup_market",
 ];
 
 // ─── Main render ──────────────────────────────────────────────────────────────

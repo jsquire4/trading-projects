@@ -214,7 +214,7 @@ export async function setupTestEnvironment(config: RunConfig): Promise<SharedCon
     },
     fillRate: 0,
     mergeCount: 0,
-    instructionTypes: new Set(),
+    instructionTypes: new Set(["initialize_config", "initialize_feed"]),
   };
 
   // 10. Assemble SharedContext

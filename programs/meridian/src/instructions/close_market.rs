@@ -60,6 +60,14 @@ pub struct CloseMarket<'info> {
     )]
     pub treasury: Box<Account<'info, TokenAccount>>,
 
+    /// CHECK: SOL Treasury PDA — receives SOL lamports from closed accounts.
+    /// Validated via config.sol_treasury.
+    #[account(
+        mut,
+        constraint = sol_treasury.key() == config.sol_treasury @ MeridianError::InvalidVault,
+    )]
+    pub sol_treasury: UncheckedAccount<'info>,
+
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
@@ -123,31 +131,32 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
         )?;
     }
 
-    // Close token accounts (rent lamports go to admin for now — GROUP 4 redirects to SOL Treasury)
-    let accounts_to_close: Vec<(AccountInfo<'_>, AccountInfo<'_>)> = vec![
-        (ctx.accounts.usdc_vault.to_account_info(), ctx.accounts.admin.to_account_info()),
-        (ctx.accounts.escrow_vault.to_account_info(), ctx.accounts.admin.to_account_info()),
-        (ctx.accounts.yes_escrow.to_account_info(), ctx.accounts.admin.to_account_info()),
-        (ctx.accounts.no_escrow.to_account_info(), ctx.accounts.admin.to_account_info()),
+    // Close token accounts — rent lamports go to SOL Treasury
+    let sol_treasury_ai = ctx.accounts.sol_treasury.to_account_info();
+    let accounts_to_close: Vec<AccountInfo<'_>> = vec![
+        ctx.accounts.usdc_vault.to_account_info(),
+        ctx.accounts.escrow_vault.to_account_info(),
+        ctx.accounts.yes_escrow.to_account_info(),
+        ctx.accounts.no_escrow.to_account_info(),
     ];
 
-    for (account, destination) in accounts_to_close {
+    for account in accounts_to_close {
         token::close_account(CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             CloseAccount {
                 account: account.clone(),
-                destination,
+                destination: sol_treasury_ai.clone(),
                 authority: ctx.accounts.market.to_account_info(),
             },
             signer_seeds,
         ))?;
     }
 
-    // Drain OrderBook lamports (to admin for now — GROUP 4 redirects to SOL Treasury)
-    drain_lamports(&ctx.accounts.order_book.to_account_info(), &ctx.accounts.admin.to_account_info())?;
+    // Drain OrderBook lamports to SOL Treasury
+    drain_lamports(&ctx.accounts.order_book.to_account_info(), &sol_treasury_ai)?;
 
-    // Drain StrikeMarket lamports
-    drain_lamports(&ctx.accounts.market.to_account_info(), &ctx.accounts.admin.to_account_info())?;
+    // Drain StrikeMarket lamports to SOL Treasury
+    drain_lamports(&ctx.accounts.market.to_account_info(), &sol_treasury_ai)?;
 
     msg!(
         "Market closed: market={}, 6 accounts closed (mints remain with 0 supply)",

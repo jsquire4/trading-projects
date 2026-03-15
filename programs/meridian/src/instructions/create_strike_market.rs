@@ -135,6 +135,11 @@ pub struct CreateStrikeMarket<'info> {
     /// CHECK: Validated in handler via PDA derivation.
     pub ticker_registry: Option<UncheckedAccount<'info>>,
 
+    /// CHECK: SOL Treasury PDA — reimburses admin-created markets.
+    /// Validated via config.sol_treasury in handler.
+    #[account(mut)]
+    pub sol_treasury: Option<UncheckedAccount<'info>>,
+
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
@@ -316,6 +321,61 @@ pub fn handle_create_strike_market(
     {
         let mut ob_data = ob_info.try_borrow_mut_data()?;
         init_sparse_book(&mut ob_data, &market.key(), ob_bump);
+    }
+
+    // Reimburse admin-created markets from SOL Treasury
+    // Creator pays upfront (Anchor init), Treasury pays back what it can.
+    let creator_key = ctx.accounts.creator.key();
+    if creator_key == config.admin {
+        if let Some(ref sol_treasury_info) = ctx.accounts.sol_treasury {
+            // Validate SOL Treasury PDA
+            require!(
+                sol_treasury_info.key() == config.sol_treasury,
+                MeridianError::InvalidVault
+            );
+
+            let treasury_balance = sol_treasury_info.lamports();
+            let rent = Rent::get()?;
+            let treasury_min = rent.minimum_balance(0); // keep rent-exempt
+            let reserve = config.operating_reserve;
+            let floor = treasury_min.saturating_add(reserve);
+
+            if treasury_balance > floor {
+                // Compute total rent paid by creator for all 8 accounts
+                let market_rent = rent.minimum_balance(8 + StrikeMarket::LEN);
+                let mint_rent = rent.minimum_balance(82); // SPL Mint size
+                let token_acct_rent = rent.minimum_balance(165); // SPL TokenAccount size
+                let ob_rent = rent.minimum_balance(HEADER_SIZE);
+                let total_rent = market_rent + 2 * mint_rent + 4 * token_acct_rent + ob_rent;
+
+                let available = treasury_balance - floor;
+                let reimburse = total_rent.min(available);
+
+                if reimburse > 0 {
+                    // Transfer from SOL Treasury to creator (config PDA signs)
+                    let config_bump = config.bump;
+                    let config_seeds: &[&[u8]] = &[
+                        GlobalConfig::SEED_PREFIX,
+                        &[config_bump],
+                    ];
+
+                    // SOL Treasury is program-owned, transfer via direct lamport manipulation
+                    **sol_treasury_info.try_borrow_mut_lamports()? = sol_treasury_info
+                        .lamports()
+                        .checked_sub(reimburse)
+                        .ok_or(MeridianError::ArithmeticOverflow)?;
+                    **ctx.accounts.creator.try_borrow_mut_lamports()? = ctx.accounts.creator
+                        .lamports()
+                        .checked_add(reimburse)
+                        .ok_or(MeridianError::ArithmeticOverflow)?;
+
+                    // Suppress unused variable warning for config_seeds
+                    let _ = config_seeds;
+
+                    msg!("Treasury reimbursed {} lamports to admin for market creation", reimburse);
+                }
+            }
+        }
     }
 
     let ticker_str = std::str::from_utf8(&ticker)

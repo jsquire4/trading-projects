@@ -182,8 +182,8 @@ pub mod meridian {
         instructions::withdraw_fees::handle_withdraw_fees(ctx)
     }
 
-    pub fn withdraw_treasury(ctx: Context<WithdrawTreasury>, amount: u64) -> Result<()> {
-        instructions::withdraw_treasury::handle_withdraw_treasury(ctx, amount)
+    pub fn withdraw_treasury(ctx: Context<WithdrawTreasury>, amount: u64, mode: u8) -> Result<()> {
+        instructions::withdraw_treasury::handle_withdraw_treasury(ctx, amount, mode)
     }
 
     pub fn update_config(

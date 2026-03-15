@@ -9,10 +9,11 @@ use fill_processor::{process_fills, FillContext};
 use stats::update_market_stats;
 
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
+use anchor_spl::token::{self, Burn, Mint, Token, TokenAccount, Transfer};
 
 use crate::error::MeridianError;
 use crate::matching::engine::{match_against_book, place_resting_order, MatchResult, PlaceError};
+use crate::state::events::AutoPairBurnEvent;
 use crate::state::order_book::*;
 use crate::state::{GlobalConfig, StrikeMarket};
 
@@ -123,26 +124,91 @@ pub fn handle_place_order<'info>(
         MeridianError::InvalidOrderBook
     );
 
-    // Position constraints with reload()
+    // --- Build signer seeds (needed for auto pair-burn and escrow) ---
+    let market = &ctx.accounts.market;
+    let market_key = market.key();
+    market_signer_seeds!(market => strike_bytes, expiry_bytes, bump_byte, seeds, signer_seeds);
+
+    // Reload ATAs for fresh balances
+    ctx.accounts.user_yes_ata.reload()?;
+    ctx.accounts.user_no_ata.reload()?;
+
+    // Auto pair-burn: if user holds both Yes and No, auto-burn min(yes, no) pairs
+    {
+        let yes_bal = ctx.accounts.user_yes_ata.amount;
+        let no_bal = ctx.accounts.user_no_ata.amount;
+        let burn_qty = yes_bal.min(no_bal);
+        if burn_qty > 0 {
+            // Burn Yes tokens
+            token::burn(
+                CpiContext::new(
+                    ctx.accounts.token_program.to_account_info(),
+                    Burn {
+                        mint: ctx.accounts.yes_mint.to_account_info(),
+                        from: ctx.accounts.user_yes_ata.to_account_info(),
+                        authority: ctx.accounts.user.to_account_info(),
+                    },
+                ),
+                burn_qty,
+            )?;
+            // Burn No tokens
+            token::burn(
+                CpiContext::new(
+                    ctx.accounts.token_program.to_account_info(),
+                    Burn {
+                        mint: ctx.accounts.no_mint.to_account_info(),
+                        from: ctx.accounts.user_no_ata.to_account_info(),
+                        authority: ctx.accounts.user.to_account_info(),
+                    },
+                ),
+                burn_qty,
+            )?;
+            // Return USDC from vault
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from: ctx.accounts.usdc_vault.to_account_info(),
+                        to: ctx.accounts.user_usdc_ata.to_account_info(),
+                        authority: ctx.accounts.market.to_account_info(),
+                    },
+                    signer_seeds,
+                ),
+                burn_qty,
+            )?;
+
+            emit!(AutoPairBurnEvent {
+                user: ctx.accounts.user.key(),
+                market: market_key,
+                quantity: burn_qty,
+            });
+
+            msg!(
+                "Auto pair-burn: user={}, market={}, quantity={}",
+                ctx.accounts.user.key(),
+                market_key,
+                burn_qty,
+            );
+
+            // Reload ATAs after burn
+            ctx.accounts.user_yes_ata.reload()?;
+            ctx.accounts.user_no_ata.reload()?;
+        }
+    }
+
+    // Position constraints (after auto pair-burn)
     if side == SIDE_USDC_BID {
-        ctx.accounts.user_no_ata.reload()?;
         require!(
             ctx.accounts.user_no_ata.amount == 0,
             MeridianError::ConflictingPosition
         );
     }
     if side == SIDE_NO_BID {
-        ctx.accounts.user_yes_ata.reload()?;
         require!(
             ctx.accounts.user_yes_ata.amount == 0,
             MeridianError::ConflictingPosition
         );
     }
-
-    // --- Build signer seeds ---
-    let market = &ctx.accounts.market;
-    let market_key = market.key();
-    market_signer_seeds!(market => strike_bytes, expiry_bytes, bump_byte, seeds, signer_seeds);
 
     // --- Escrow the taker's assets ---
     escrow_taker_assets(&ctx, side, price, quantity)?;

@@ -42,3 +42,10 @@ pub struct CrankRedeemEvent {
     pub redeemed_count: u32,
     pub total_usdc_redeemed: u64,
 }
+
+#[event]
+pub struct AutoPairBurnEvent {
+    pub user: Pubkey,
+    pub market: Pubkey,
+    pub quantity: u64,
+}

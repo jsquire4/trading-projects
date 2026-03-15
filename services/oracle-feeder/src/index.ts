@@ -9,6 +9,7 @@ import { Program, AnchorProvider, Wallet } from "@coral-xyz/anchor";
 import { Connection, Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { createLogger } from "../../shared/src/alerting.js";
+import { tickerFromBytes } from "../../shared/src/utils.js";
 import { findGlobalConfig } from "../../shared/src/pda.js";
 import { startFeeder, type FeederHandle } from "./feeder.js";
 import { startSyntheticFeeder } from "./synthetic-feeder.js";
@@ -63,9 +64,7 @@ async function readTickersFromChain(
   const tickerArrays = globalConfig.tickers as number[][];
   const tickers: string[] = [];
   for (let i = 0; i < tickerCount; i++) {
-    const t = Buffer.from(tickerArrays[i])
-      .toString("utf-8")
-      .replace(/\0+$/, "");
+    const t = tickerFromBytes(tickerArrays[i]);
     if (t.length > 0) {
       tickers.push(t);
     }

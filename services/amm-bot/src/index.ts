@@ -152,6 +152,143 @@ async function main(): Promise<void> {
   const usdcMint: PublicKey = globalConfig.usdcMint as PublicKey;
   log.info(`USDC mint: ${usdcMint.toBase58()}`);
 
+  // ------ Sub-functions for pollAndQuote decomposition ------
+
+  /** Read the current oracle spot price for a market. Returns null on failure. */
+  async function fetchOraclePrice(
+    ticker: string,
+    oracleFeed: PublicKey,
+  ): Promise<number | null> {
+    try {
+      return await readOraclePrice(oracleProgram, oracleFeed);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`Failed to read oracle for ${ticker}`, { error: msg });
+      return null;
+    }
+  }
+
+  /** Read on-chain Yes/No token balances for a market and update inventoryMap. */
+  async function fetchBalances(
+    marketPubkey: PublicKey,
+    marketKey: string,
+    ticker: string,
+  ): Promise<void> {
+    try {
+      const [yesMint] = findYesMint(marketPubkey);
+      const [noMint] = findNoMint(marketPubkey);
+      const userYesAta = await getAssociatedTokenAddress(yesMint, admin.publicKey);
+      const userNoAta = await getAssociatedTokenAddress(noMint, admin.publicKey);
+
+      let yesBalance = 0;
+      let noBalance = 0;
+      try {
+        const yesAcct = await getAccount(connection, userYesAta);
+        yesBalance = Number(yesAcct.amount);
+      } catch {
+        // ATA doesn't exist yet — balance is 0
+      }
+      try {
+        const noAcct = await getAccount(connection, userNoAta);
+        noBalance = Number(noAcct.amount);
+      } catch {
+        // ATA doesn't exist yet — balance is 0
+      }
+
+      inventoryMap.set(marketKey, yesBalance - noBalance);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`Failed to read inventory for ${ticker}`, { error: msg });
+      // Keep previous inventory value or default to 0
+    }
+  }
+
+  /** Price a market and place two-sided quotes on-chain. */
+  async function computeAndPlaceQuotes(
+    marketAccount: { publicKey: PublicKey; account: any },
+    ticker: string,
+    spotPrice: number,
+  ): Promise<void> {
+    const marketKey = marketAccount.publicKey.toBase58();
+    const market = marketAccount.account;
+
+    // Compute time to expiry in years
+    const nowUnix = Math.floor(Date.now() / 1000);
+    const marketCloseUnix = (market.marketCloseUnix as any).toNumber
+      ? (market.marketCloseUnix as any).toNumber()
+      : Number(market.marketCloseUnix);
+    const T = Math.max(0, (marketCloseUnix - nowUnix) / SECONDS_PER_YEAR);
+
+    // Strike price in dollars
+    const strikeLamports = (market.strikePrice as any).toNumber
+      ? (market.strikePrice as any).toNumber()
+      : Number(market.strikePrice);
+    const strikePrice = strikeLamports / 1_000_000;
+
+    // Per-ticker historical volatility lookup (falls back to env/default)
+    let tickerVol = vol; // fallback
+    if (marketDataClient) {
+      try {
+        const end = new Date().toISOString().slice(0, 10);
+        const start = new Date(Date.now() - 40 * 86_400_000).toISOString().slice(0, 10);
+        const bars = await marketDataClient.getHistory(ticker, "daily", start, end);
+        const hv = historicalVolatility(bars, 30);
+        if (hv > 0) tickerVol = hv;
+      } catch (err) {
+        log.warn("HV lookup failed, using fallback vol", { ticker, error: String(err) });
+      }
+    }
+
+    // Price the binary option
+    const fairProb = binaryCallPrice(spotPrice, strikePrice, tickerVol, T, riskFreeRate);
+    const fairCents = probToCents(fairProb);
+
+    // Get current inventory (default 0)
+    const inventory = inventoryMap.get(marketKey) ?? 0;
+
+    // Generate quotes
+    const quote = generateQuotes(fairProb, inventory, quoteConfig);
+
+    // Circuit breaker check
+    const errors = errorCountMap.get(marketKey) ?? 0;
+    if (shouldHalt(inventory, quoteConfig.maxInventory, errors)) {
+      log.warn(`Circuit breaker HALT for ${ticker}`, {
+        inventory,
+        errors,
+        market: marketKey,
+      });
+      return;
+    }
+
+    log.info(`${ticker} | spot=$${spotPrice.toFixed(2)} strike=$${strikePrice.toFixed(2)} T=${(T * SECONDS_PER_YEAR / 3600).toFixed(1)}h fair=${fairCents}c bid=${quote.bidPrice}c ask=${quote.askPrice}c inv=${inventory}`);
+
+    // Execute quotes on-chain
+    const marketAccounts: MarketAccounts = {
+      marketPubkey: marketAccount.publicKey,
+      usdcMint,
+    };
+
+    try {
+      await placeQuotes(
+        meridianProgram,
+        marketAccounts,
+        quote.bidPrice,
+        quote.askPrice,
+        quantity,
+        admin,
+      );
+      errorCountMap.set(marketKey, 0);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const newErrors = errors + 1;
+      errorCountMap.set(marketKey, newErrors);
+      log.error(`Quote execution failed for ${ticker} (${newErrors} consecutive)`, {
+        error: msg,
+        market: marketKey,
+      });
+    }
+  }
+
   // ------ Poll loop ------
 
   let running = true;
@@ -164,10 +301,7 @@ async function main(): Promise<void> {
     }
     isPolling = true;
     try {
-      // Fetch all StrikeMarket accounts via getProgramAccounts
-      const allMarkets =
-        await meridianProgram.account.strikeMarket.all();
-
+      const allMarkets = await meridianProgram.account.strikeMarket.all();
       const activeMarkets = allMarkets.filter(
         (m) => !m.account.isSettled && !m.account.isPaused,
       );
@@ -178,125 +312,13 @@ async function main(): Promise<void> {
 
       for (const marketAccount of activeMarkets) {
         const marketKey = marketAccount.publicKey.toBase58();
-        const market = marketAccount.account;
+        const ticker = decodeTicker(marketAccount.account.ticker as number[]);
 
-        const ticker = decodeTicker(market.ticker as number[]);
+        const spotPrice = await fetchOraclePrice(ticker, marketAccount.account.oracleFeed as PublicKey);
+        if (spotPrice === null) continue;
 
-        // Read oracle price
-        const oracleFeed = market.oracleFeed as PublicKey;
-        let spotPrice: number;
-        try {
-          spotPrice = await readOraclePrice(oracleProgram, oracleFeed);
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.warn(`Failed to read oracle for ${ticker}`, { error: msg });
-          continue;
-        }
-
-        // Read on-chain token balances for inventory tracking (#1)
-        try {
-          const [yesMint] = findYesMint(marketAccount.publicKey);
-          const [noMint] = findNoMint(marketAccount.publicKey);
-          const userYesAta = await getAssociatedTokenAddress(yesMint, admin.publicKey);
-          const userNoAta = await getAssociatedTokenAddress(noMint, admin.publicKey);
-
-          let yesBalance = 0;
-          let noBalance = 0;
-          try {
-            const yesAcct = await getAccount(connection, userYesAta);
-            yesBalance = Number(yesAcct.amount);
-          } catch {
-            // ATA doesn't exist yet — balance is 0
-          }
-          try {
-            const noAcct = await getAccount(connection, userNoAta);
-            noBalance = Number(noAcct.amount);
-          } catch {
-            // ATA doesn't exist yet — balance is 0
-          }
-
-          inventoryMap.set(marketKey, yesBalance - noBalance);
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.warn(`Failed to read inventory for ${ticker}`, { error: msg });
-          // Keep previous inventory value or default to 0
-        }
-
-        // Compute time to expiry in years
-        const nowUnix = Math.floor(Date.now() / 1000);
-        const marketCloseUnix = (market.marketCloseUnix as any).toNumber
-          ? (market.marketCloseUnix as any).toNumber()
-          : Number(market.marketCloseUnix);
-        const T = Math.max(0, (marketCloseUnix - nowUnix) / SECONDS_PER_YEAR);
-
-        // Strike price in dollars
-        const strikeLamports = (market.strikePrice as any).toNumber
-          ? (market.strikePrice as any).toNumber()
-          : Number(market.strikePrice);
-        const strikePrice = strikeLamports / 1_000_000;
-
-        // Per-ticker historical volatility lookup (falls back to env/default)
-        let tickerVol = vol; // fallback
-        if (marketDataClient) {
-          try {
-            const end = new Date().toISOString().slice(0, 10);
-            const start = new Date(Date.now() - 40 * 86_400_000).toISOString().slice(0, 10);
-            const bars = await marketDataClient.getHistory(ticker, "daily", start, end);
-            const hv = historicalVolatility(bars, 30);
-            if (hv > 0) tickerVol = hv;
-          } catch (err) {
-            log.warn("HV lookup failed, using fallback vol", { ticker, error: String(err) });
-          }
-        }
-
-        // Price the binary option
-        const fairProb = binaryCallPrice(spotPrice, strikePrice, tickerVol, T, riskFreeRate);
-        const fairCents = probToCents(fairProb);
-
-        // Get current inventory (default 0)
-        const inventory = inventoryMap.get(marketKey) ?? 0;
-
-        // Generate quotes
-        const quote = generateQuotes(fairProb, inventory, quoteConfig);
-
-        // Circuit breaker check
-        const errors = errorCountMap.get(marketKey) ?? 0;
-        if (shouldHalt(inventory, quoteConfig.maxInventory, errors)) {
-          log.warn(`Circuit breaker HALT for ${ticker}`, {
-            inventory,
-            errors,
-            market: marketKey,
-          });
-          continue;
-        }
-
-        log.info(`${ticker} | spot=$${spotPrice.toFixed(2)} strike=$${strikePrice.toFixed(2)} T=${(T * SECONDS_PER_YEAR / 3600).toFixed(1)}h fair=${fairCents}c bid=${quote.bidPrice}c ask=${quote.askPrice}c inv=${inventory}`);
-
-        // Execute quotes on-chain
-        const marketAccounts: MarketAccounts = {
-          marketPubkey: marketAccount.publicKey,
-          usdcMint,
-        };
-
-        try {
-          await placeQuotes(
-            meridianProgram,
-            marketAccounts,
-            quote.bidPrice,
-            quote.askPrice,
-            quantity,
-            admin,
-          );
-          errorCountMap.set(marketKey, 0);
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          const newErrors = errors + 1;
-          errorCountMap.set(marketKey, newErrors);
-          log.error(`Quote execution failed for ${ticker} (${newErrors} consecutive)`, {
-            error: msg,
-            market: marketKey,
-          });
-        }
+        await fetchBalances(marketAccount.publicKey, marketKey, ticker);
+        await computeAndPlaceQuotes(marketAccount, ticker, spotPrice);
       }
 
       // Evict inventory/error entries for markets that no longer exist

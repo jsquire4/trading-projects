@@ -6,27 +6,17 @@
 // ---------------------------------------------------------------------------
 
 import { Program, AnchorProvider, Wallet } from "@coral-xyz/anchor";
-import BN from "bn.js";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { createMarketDataClient, type IMarketDataClient } from "../../shared/src/market-data.js";
 import { createLogger } from "../../shared/src/alerting.js";
 import { findPriceFeed } from "../../shared/src/pda.js";
+import { updateOnChain } from "./oracle-helpers.js";
 import type { MockOracle } from "../../shared/src/idl/mock_oracle.js";
 import MockOracleIDL from "../../shared/src/idl/mock_oracle.json" with { type: "json" };
 
 const log = createLogger("oracle-feeder:synthetic");
 
 const POLL_INTERVAL_MS = 5_000; // 5 seconds
-
-/** Convert a dollar price (e.g. 185.42) to USDC lamports (u64). */
-function priceToLamports(price: number): BN {
-  return new BN(Math.round(price * 1_000_000));
-}
-
-/** Confidence = 0.1% of price (conservative). */
-function computeConfidence(price: number): BN {
-  return new BN(Math.round(price * 1_000_000 * 0.001));
-}
 
 export interface FeederHandle {
   stop(): void;
@@ -65,39 +55,15 @@ export async function startSyntheticFeeder(
   let stopped = false;
   let pollInterval: ReturnType<typeof setInterval> | null = null;
 
-  async function updateOnChain(ticker: string, price: number): Promise<void> {
-    const priceFeed = priceFeedPDAs.get(ticker);
-    if (!priceFeed) return;
-
-    const priceLamports = priceToLamports(price);
-    const confidence = computeConfidence(price);
-    const timestamp = new BN(Math.floor(Date.now() / 1000));
-
-    try {
-      await program.methods
-        .updatePrice(priceLamports, confidence, timestamp)
-        .accounts({
-          authority: authority.publicKey,
-          priceFeed,
-        })
-        .signers([authority])
-        .rpc();
-
-      log.info(`Updated ${ticker}: $${price.toFixed(2)}`, {
-        lamports: priceLamports.toString(),
-      });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error(`Failed to update ${ticker} on-chain`, { error: msg });
-    }
-  }
-
   async function pollAndUpdate(): Promise<void> {
     try {
       const quotes = await client.getQuotes(tickers);
       for (const q of quotes) {
         if (q.last > 0) {
-          await updateOnChain(q.symbol, q.last);
+          const priceFeed = priceFeedPDAs.get(q.symbol);
+          if (priceFeed) {
+            await updateOnChain(program, authority, priceFeed, q.symbol, q.last);
+          }
         }
       }
     } catch (err: unknown) {

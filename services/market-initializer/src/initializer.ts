@@ -21,7 +21,7 @@ import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 import { createMarketDataClient, type IMarketDataClient } from "../../shared/src/market-data.js";
 import { createLogger } from "../../shared/src/alerting.js";
-import { getETOffsetMinutes, isMarketDay } from "../../automation/src/timezone.js";
+import { getETOffsetMinutes, isMarketDay } from "../../shared/src/timezone.js";
 import { generateVolAwareStrikes } from "./strikeSelector.js";
 import {
   findGlobalConfig,
@@ -394,6 +394,25 @@ async function createSingleMarket(
 // Compute 4:00 PM ET today as UTC unix timestamp (DST-aware)
 // ---------------------------------------------------------------------------
 
+/**
+ * Search forward day-by-day (up to 7 days) for the next valid trading day
+ * and return its 4:00 PM ET close as a unix timestamp. Returns null if none found.
+ */
+async function findNextTradingDayClose(startOfDayUTC: number): Promise<number | null> {
+  for (let advance = 1; advance <= 7; advance++) {
+    const candidateStartUTC = startOfDayUTC + advance * 86_400_000;
+    const candidate4pmUTC = candidateStartUTC + 16 * 60 * 60 * 1000;
+    const candidateETOffset = getETOffsetMinutes(new Date(candidate4pmUTC));
+    const candidateCloseUTC = candidateStartUTC + (16 * 60 - candidateETOffset) * 60 * 1000;
+    const candidateDate = new Date(candidateCloseUTC);
+
+    if (await isMarketDay(candidateDate)) {
+      return Math.floor(candidateCloseUTC / 1000);
+    }
+  }
+  return null;
+}
+
 export async function computeMarketCloseUnix(date?: Date): Promise<number> {
   const now = date ?? new Date();
 
@@ -423,19 +442,8 @@ export async function computeMarketCloseUnix(date?: Date): Promise<number> {
 
   // If today's close has already passed, advance to the next valid trading day
   if (closeUnix <= Math.floor(Date.now() / 1000)) {
-    // Advance day-by-day until we find a valid market day (cap at 7 iterations)
-    for (let advance = 1; advance <= 7; advance++) {
-      const candidateStartUTC = startOfDayUTC + advance * 86_400_000;
-      // Compute ET offset at the candidate 4 PM time (not midnight) to handle DST spring-forward correctly
-      const candidate4pmUTC = candidateStartUTC + 16 * 60 * 60 * 1000; // rough 4PM UTC guess
-      const candidateETOffset = getETOffsetMinutes(new Date(candidate4pmUTC));
-      const candidateCloseUTC = candidateStartUTC + (16 * 60 - candidateETOffset) * 60 * 1000;
-      const candidateDate = new Date(candidateCloseUTC);
-
-      if (await isMarketDay(candidateDate)) {
-        return Math.floor(candidateCloseUTC / 1000);
-      }
-    }
+    const nextClose = await findNextTradingDayClose(startOfDayUTC);
+    if (nextClose !== null) return nextClose;
 
     // Fallback: if no valid day found within 7 days (shouldn't happen), use +1 day
     const fallbackStartUTC = startOfDayUTC + 86_400_000;
@@ -448,17 +456,8 @@ export async function computeMarketCloseUnix(date?: Date): Promise<number> {
   // Today's close hasn't passed yet — check if today is a market day
   if (!(await isMarketDay(now))) {
     // Today is not a market day — advance to next valid trading day
-    for (let advance = 1; advance <= 7; advance++) {
-      const candidateStartUTC = startOfDayUTC + advance * 86_400_000;
-      const candidate4pmUTC = candidateStartUTC + 16 * 60 * 60 * 1000;
-      const candidateETOffset = getETOffsetMinutes(new Date(candidate4pmUTC));
-      const candidateCloseUTC = candidateStartUTC + (16 * 60 - candidateETOffset) * 60 * 1000;
-      const candidateDate = new Date(candidateCloseUTC);
-
-      if (await isMarketDay(candidateDate)) {
-        return Math.floor(candidateCloseUTC / 1000);
-      }
-    }
+    const nextClose = await findNextTradingDayClose(startOfDayUTC);
+    if (nextClose !== null) return nextClose;
   }
 
   return closeUnix;

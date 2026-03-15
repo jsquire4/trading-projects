@@ -7,6 +7,7 @@ import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.j
 import BN from "bn.js";
 
 import { createLogger } from "../../shared/src/alerting.js";
+import { tickerFromBytes } from "../../shared/src/utils.js";
 import meridianIdl from "../../shared/src/idl/meridian.json" with { type: "json" };
 import {
   findGlobalConfig,
@@ -38,11 +39,6 @@ function isDuringMarketHours(): boolean {
 
   // 9:30 = 570 min, 16:00 = 960 min
   return totalMinutes >= 570 && totalMinutes <= 960;
-}
-
-/** Extract ticker string from the on-chain [u8; 8] array. */
-function tickerFromBytes(bytes: number[]): string {
-  return Buffer.from(bytes).toString("utf-8").replace(/\0+$/, "");
 }
 
 export async function runChecks(): Promise<void> {
@@ -89,7 +85,7 @@ export async function runChecks(): Promise<void> {
   const tickerArrays = globalConfig.tickers as number[][];
   const activeTickers: string[] = [];
   for (let i = 0; i < tickerCount; i++) {
-    const t = Buffer.from(tickerArrays[i]).toString("utf-8").replace(/\0+$/, "");
+    const t = tickerFromBytes(tickerArrays[i]);
     if (t.length > 0) activeTickers.push(t);
   }
 

@@ -1,8 +1,8 @@
 /**
  * SQLite Database Layer
  *
- * Persists parsed Anchor events and maintains a checkpoint for
- * incremental backfill resumption.
+ * Connection pool, initialization, migrations, and re-exports.
+ * Event CRUD lives in queries.ts; cost basis / portfolio in mapper.ts.
  */
 
 import Database from "better-sqlite3";
@@ -91,372 +91,72 @@ export function initDb(dbPath?: string): Database.Database {
   db.exec(`DROP INDEX IF EXISTS idx_events_sig_type`);
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_sig_type_seq ON events(signature, type, market, seq)`);
 
+  // Reset cached prepared statements in queries.ts (they reference old db handle)
+  resetInsertStmt();
+
   log.info("Database initialized", { path: resolvedPath });
   return db;
-}
-
-// --------------- Event operations ---------------
-
-let _insertEvent: Database.Statement | null = null;
-
-function getInsertStmt(): Database.Statement {
-  if (!_insertEvent) {
-    _insertEvent = getDb().prepare(`
-      INSERT OR IGNORE INTO events (type, market, data, signature, slot, timestamp, seq)
-      VALUES (@type, @market, @data, @signature, @slot, @timestamp, @seq)
-    `);
-  }
-  return _insertEvent;
-}
-
-export function insertEvent(row: Omit<EventRow, "id" | "created_at">): void {
-  getInsertStmt().run({ ...row, seq: row.seq ?? 0 });
-}
-
-export function insertEventsBatch(
-  rows: Omit<EventRow, "id" | "created_at">[],
-): void {
-  if (rows.length === 0) return;
-  const stmt = getInsertStmt();
-  const tx = getDb().transaction((items: typeof rows) => {
-    for (const row of items) {
-      stmt.run({ ...row, seq: row.seq ?? 0 });
-    }
-  });
-  tx(rows);
-}
-
-export function queryEvents(opts: {
-  market?: string;
-  type?: string;
-  limit?: number;
-  offset?: number;
-}): EventRow[] {
-  const clauses: string[] = [];
-  const params: Record<string, unknown> = {};
-
-  if (opts.market) {
-    clauses.push("market = @market");
-    params.market = opts.market;
-  }
-  if (opts.type) {
-    clauses.push("type = @type");
-    params.type = opts.type;
-  }
-
-  const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
-  const limit = Math.min(opts.limit ?? 50, 500);
-  const offset = opts.offset ?? 0;
-
-  const stmt = getDb().prepare(
-    `SELECT * FROM events ${where} ORDER BY timestamp DESC, id DESC LIMIT @limit OFFSET @offset`,
-  );
-  return stmt.all({ ...params, limit, offset }) as EventRow[];
-}
-
-export function getLatestEvents(count: number = 20): EventRow[] {
-  return getDb()
-    .prepare("SELECT * FROM events ORDER BY timestamp DESC, id DESC LIMIT ?")
-    .all(count) as EventRow[];
-}
-
-export function getEventCount(): number {
-  const row = getDb()
-    .prepare("SELECT COUNT(*) as cnt FROM events")
-    .get() as { cnt: number };
-  return row.cnt;
-}
-
-// --------------- Checkpoint operations ---------------
-
-export function getCheckpoint(): Checkpoint | null {
-  const row = getDb()
-    .prepare("SELECT last_signature, last_slot FROM checkpoints WHERE id = 1")
-    .get() as Checkpoint | undefined;
-  return row ?? null;
-}
-
-export function upsertCheckpoint(sig: string, slot: number): void {
-  getDb()
-    .prepare(
-      `INSERT INTO checkpoints (id, last_signature, last_slot, updated_at)
-       VALUES (1, @sig, @slot, datetime('now'))
-       ON CONFLICT(id) DO UPDATE SET
-         last_signature = @sig,
-         last_slot = @slot,
-         updated_at = datetime('now')`,
-    )
-    .run({ sig, slot });
-}
-
-// --------------- Cost basis aggregation ---------------
-
-export interface CostBasisRow {
-  market: string;
-  side: 'yes' | 'no';
-  avgPrice: number;       // weighted average fill price in cents
-  totalQuantity: number;  // total tokens acquired (micro-tokens)
-  totalCostUsdc: number;  // total USDC spent (in micro-USDC × cents)
-  fillCount: number;
-}
-
-export function queryCostBasis(wallet: string): CostBasisRow[] {
-  // Acquisition fills (cost basis = tokens obtained):
-  //   - Taker buys Yes: taker = wallet AND takerSide = 0 (USDC_BID)
-  //   - Taker buys No:  taker = wallet AND takerSide = 2 (NO_BID)
-  //   - Maker bought Yes: maker = wallet AND makerSide = 0 (USDC_BID)
-  //   - Maker bought No:  maker = wallet AND makerSide = 2 (NO_BID, merge fill)
-  //   Uses makerSide (not takerSide) because takerSide=1 can match against
-  //   makerSide=0 (Buy Yes) OR makerSide=2 (Sell No / merge fill).
-  const stmt = getDb().prepare(`
-    SELECT
-      market,
-      CASE
-        WHEN json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 0 THEN 'yes'
-        WHEN json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 2 THEN 'no'
-        WHEN json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.makerSide') AS INTEGER) = 0 THEN 'yes'
-        WHEN json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.makerSide') AS INTEGER) = 2 THEN 'no'
-      END as side,
-      SUM(CAST(json_extract(data, '$.quantity') AS REAL)) as totalQuantity,
-      SUM(CAST(json_extract(data, '$.quantity') AS REAL) * CAST(json_extract(data, '$.price') AS REAL)) as totalCost,
-      COUNT(*) as fillCount
-    FROM events
-    WHERE type = 'fill'
-      AND (
-        (json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) IN (0, 2))
-        OR
-        (json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.makerSide') AS INTEGER) IN (0, 2))
-      )
-    GROUP BY market, side
-    HAVING side IS NOT NULL
-  `);
-
-  const rows = stmt.all({ wallet }) as { market: string; side: 'yes' | 'no'; totalQuantity: number; totalCost: number; fillCount: number }[];
-
-  return rows.map(r => ({
-    market: r.market,
-    side: r.side,
-    totalQuantity: r.totalQuantity,
-    totalCostUsdc: r.totalCost,
-    avgPrice: r.totalQuantity > 0 ? r.totalCost / r.totalQuantity : 0,
-    fillCount: r.fillCount,
-  }));
-}
-
-// --------------- Market VWAP aggregation ---------------
-
-export interface MarketVwap {
-  market: string;
-  vwap: number;         // volume-weighted average fill price in cents
-  totalVolume: number;  // total quantity filled (micro-tokens)
-  fillCount: number;
-}
-
-export function queryMarketVwaps(): MarketVwap[] {
-  // VWAP = sum(price * quantity) / sum(quantity) for all fills per market
-  const stmt = getDb().prepare(`
-    SELECT
-      market,
-      SUM(CAST(json_extract(data, '$.price') AS REAL) * CAST(json_extract(data, '$.quantity') AS REAL)) /
-        NULLIF(SUM(CAST(json_extract(data, '$.quantity') AS REAL)), 0) as vwap,
-      SUM(CAST(json_extract(data, '$.quantity') AS REAL)) as totalVolume,
-      COUNT(*) as fillCount
-    FROM events
-    WHERE type = 'fill'
-    GROUP BY market
-  `);
-  return stmt.all() as MarketVwap[];
-}
-
-// --------------- Order intent operations ---------------
-
-export interface OrderIntent {
-  order_id: string;
-  market: string;
-  wallet: string;
-  intent: string;       // "buy_yes" | "sell_yes" | "buy_no" | "sell_no"
-  display_price: number; // price in cents from user's perspective
-}
-
-export function insertOrderIntent(intent: OrderIntent): void {
-  getDb()
-    .prepare(
-      `INSERT OR REPLACE INTO order_intents (order_id, market, wallet, intent, display_price)
-       VALUES (@order_id, @market, @wallet, @intent, @display_price)`,
-    )
-    .run(intent);
-}
-
-export interface FillWithIntent {
-  id: number;
-  type: string;
-  market: string;
-  data: string;
-  signature: string;
-  slot: number;
-  timestamp: number;
-  seq: number;
-  intent: string | null;
-  display_price: number | null;
-  viewerIntent: string;
-}
-
-/**
- * Query fills for a wallet with viewer-perspective intent labels.
- *
- * If a stored intent exists for the fill's order, use it directly.
- * Otherwise derive intent from the viewer's role (taker/maker) and side.
- *
- * Note on "Buy No" asymmetry: "Buy No" is a UI-only concept — the user
- * submits a YES_ASK at (100 - price). On-chain, this appears as takerSide=1
- * or makerSide=1. Without a stored intent, derivation maps side 1 to
- * "sell_yes" because the on-chain action is identical. Only the stored
- * intent (from POST /api/order-intent at order submission) can distinguish
- * a "buy_no" from a "sell_yes".
- *
- * The LEFT JOIN is on makerOrderId only — taker orders don't have a
- * persistent orderId in fill events. Taker intent derivation relies on
- * takerSide which is always unambiguous (side 0 = buy_yes, 1 = sell_yes,
- * 2 = sell_no).
- */
-export function queryFillsWithIntent(wallet: string, limit: number = 50): FillWithIntent[] {
-  const rows = getDb()
-    .prepare(
-      `SELECT e.*, oi.intent, oi.display_price
-       FROM events e
-       LEFT JOIN order_intents oi
-         ON CAST(json_extract(e.data, '$.makerOrderId') AS TEXT) = oi.order_id
-         AND e.market = oi.market
-         AND oi.wallet = @wallet
-       WHERE e.type = 'fill'
-         AND (json_extract(e.data, '$.taker') = @wallet
-              OR json_extract(e.data, '$.maker') = @wallet)
-       ORDER BY e.timestamp DESC
-       LIMIT @limit`,
-    )
-    .all({ wallet, limit }) as (EventRow & { intent: string | null; display_price: number | null })[];
-
-  return rows.map((row) => {
-    const data = JSON.parse(row.data);
-    const isTaker = data.taker === wallet;
-    const takerSide = data.takerSide as number;
-    const makerSide = data.makerSide as number;
-
-    let viewerIntent: string;
-    if (row.intent && data[isTaker ? 'taker' : 'maker'] === wallet) {
-      // Stored intent matches viewer's order
-      viewerIntent = row.intent;
-    } else if (isTaker) {
-      // Derive from taker's side
-      viewerIntent = { 0: "buy_yes", 1: "sell_yes", 2: "sell_no" }[takerSide] ?? "unknown";
-    } else {
-      // Derive from maker's own resting side (makerSide is authoritative)
-      viewerIntent = { 0: "buy_yes", 1: "sell_yes", 2: "sell_no" }[makerSide] ?? "unknown";
-    }
-
-    return {
-      id: row.id!,
-      type: row.type,
-      market: row.market,
-      data: row.data,
-      signature: row.signature,
-      slot: row.slot,
-      timestamp: row.timestamp,
-      seq: row.seq,
-      intent: row.intent,
-      display_price: row.display_price,
-      viewerIntent,
-    };
-  });
-}
-
-// --------------- Portfolio snapshot ---------------
-
-export interface PortfolioPosition {
-  market: string;
-  side: number;
-  totalQuantity: number;
-  totalCost: number;
-  avgPrice: number;
-  fillCount: number;
-}
-
-export function queryPortfolioSnapshot(wallet: string): PortfolioPosition[] {
-  const stmt = getDb().prepare(`
-    SELECT
-      market,
-      CASE
-        WHEN json_extract(data, '$.taker') = @wallet THEN CAST(json_extract(data, '$.takerSide') AS INTEGER)
-        ELSE CAST(json_extract(data, '$.makerSide') AS INTEGER)
-      END as side,
-      SUM(CAST(json_extract(data, '$.quantity') AS REAL)) as totalQuantity,
-      SUM(CAST(json_extract(data, '$.quantity') AS REAL) * CAST(json_extract(data, '$.price') AS REAL)) as totalCost,
-      COUNT(*) as fillCount
-    FROM events
-    WHERE type = 'fill'
-      AND (json_extract(data, '$.taker') = @wallet OR json_extract(data, '$.maker') = @wallet)
-    GROUP BY market, side
-  `);
-
-  const rows = stmt.all({ wallet }) as { market: string; side: number; totalQuantity: number; totalCost: number; fillCount: number }[];
-
-  return rows.map(r => ({
-    market: r.market,
-    side: r.side,
-    totalQuantity: r.totalQuantity,
-    totalCost: r.totalCost,
-    avgPrice: r.totalQuantity > 0 ? Math.round(r.totalCost / r.totalQuantity) : 0,
-    fillCount: r.fillCount,
-  }));
-}
-
-// --------------- Portfolio history ---------------
-
-export interface DailySummary {
-  date: string;
-  totalVolume: number;
-  fillCount: number;
-  netCostBasis: number;
-}
-
-export function queryPortfolioHistory(wallet: string, days: number): DailySummary[] {
-  // netCostBasis is sign-aware: buys (sides 0, 2) are positive (cost),
-  // sells (side 1) are negative (proceeds received).
-  const stmt = getDb().prepare(`
-    SELECT
-      date(timestamp, 'unixepoch') as date,
-      SUM(CAST(json_extract(data, '$.quantity') AS INTEGER)) as totalVolume,
-      COUNT(*) as fillCount,
-      SUM(
-        CASE
-          WHEN (json_extract(data, '$.taker') = @wallet AND CAST(json_extract(data, '$.takerSide') AS INTEGER) = 1)
-            OR (json_extract(data, '$.maker') = @wallet AND CAST(json_extract(data, '$.makerSide') AS INTEGER) = 1)
-          THEN -(CAST(json_extract(data, '$.quantity') AS INTEGER) * CAST(json_extract(data, '$.price') AS INTEGER))
-          ELSE CAST(json_extract(data, '$.quantity') AS INTEGER) * CAST(json_extract(data, '$.price') AS INTEGER)
-        END
-      ) as netCostBasis
-    FROM events
-    WHERE type = 'fill'
-      AND (json_extract(data, '$.taker') = @wallet OR json_extract(data, '$.maker') = @wallet)
-      AND timestamp >= unixepoch('now', '-' || @days || ' days')
-    GROUP BY date
-    ORDER BY date ASC
-  `);
-
-  return stmt.all({ wallet, days }) as DailySummary[];
-}
-
-export function signatureExists(signature: string): boolean {
-  const row = getDb()
-    .prepare("SELECT 1 FROM events WHERE signature = ? LIMIT 1")
-    .get(signature);
-  return row !== undefined;
 }
 
 export function closeDb(): void {
   if (db) {
     db.close();
-    _insertEvent = null;
+    resetInsertStmt();
     log.info("Database closed");
   }
 }
+
+// --------------- Re-exports from queries.ts ---------------
+import {
+  insertEvent,
+  insertEventsBatch,
+  queryEvents,
+  getLatestEvents,
+  getEventCount,
+  signatureExists,
+  getCheckpoint,
+  upsertCheckpoint,
+  insertOrderIntent,
+  resetInsertStmt,
+  type OrderIntent,
+} from "./queries.js";
+
+export {
+  insertEvent,
+  insertEventsBatch,
+  queryEvents,
+  getLatestEvents,
+  getEventCount,
+  signatureExists,
+  getCheckpoint,
+  upsertCheckpoint,
+  insertOrderIntent,
+  type OrderIntent,
+};
+
+// --------------- Re-exports from mapper.ts ---------------
+import {
+  queryCostBasis,
+  queryMarketVwaps,
+  queryFillsWithIntent,
+  queryPortfolioSnapshot,
+  queryPortfolioHistory,
+  type CostBasisRow,
+  type MarketVwap,
+  type FillWithIntent,
+  type PortfolioPosition,
+  type DailySummary,
+} from "./mapper.js";
+
+export {
+  queryCostBasis,
+  queryMarketVwaps,
+  queryFillsWithIntent,
+  queryPortfolioSnapshot,
+  queryPortfolioHistory,
+  type CostBasisRow,
+  type MarketVwap,
+  type FillWithIntent,
+  type PortfolioPosition,
+  type DailySummary,
+};

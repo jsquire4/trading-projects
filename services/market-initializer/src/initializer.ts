@@ -34,6 +34,7 @@ import {
   findNoEscrow,
   findOrderBook,
   findPriceFeed,
+  findSolTreasury,
   padTicker,
 } from "../../shared/src/pda.js";
 
@@ -46,7 +47,7 @@ const log = createLogger("market-initializer");
 // USDC has 6 decimals — $1.00 = 1_000_000 lamports
 const USDC_DECIMALS = 6;
 
-// OrderBook is now created inline by create_strike_market (sparse layout, 168 bytes)
+// OrderBook is now created inline by create_strike_market (sparse layout, 270 bytes header)
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -338,7 +339,7 @@ async function createSingleMarket(
       new BN(previousCloseLamports.toString()),
     )
     .accounts({
-      admin: admin.publicKey,
+      creator: admin.publicKey,
       config: configPda,
       market: marketPda,
       yesMint: yesMint,
@@ -350,6 +351,7 @@ async function createSingleMarket(
       orderBook: orderBook,
       oracleFeed: oracleFeed,
       usdcMint: usdcMint,
+      solTreasury: findSolTreasury()[0],
       tokenProgram: TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
       rent: SYSVAR_RENT_PUBKEY,

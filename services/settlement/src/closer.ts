@@ -1,5 +1,6 @@
 // ---------------------------------------------------------------------------
-// Close Market logic — reclaims rent from settled markets after 90 days
+// Close Market logic — reclaims rent from settled markets
+// Standard close only: all tokens must be redeemed (no partial close)
 // ---------------------------------------------------------------------------
 
 import { Program } from "@coral-xyz/anchor";
@@ -7,36 +8,17 @@ import BN from "bn.js";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { getMint, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { createLogger } from "../../shared/src/alerting.js";
-import { findGlobalConfig, findTreasury } from "../../shared/src/pda.js";
+import { findGlobalConfig, findTreasury, findSolTreasury } from "../../shared/src/pda.js";
 import { MarketInfo, tickerFromBytes } from "./settler.js";
 
 const log = createLogger("settlement:closer");
 
-const CLOSE_ELIGIBILITY_DAYS = 90;
-const CLOSE_ELIGIBILITY_S = CLOSE_ELIGIBILITY_DAYS * 24 * 60 * 60;
-
-/**
- * Check if the order book is empty (all level counts == 0).
- */
-function isOrderBookEmpty(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  orderBookAccount: any,
-): boolean {
-  for (const level of orderBookAccount.levels) {
-    for (const slot of level.orders) {
-      const active = typeof slot.isActive === "number" ? slot.isActive : Number(slot.isActive);
-      if (active === 1) return false;
-    }
-  }
-  return true;
-}
-
 /**
  * Close all eligible markets that are:
- *   - settled && !closed
+ *   - settled
  *   - past the override deadline
- *   - either: (a) all tokens redeemed (standard close), or
- *             (b) 90+ days since settlement (partial close)
+ *   - all tokens redeemed (yes + no supply == 0)
+ *   - order book empty
  */
 export async function closeEligibleMarkets(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -47,20 +29,20 @@ export async function closeEligibleMarkets(
   const now = Math.floor(Date.now() / 1000);
   const [configPda] = findGlobalConfig();
   const [treasuryPda] = findTreasury();
+  const [solTreasuryPda] = findSolTreasury();
 
   log.info("Scanning for closeable markets");
 
   const allMarkets = await program.account.strikeMarket.all();
 
-  // Filter candidates: settled, not closed, past override deadline
+  // Filter candidates: settled, past override deadline
   const candidates = allMarkets.filter((m) => {
     const isSettled = m.account.isSettled as boolean;
-    const isClosed = m.account.isClosed as boolean;
     const overrideDeadline = (m.account.overrideDeadline as BN).toNumber();
-    return isSettled && !isClosed && overrideDeadline > 0 && overrideDeadline < now;
+    return isSettled && overrideDeadline > 0 && overrideDeadline < now;
   });
 
-  log.info(`Found ${candidates.length} settled, unclosed markets past override deadline`);
+  log.info(`Found ${candidates.length} settled markets past override deadline`);
 
   const result: { closed: string[]; failed: { market: string; error: string }[] } = {
     closed: [],
@@ -69,7 +51,6 @@ export async function closeEligibleMarkets(
 
   for (const m of candidates) {
     const ticker = tickerFromBytes(m.account.ticker as number[]);
-    const settledAt = (m.account.settledAt as BN).toNumber();
     const market: MarketInfo = {
       publicKey: m.publicKey,
       account: {
@@ -90,38 +71,21 @@ export async function closeEligibleMarkets(
     };
 
     try {
-      // Check order book is empty
-      const orderBookAccount = await program.account.orderBook.fetch(market.account.orderBook);
-      if (!isOrderBookEmpty(orderBookAccount)) {
-        log.warn(`Order book not empty for ${ticker} — run crank cancel first`, {
-          market: m.publicKey.toBase58(),
-        });
-        continue;
-      }
-
       // Check token supply — standard close requires all tokens redeemed
       const yesMintInfo = await getMint(connection, market.account.yesMint);
       const noMintInfo = await getMint(connection, market.account.noMint);
       const allRedeemed = yesMintInfo.supply === 0n && noMintInfo.supply === 0n;
 
-      // Partial close: 90+ days since settlement
-      const daysSinceSettlement = Math.floor((now - settledAt) / 86400);
-      const partialCloseEligible = (settledAt + CLOSE_ELIGIBILITY_S) < now;
-
-      if (!allRedeemed && !partialCloseEligible) {
-        log.info(
-          `Market ${ticker} has unredeemed tokens and only ${daysSinceSettlement} days since settlement (need ${CLOSE_ELIGIBILITY_DAYS})`,
-          { market: m.publicKey.toBase58() },
-        );
+      if (!allRedeemed) {
+        log.info(`Market ${ticker} has unredeemed tokens — skipping close`, {
+          market: m.publicKey.toBase58(),
+          yesSupply: yesMintInfo.supply.toString(),
+          noSupply: noMintInfo.supply.toString(),
+        });
         continue;
       }
 
-      const closeType = allRedeemed ? "standard" : "partial";
-      log.info(`Closing market ${ticker} (${closeType}, ${daysSinceSettlement} days since settlement)`, {
-        market: m.publicKey.toBase58(),
-        yesSupply: yesMintInfo.supply.toString(),
-        noSupply: noMintInfo.supply.toString(),
-      });
+      log.info(`Closing market ${ticker}`, { market: m.publicKey.toBase58() });
 
       await program.methods
         .closeMarket()
@@ -137,14 +101,13 @@ export async function closeEligibleMarkets(
           yesMint: market.account.yesMint,
           noMint: market.account.noMint,
           treasury: treasuryPda,
+          solTreasury: solTreasuryPda,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: new PublicKey("11111111111111111111111111111111"),
         })
         .rpc();
 
-      log.info(`Market ${ticker} closed successfully (${closeType})`, {
-        market: m.publicKey.toBase58(),
-      });
+      log.info(`Market ${ticker} closed successfully`, { market: m.publicKey.toBase58() });
       result.closed.push(ticker);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);

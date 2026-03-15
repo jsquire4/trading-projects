@@ -65,6 +65,7 @@ export interface InitializeConfigParams {
   usdcMint: PublicKey;
   treasury: PublicKey;
   feeVault: PublicKey;
+  solTreasury: PublicKey;
   oracleProgram: PublicKey;
   /** 7-element array of ticker strings (e.g. ["AAPL", "MSFT", ...]) */
   tickers: string[];
@@ -104,14 +105,15 @@ export function buildInitializeConfigIx(
   ]);
 
   // Account order matches InitializeConfig struct:
-  //   admin, config, usdc_mint, treasury, fee_vault, oracle_program,
-  //   token_program, system_program, rent
+  //   admin, config, usdc_mint, treasury, fee_vault, sol_treasury,
+  //   oracle_program, token_program, system_program, rent
   const keys = [
     { pubkey: params.admin, isSigner: true, isWritable: true },
     { pubkey: params.config, isSigner: false, isWritable: true },
     { pubkey: params.usdcMint, isSigner: false, isWritable: false },
     { pubkey: params.treasury, isSigner: false, isWritable: true },
     { pubkey: params.feeVault, isSigner: false, isWritable: true },
+    { pubkey: params.solTreasury, isSigner: false, isWritable: true },
     { pubkey: params.oracleProgram, isSigner: false, isWritable: false },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
@@ -836,84 +838,6 @@ export function buildCloseMarketIx(
 }
 
 // ---------------------------------------------------------------------------
-// Meridian: treasury_redeem
-// ---------------------------------------------------------------------------
-
-export interface TreasuryRedeemParams {
-  user: PublicKey;
-  config: PublicKey;
-  market: PublicKey;
-  yesMint: PublicKey;
-  noMint: PublicKey;
-  treasury: PublicKey;
-  userUsdcAta: PublicKey;
-  userYesAta: PublicKey;
-  userNoAta: PublicKey;
-}
-
-export function buildTreasuryRedeemIx(
-  params: TreasuryRedeemParams,
-): TransactionInstruction {
-  const disc = anchorDiscriminator("treasury_redeem");
-
-  // Account order matches TreasuryRedeem struct:
-  //   user, config, market, yes_mint, no_mint, treasury,
-  //   user_usdc_ata, user_yes_ata, user_no_ata, token_program
-  const keys = [
-    { pubkey: params.user, isSigner: true, isWritable: true },
-    { pubkey: params.config, isSigner: false, isWritable: true },
-    { pubkey: params.market, isSigner: false, isWritable: true },
-    { pubkey: params.yesMint, isSigner: false, isWritable: true },
-    { pubkey: params.noMint, isSigner: false, isWritable: true },
-    { pubkey: params.treasury, isSigner: false, isWritable: true },
-    { pubkey: params.userUsdcAta, isSigner: false, isWritable: true },
-    { pubkey: params.userYesAta, isSigner: false, isWritable: true },
-    { pubkey: params.userNoAta, isSigner: false, isWritable: true },
-    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-  ];
-
-  return new TransactionInstruction({
-    programId: MERIDIAN_PROGRAM_ID,
-    keys,
-    data: disc,
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Meridian: cleanup_market
-// ---------------------------------------------------------------------------
-
-export interface CleanupMarketParams {
-  admin: PublicKey;
-  config: PublicKey;
-  market: PublicKey;
-  yesMint: PublicKey;
-  noMint: PublicKey;
-}
-
-export function buildCleanupMarketIx(
-  params: CleanupMarketParams,
-): TransactionInstruction {
-  const disc = anchorDiscriminator("cleanup_market");
-
-  // Account order matches CleanupMarket struct:
-  //   admin, config, market, yes_mint, no_mint
-  const keys = [
-    { pubkey: params.admin, isSigner: true, isWritable: true },
-    { pubkey: params.config, isSigner: false, isWritable: false },
-    { pubkey: params.market, isSigner: false, isWritable: true },
-    { pubkey: params.yesMint, isSigner: false, isWritable: true },
-    { pubkey: params.noMint, isSigner: false, isWritable: true },
-  ];
-
-  return new TransactionInstruction({
-    programId: MERIDIAN_PROGRAM_ID,
-    keys,
-    data: disc,
-  });
-}
-
-// ---------------------------------------------------------------------------
 // Meridian: update_fee_bps
 // ---------------------------------------------------------------------------
 
@@ -1290,33 +1214,6 @@ export function buildCircuitBreakerIx(
   return new TransactionInstruction({
     programId: MERIDIAN_PROGRAM_ID,
     keys: [...keys, ...remainingAccounts],
-    data: disc,
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Meridian: expand_config
-// ---------------------------------------------------------------------------
-
-export interface ExpandConfigParams {
-  admin: PublicKey;
-  config: PublicKey;
-}
-
-export function buildExpandConfigIx(
-  params: ExpandConfigParams,
-): TransactionInstruction {
-  const disc = anchorDiscriminator("expand_config");
-
-  const keys = [
-    { pubkey: params.admin, isSigner: true, isWritable: true },
-    { pubkey: params.config, isSigner: false, isWritable: true },
-    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-  ];
-
-  return new TransactionInstruction({
-    programId: MERIDIAN_PROGRAM_ID,
-    keys,
     data: disc,
   });
 }

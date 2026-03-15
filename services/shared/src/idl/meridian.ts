@@ -318,58 +318,6 @@ export type Meridian = {
       "args": []
     },
     {
-      "name": "cleanupMarket",
-      "discriminator": [
-        124,
-        83,
-        231,
-        13,
-        231,
-        181,
-        155,
-        4
-      ],
-      "accounts": [
-        {
-          "name": "admin",
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        },
-        {
-          "name": "config",
-          "relations": [
-            "market"
-          ]
-        },
-        {
-          "name": "market",
-          "writable": true
-        },
-        {
-          "name": "yesMint",
-          "docs": [
-            "Yes mint — checked for zero supply but NOT closed (owned by Token program)"
-          ],
-          "relations": [
-            "market"
-          ]
-        },
-        {
-          "name": "noMint",
-          "docs": [
-            "No mint — checked for zero supply but NOT closed (owned by Token program)"
-          ],
-          "relations": [
-            "market"
-          ]
-        }
-      ],
-      "args": []
-    },
-    {
       "name": "closeMarket",
       "discriminator": [
         88,
@@ -453,7 +401,7 @@ export type Meridian = {
         {
           "name": "treasury",
           "docs": [
-            "Treasury USDC account (config PDA authority, seeds=[b\"treasury\"])"
+            "Treasury USDC account — receives escrow dust"
           ],
           "writable": true,
           "pda": {
@@ -473,6 +421,13 @@ export type Meridian = {
               }
             ]
           }
+        },
+        {
+          "name": "solTreasury",
+          "docs": [
+            "Validated via config.sol_treasury."
+          ],
+          "writable": true
         },
         {
           "name": "tokenProgram",
@@ -876,6 +831,14 @@ export type Meridian = {
           "optional": true
         },
         {
+          "name": "solTreasury",
+          "docs": [
+            "Validated via config.sol_treasury in handler."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
           "name": "tokenProgram",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -973,53 +936,6 @@ export type Meridian = {
       ]
     },
     {
-      "name": "expandConfig",
-      "discriminator": [
-        120,
-        201,
-        195,
-        128,
-        35,
-        202,
-        73,
-        161
-      ],
-      "accounts": [
-        {
-          "name": "admin",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "config",
-          "docs": [
-            "is larger than the v1 account data. Validated manually: owner, seeds, admin field."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "systemProgram",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": []
-    },
-    {
       "name": "initializeConfig",
       "discriminator": [
         208,
@@ -1065,7 +981,7 @@ export type Meridian = {
         {
           "name": "treasury",
           "docs": [
-            "Treasury USDC account owned by config PDA — receives unclaimed USDC from force-closed markets"
+            "Treasury USDC account owned by config PDA — receives escrow dust from closed markets"
           ],
           "writable": true,
           "pda": {
@@ -1110,6 +1026,13 @@ export type Meridian = {
               }
             ]
           }
+        },
+        {
+          "name": "solTreasury",
+          "docs": [
+            "Created inline via invoke_signed (system account, not token account)."
+          ],
+          "writable": true
         },
         {
           "name": "oracleProgram"
@@ -1503,24 +1426,9 @@ export type Meridian = {
         {
           "name": "config",
           "writable": true
-        },
-        {
-          "name": "market",
-          "docs": [
-            "Optional: the market to pause. If not provided, pauses globally."
-          ],
-          "writable": true,
-          "optional": true
         }
       ],
-      "args": [
-        {
-          "name": "market",
-          "type": {
-            "option": "pubkey"
-          }
-        }
-      ]
+      "args": []
     },
     {
       "name": "placeOrder",
@@ -1883,101 +1791,6 @@ export type Meridian = {
       ]
     },
     {
-      "name": "treasuryRedeem",
-      "discriminator": [
-        154,
-        179,
-        45,
-        198,
-        243,
-        135,
-        180,
-        77
-      ],
-      "accounts": [
-        {
-          "name": "user",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "config",
-          "writable": true,
-          "relations": [
-            "market"
-          ]
-        },
-        {
-          "name": "market",
-          "writable": true
-        },
-        {
-          "name": "yesMint",
-          "writable": true,
-          "relations": [
-            "market"
-          ]
-        },
-        {
-          "name": "noMint",
-          "writable": true,
-          "relations": [
-            "market"
-          ]
-        },
-        {
-          "name": "treasury",
-          "docs": [
-            "Treasury USDC account (config PDA authority)"
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  114,
-                  101,
-                  97,
-                  115,
-                  117,
-                  114,
-                  121
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "userUsdcAta",
-          "docs": [
-            "User's USDC ATA"
-          ],
-          "writable": true
-        },
-        {
-          "name": "userYesAta",
-          "docs": [
-            "User's Yes token ATA"
-          ],
-          "writable": true
-        },
-        {
-          "name": "userNoAta",
-          "docs": [
-            "User's No token ATA"
-          ],
-          "writable": true
-        },
-        {
-          "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        }
-      ],
-      "args": []
-    },
-    {
       "name": "unpause",
       "discriminator": [
         169,
@@ -2000,24 +1813,9 @@ export type Meridian = {
         {
           "name": "config",
           "writable": true
-        },
-        {
-          "name": "market",
-          "docs": [
-            "Optional: the market to unpause. If not provided, unpauses globally."
-          ],
-          "writable": true,
-          "optional": true
         }
       ],
-      "args": [
-        {
-          "name": "market",
-          "type": {
-            "option": "pubkey"
-          }
-        }
-      ]
+      "args": []
     },
     {
       "name": "updateConfig",
@@ -2073,6 +1871,12 @@ export type Meridian = {
           "name": "settlementBlackoutMinutes",
           "type": {
             "option": "u16"
+          }
+        },
+        {
+          "name": "slotRentMarkup",
+          "type": {
+            "option": "u64"
           }
         }
       ]
@@ -2242,6 +2046,7 @@ export type Meridian = {
       "accounts": [
         {
           "name": "admin",
+          "writable": true,
           "signer": true,
           "relations": [
             "config"
@@ -2277,19 +2082,34 @@ export type Meridian = {
         {
           "name": "adminUsdcAta",
           "docs": [
-            "Admin's USDC ATA to receive surplus"
+            "Admin's USDC ATA to receive surplus USDC"
+          ],
+          "writable": true
+        },
+        {
+          "name": "solTreasury",
+          "docs": [
+            "Validated via config.sol_treasury."
           ],
           "writable": true
         },
         {
           "name": "tokenProgram",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": [
         {
           "name": "amount",
           "type": "u64"
+        },
+        {
+          "name": "mode",
+          "type": "u8"
         }
       ]
     }
@@ -2336,6 +2156,19 @@ export type Meridian = {
     }
   ],
   "events": [
+    {
+      "name": "autoPairBurnEvent",
+      "discriminator": [
+        57,
+        37,
+        21,
+        154,
+        50,
+        221,
+        61,
+        225
+      ]
+    },
     {
       "name": "crankCancelEvent",
       "discriminator": [
@@ -2453,7 +2286,7 @@ export type Meridian = {
     {
       "code": 6022,
       "name": "marketPaused",
-      "msg": "Market or global trading is paused"
+      "msg": "Global trading is paused"
     },
     {
       "code": 6023,
@@ -2468,7 +2301,7 @@ export type Meridian = {
     {
       "code": 6025,
       "name": "marketClosed",
-      "msg": "Market has been closed — use treasury_redeem"
+      "msg": "Market has been closed"
     },
     {
       "code": 6030,
@@ -2701,11 +2534,6 @@ export type Meridian = {
       "msg": "Cannot close market with resting orders — run crank_cancel first"
     },
     {
-      "code": 6113,
-      "name": "closeMarketGracePeriodActive",
-      "msg": "Cannot partially close before 90-day grace period"
-    },
-    {
       "code": 6114,
       "name": "invalidOracleType",
       "msg": "Oracle type flag not recognized"
@@ -2716,19 +2544,9 @@ export type Meridian = {
       "msg": "Pyth price feed ID doesn't match expected stock"
     },
     {
-      "code": 6116,
-      "name": "marketNotClosed",
-      "msg": "Market has not been closed — use standard redeem"
-    },
-    {
       "code": 6117,
       "name": "mintSupplyNotZero",
-      "msg": "Cannot cleanup market — tokens still outstanding"
-    },
-    {
-      "code": 6118,
-      "name": "noTreasuryFunds",
-      "msg": "Treasury has insufficient USDC to cover redemption"
+      "msg": "Cannot close market — tokens still outstanding"
     },
     {
       "code": 6120,
@@ -2786,11 +2604,6 @@ export type Meridian = {
       "msg": "Ticker has been deactivated"
     },
     {
-      "code": 6156,
-      "name": "configAlreadyExpanded",
-      "msg": "GlobalConfig already expanded to v2"
-    },
-    {
       "code": 6157,
       "name": "pythValidationRequired",
       "msg": "Invalid oracle type for Pyth feed validation"
@@ -2846,17 +2659,32 @@ export type Meridian = {
       "msg": "Order book has reached maximum level capacity"
     },
     {
-      "code": 6174,
-      "name": "maxSlotsReached",
-      "msg": "Cannot grow orders_per_level beyond 32"
-    },
-    {
       "code": 6175,
       "name": "orderBookAlreadyInitialized",
       "msg": "Order book already initialized"
     }
   ],
   "types": [
+    {
+      "name": "autoPairBurnEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "quantity",
+            "type": "u64"
+          }
+        ]
+      }
+    },
     {
       "name": "crankCancelEvent",
       "type": {
@@ -3114,6 +2942,20 @@ export type Meridian = {
                 6
               ]
             }
+          },
+          {
+            "name": "solTreasury",
+            "docs": [
+              "SOL Treasury PDA pubkey"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "slotRentMarkup",
+            "docs": [
+              "Configurable SOL markup per order slot (covers lifecycle tx fees)"
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -3316,20 +3158,6 @@ export type Meridian = {
             "type": "u8"
           },
           {
-            "name": "isPaused",
-            "docs": [
-              "Per-market pause"
-            ],
-            "type": "bool"
-          },
-          {
-            "name": "isClosed",
-            "docs": [
-              "True after partial close_market (Phase 6)"
-            ],
-            "type": "bool"
-          },
-          {
             "name": "overrideCount",
             "docs": [
               "Number of overrides used (max 3)"
@@ -3351,7 +3179,7 @@ export type Meridian = {
             "type": {
               "array": [
                 "u8",
-                2
+                4
               ]
             }
           }

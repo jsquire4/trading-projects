@@ -312,58 +312,6 @@
       "args": []
     },
     {
-      "name": "cleanup_market",
-      "discriminator": [
-        124,
-        83,
-        231,
-        13,
-        231,
-        181,
-        155,
-        4
-      ],
-      "accounts": [
-        {
-          "name": "admin",
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        },
-        {
-          "name": "config",
-          "relations": [
-            "market"
-          ]
-        },
-        {
-          "name": "market",
-          "writable": true
-        },
-        {
-          "name": "yes_mint",
-          "docs": [
-            "Yes mint — checked for zero supply but NOT closed (owned by Token program)"
-          ],
-          "relations": [
-            "market"
-          ]
-        },
-        {
-          "name": "no_mint",
-          "docs": [
-            "No mint — checked for zero supply but NOT closed (owned by Token program)"
-          ],
-          "relations": [
-            "market"
-          ]
-        }
-      ],
-      "args": []
-    },
-    {
       "name": "close_market",
       "discriminator": [
         88,
@@ -447,7 +395,7 @@
         {
           "name": "treasury",
           "docs": [
-            "Treasury USDC account (config PDA authority, seeds=[b\"treasury\"])"
+            "Treasury USDC account — receives escrow dust"
           ],
           "writable": true,
           "pda": {
@@ -467,6 +415,13 @@
               }
             ]
           }
+        },
+        {
+          "name": "sol_treasury",
+          "docs": [
+            "Validated via config.sol_treasury."
+          ],
+          "writable": true
         },
         {
           "name": "token_program",
@@ -870,6 +825,14 @@
           "optional": true
         },
         {
+          "name": "sol_treasury",
+          "docs": [
+            "Validated via config.sol_treasury in handler."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -967,53 +930,6 @@
       ]
     },
     {
-      "name": "expand_config",
-      "discriminator": [
-        120,
-        201,
-        195,
-        128,
-        35,
-        202,
-        73,
-        161
-      ],
-      "accounts": [
-        {
-          "name": "admin",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "config",
-          "docs": [
-            "is larger than the v1 account data. Validated manually: owner, seeds, admin field."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": []
-    },
-    {
       "name": "initialize_config",
       "discriminator": [
         208,
@@ -1059,7 +975,7 @@
         {
           "name": "treasury",
           "docs": [
-            "Treasury USDC account owned by config PDA — receives unclaimed USDC from force-closed markets"
+            "Treasury USDC account owned by config PDA — receives escrow dust from closed markets"
           ],
           "writable": true,
           "pda": {
@@ -1104,6 +1020,13 @@
               }
             ]
           }
+        },
+        {
+          "name": "sol_treasury",
+          "docs": [
+            "Created inline via invoke_signed (system account, not token account)."
+          ],
+          "writable": true
         },
         {
           "name": "oracle_program"
@@ -1497,24 +1420,9 @@
         {
           "name": "config",
           "writable": true
-        },
-        {
-          "name": "market",
-          "docs": [
-            "Optional: the market to pause. If not provided, pauses globally."
-          ],
-          "writable": true,
-          "optional": true
         }
       ],
-      "args": [
-        {
-          "name": "market",
-          "type": {
-            "option": "pubkey"
-          }
-        }
-      ]
+      "args": []
     },
     {
       "name": "place_order",
@@ -1877,101 +1785,6 @@
       ]
     },
     {
-      "name": "treasury_redeem",
-      "discriminator": [
-        154,
-        179,
-        45,
-        198,
-        243,
-        135,
-        180,
-        77
-      ],
-      "accounts": [
-        {
-          "name": "user",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "config",
-          "writable": true,
-          "relations": [
-            "market"
-          ]
-        },
-        {
-          "name": "market",
-          "writable": true
-        },
-        {
-          "name": "yes_mint",
-          "writable": true,
-          "relations": [
-            "market"
-          ]
-        },
-        {
-          "name": "no_mint",
-          "writable": true,
-          "relations": [
-            "market"
-          ]
-        },
-        {
-          "name": "treasury",
-          "docs": [
-            "Treasury USDC account (config PDA authority)"
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  114,
-                  101,
-                  97,
-                  115,
-                  117,
-                  114,
-                  121
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "user_usdc_ata",
-          "docs": [
-            "User's USDC ATA"
-          ],
-          "writable": true
-        },
-        {
-          "name": "user_yes_ata",
-          "docs": [
-            "User's Yes token ATA"
-          ],
-          "writable": true
-        },
-        {
-          "name": "user_no_ata",
-          "docs": [
-            "User's No token ATA"
-          ],
-          "writable": true
-        },
-        {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        }
-      ],
-      "args": []
-    },
-    {
       "name": "unpause",
       "discriminator": [
         169,
@@ -1994,24 +1807,9 @@
         {
           "name": "config",
           "writable": true
-        },
-        {
-          "name": "market",
-          "docs": [
-            "Optional: the market to unpause. If not provided, unpauses globally."
-          ],
-          "writable": true,
-          "optional": true
         }
       ],
-      "args": [
-        {
-          "name": "market",
-          "type": {
-            "option": "pubkey"
-          }
-        }
-      ]
+      "args": []
     },
     {
       "name": "update_config",
@@ -2067,6 +1865,12 @@
           "name": "settlement_blackout_minutes",
           "type": {
             "option": "u16"
+          }
+        },
+        {
+          "name": "slot_rent_markup",
+          "type": {
+            "option": "u64"
           }
         }
       ]
@@ -2236,6 +2040,7 @@
       "accounts": [
         {
           "name": "admin",
+          "writable": true,
           "signer": true,
           "relations": [
             "config"
@@ -2271,19 +2076,34 @@
         {
           "name": "admin_usdc_ata",
           "docs": [
-            "Admin's USDC ATA to receive surplus"
+            "Admin's USDC ATA to receive surplus USDC"
+          ],
+          "writable": true
+        },
+        {
+          "name": "sol_treasury",
+          "docs": [
+            "Validated via config.sol_treasury."
           ],
           "writable": true
         },
         {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": [
         {
           "name": "amount",
           "type": "u64"
+        },
+        {
+          "name": "mode",
+          "type": "u8"
         }
       ]
     }
@@ -2330,6 +2150,19 @@
     }
   ],
   "events": [
+    {
+      "name": "AutoPairBurnEvent",
+      "discriminator": [
+        57,
+        37,
+        21,
+        154,
+        50,
+        221,
+        61,
+        225
+      ]
+    },
     {
       "name": "CrankCancelEvent",
       "discriminator": [
@@ -2447,7 +2280,7 @@
     {
       "code": 6022,
       "name": "MarketPaused",
-      "msg": "Market or global trading is paused"
+      "msg": "Global trading is paused"
     },
     {
       "code": 6023,
@@ -2462,7 +2295,7 @@
     {
       "code": 6025,
       "name": "MarketClosed",
-      "msg": "Market has been closed — use treasury_redeem"
+      "msg": "Market has been closed"
     },
     {
       "code": 6030,
@@ -2695,11 +2528,6 @@
       "msg": "Cannot close market with resting orders — run crank_cancel first"
     },
     {
-      "code": 6113,
-      "name": "CloseMarketGracePeriodActive",
-      "msg": "Cannot partially close before 90-day grace period"
-    },
-    {
       "code": 6114,
       "name": "InvalidOracleType",
       "msg": "Oracle type flag not recognized"
@@ -2710,19 +2538,9 @@
       "msg": "Pyth price feed ID doesn't match expected stock"
     },
     {
-      "code": 6116,
-      "name": "MarketNotClosed",
-      "msg": "Market has not been closed — use standard redeem"
-    },
-    {
       "code": 6117,
       "name": "MintSupplyNotZero",
-      "msg": "Cannot cleanup market — tokens still outstanding"
-    },
-    {
-      "code": 6118,
-      "name": "NoTreasuryFunds",
-      "msg": "Treasury has insufficient USDC to cover redemption"
+      "msg": "Cannot close market — tokens still outstanding"
     },
     {
       "code": 6120,
@@ -2780,11 +2598,6 @@
       "msg": "Ticker has been deactivated"
     },
     {
-      "code": 6156,
-      "name": "ConfigAlreadyExpanded",
-      "msg": "GlobalConfig already expanded to v2"
-    },
-    {
       "code": 6157,
       "name": "PythValidationRequired",
       "msg": "Invalid oracle type for Pyth feed validation"
@@ -2840,17 +2653,32 @@
       "msg": "Order book has reached maximum level capacity"
     },
     {
-      "code": 6174,
-      "name": "MaxSlotsReached",
-      "msg": "Cannot grow orders_per_level beyond 32"
-    },
-    {
       "code": 6175,
       "name": "OrderBookAlreadyInitialized",
       "msg": "Order book already initialized"
     }
   ],
   "types": [
+    {
+      "name": "AutoPairBurnEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "quantity",
+            "type": "u64"
+          }
+        ]
+      }
+    },
     {
       "name": "CrankCancelEvent",
       "type": {
@@ -3108,6 +2936,20 @@
                 6
               ]
             }
+          },
+          {
+            "name": "sol_treasury",
+            "docs": [
+              "SOL Treasury PDA pubkey"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "slot_rent_markup",
+            "docs": [
+              "Configurable SOL markup per order slot (covers lifecycle tx fees)"
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -3310,20 +3152,6 @@
             "type": "u8"
           },
           {
-            "name": "is_paused",
-            "docs": [
-              "Per-market pause"
-            ],
-            "type": "bool"
-          },
-          {
-            "name": "is_closed",
-            "docs": [
-              "True after partial close_market (Phase 6)"
-            ],
-            "type": "bool"
-          },
-          {
             "name": "override_count",
             "docs": [
               "Number of overrides used (max 3)"
@@ -3345,7 +3173,7 @@
             "type": {
               "array": [
                 "u8",
-                2
+                4
               ]
             }
           }

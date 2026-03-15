@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { toast } from "sonner";
 import { useNetwork } from "@/hooks/useNetwork";
+import { WALLET_REFRESH_EVENT } from "@/hooks/useWalletState";
 
 interface FaucetButtonProps {
   className?: string;
@@ -39,6 +40,9 @@ export function FaucetButton({ className }: FaucetButtonProps) {
         });
         return;
       }
+
+      // Trigger immediate balance refresh in NavBalance
+      window.dispatchEvent(new Event(WALLET_REFRESH_EVENT));
 
       if (data.solAirdropFailed) {
         toast.warning(`${data.amount} USDC sent, but SOL airdrop failed`, {

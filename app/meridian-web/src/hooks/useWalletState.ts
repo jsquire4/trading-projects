@@ -46,7 +46,10 @@ interface UseWalletStateReturn {
 const WS_INITIAL_BACKOFF_MS = 1_000;
 const WS_MAX_BACKOFF_MS = 30_000;
 const WS_MAX_CONSECUTIVE_FAILURES = 3;
-const POLLING_FALLBACK_INTERVAL_MS = 10_000;
+const POLLING_INTERVAL_MS = 15_000;
+
+/** Dispatch this event from anywhere to trigger an immediate balance refresh. */
+export const WALLET_REFRESH_EVENT = "wallet-balance-refresh";
 
 // ---------------------------------------------------------------------------
 // Hook
@@ -123,32 +126,22 @@ export function useWalletState(): UseWalletStateReturn {
     let cancelled = false;
     let solSubId: number | null = null;
     let usdcSubId: number | null = null;
-    let pollingInterval: ReturnType<typeof setInterval> | null = null;
     let wsFailures = 0;
     let backoffMs = WS_INITIAL_BACKOFF_MS;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let usingPollingFallback = false;
 
     // Initial fetch
     fetchBalances();
 
-    // Start polling fallback (replaces WebSocket when it fails too many times)
-    function startPollingFallback() {
-      if (pollingInterval || cancelled) return;
-      usingPollingFallback = true;
-      pollingInterval = setInterval(() => {
-        if (!cancelled) fetchBalances();
-      }, POLLING_FALLBACK_INTERVAL_MS);
-    }
+    // Always poll at a moderate interval — WebSocket may miss events
+    // (e.g. when USDC ATA is created after subscription, or local validator WS issues)
+    const pollingInterval = setInterval(() => {
+      if (!cancelled) fetchBalances();
+    }, POLLING_INTERVAL_MS);
 
-    // Stop polling fallback (when WebSocket reconnects successfully)
-    function stopPollingFallback() {
-      if (pollingInterval) {
-        clearInterval(pollingInterval);
-        pollingInterval = null;
-      }
-      usingPollingFallback = false;
-    }
+    // Listen for immediate refresh events (e.g. after faucet)
+    const handleRefreshEvent = () => { if (!cancelled) fetchBalances(); };
+    window.addEventListener(WALLET_REFRESH_EVENT, handleRefreshEvent);
 
     // Subscribe to SOL account changes via WebSocket
     function subscribeSol() {
@@ -159,7 +152,6 @@ export function useWalletState(): UseWalletStateReturn {
           (accountInfo) => {
             wsFailures = 0;
             backoffMs = WS_INITIAL_BACKOFF_MS;
-            if (usingPollingFallback) stopPollingFallback();
             setSolBalance(accountInfo.lamports / 1e9);
           },
           "confirmed",
@@ -180,7 +172,6 @@ export function useWalletState(): UseWalletStateReturn {
           (accountInfo) => {
             wsFailures = 0;
             backoffMs = WS_INITIAL_BACKOFF_MS;
-            if (usingPollingFallback) stopPollingFallback();
             // Parse USDC balance from SPL token account data
             const data = accountInfo.data;
             if (data.length >= 72) {
@@ -197,11 +188,8 @@ export function useWalletState(): UseWalletStateReturn {
 
     function handleWsFailure() {
       wsFailures++;
-      if (wsFailures >= WS_MAX_CONSECUTIVE_FAILURES) {
-        // Switch to polling fallback
-        startPollingFallback();
-      } else {
-        // Exponential backoff reconnect
+      if (wsFailures < WS_MAX_CONSECUTIVE_FAILURES) {
+        // Exponential backoff reconnect (polling is always active as safety net)
         reconnectTimer = setTimeout(() => {
           if (!cancelled) {
             cleanupSubscriptions();
@@ -231,7 +219,8 @@ export function useWalletState(): UseWalletStateReturn {
     return () => {
       cancelled = true;
       cleanupSubscriptions();
-      if (pollingInterval) clearInterval(pollingInterval);
+      clearInterval(pollingInterval);
+      window.removeEventListener(WALLET_REFRESH_EVENT, handleRefreshEvent);
       if (reconnectTimer) clearTimeout(reconnectTimer);
     };
   }, [connection, publicKey, connected, refreshCounter, fetchBalances]);

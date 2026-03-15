@@ -83,20 +83,32 @@ export async function POST(request: Request) {
 
   try {
     const connection = new Connection(RPC_URL, "confirmed");
+    const isDevnet = RPC_URL.includes("devnet");
 
-    // Airdrop SOL if the user has none (local validator and devnet support requestAirdrop)
+    // Fund the faucet keypair itself if it has no SOL (needed to pay for txs)
+    const faucetBalance = await connection.getBalance(faucet.publicKey);
+    if (faucetBalance < 0.05 * 1_000_000_000) {
+      try {
+        const sig = await connection.requestAirdrop(faucet.publicKey, 2 * 1_000_000_000);
+        await connection.confirmTransaction(sig, "confirmed");
+      } catch {
+        return NextResponse.json(
+          { error: "Faucet has no SOL and airdrop failed — is the validator running?" },
+          { status: 500 },
+        );
+      }
+    }
+
+    // Airdrop SOL to the user if they have none
     const solBalance = await connection.getBalance(wallet);
     let solAirdropped = false;
     let solAirdropFailed = false;
-    const isDevnet = RPC_URL.includes("devnet");
     if (solBalance < 0.1 * 1_000_000_000) {
       try {
-        const airdropSig = await connection.requestAirdrop(wallet, 2 * 1_000_000_000); // 2 SOL
+        const airdropSig = await connection.requestAirdrop(wallet, 2 * 1_000_000_000);
         await connection.confirmTransaction(airdropSig, "confirmed");
         solAirdropped = true;
       } catch {
-        // Devnet rate-limits SOL airdrops.
-        // Local validator has unlimited airdrops — this typically only fails on devnet.
         solAirdropFailed = true;
       }
     }
@@ -133,6 +145,21 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
+
+    // Provide actionable hints for common setup issues
+    if (message.includes("could not find mint") || message.includes("Account does not exist")) {
+      return NextResponse.json(
+        { error: "USDC mint not found on this validator. Run: npx ts-node scripts/create-mock-usdc.ts" },
+        { status: 500 },
+      );
+    }
+    if (message.includes("mint authority") || message.includes("owner does not match")) {
+      return NextResponse.json(
+        { error: "FAUCET_KEYPAIR is not the mint authority for this USDC mint. Re-run create-mock-usdc.ts and update .env.local." },
+        { status: 500 },
+      );
+    }
+
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

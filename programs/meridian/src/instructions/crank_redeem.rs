@@ -57,7 +57,11 @@ pub fn handle_crank_redeem<'info>(
         MeridianError::CrankRedeemOverrideActive
     );
 
-    let max_users = (batch_size.min(32) as usize) / 2; // 2 accounts per user
+    // batch_size is the number of remaining_accounts (NOT users).
+    // Each user requires 2 accounts (winning_ata + usdc_ata), so max users = batch_size / 2.
+    // With batch_size=32, that's 16 users per crank call. This is by design — the
+    // on-chain instruction processes pairs of accounts, not individual users.
+    let max_users = (batch_size.min(32) as usize) / 2;
     let remaining = ctx.remaining_accounts;
 
     // Must have pairs of accounts

@@ -94,6 +94,12 @@ pub fn handle_add_ticker<'info>(
         return Ok(());
     }
 
+    // Cap registry size to prevent griefing via unbounded growth (M-5)
+    require!(
+        registry.entries.len() < 256,
+        MeridianError::MaxLevelsReached,
+    );
+
     // New ticker — add entry and realloc
     let new_entry = TickerEntry {
         ticker,

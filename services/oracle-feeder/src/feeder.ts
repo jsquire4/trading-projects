@@ -87,7 +87,19 @@ export async function startFeeder(
 
   // Market state tracking
   let lastKnownState = "unknown";
+  // Check on-chain pause state at startup so we don't resume feeding
+  // prices on a paused platform after a feeder restart (SH-1).
   let circuitBreakerTripped = false;
+  try {
+    const [configPda] = findGlobalConfig();
+    const configAcct = await (meridianProgram.account as any).globalConfig.fetch(configPda);
+    if (configAcct.isPaused) {
+      circuitBreakerTripped = true;
+      log.info("Platform is paused on-chain — feeder starting in paused mode");
+    }
+  } catch {
+    // Config not found — devnet may not be initialized. Proceed normally.
+  }
 
   let pollInterval: ReturnType<typeof setInterval> | null = null;
   let stateCheckInterval: ReturnType<typeof setInterval> | null = null;

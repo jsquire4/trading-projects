@@ -244,6 +244,10 @@ pub fn handle_place_order<'info>(
     }
 
     // --- Handle resting order failure: refund remaining quantity ---
+    // Two refund paths (intentional, not fragile):
+    // 1. resting_failed: refund the unfilled qty as if it were a market order (full refund)
+    // 2. !resting_failed: normal refund for market orders or dust below MIN_ORDER_SIZE
+    // These are mutually exclusive — only one path executes per order.
     if resting_failed && match_result.remaining_quantity > 0 {
         msg!(
             "Resting order failed (level full): refunding {} remaining to user={}",
@@ -470,11 +474,15 @@ fn expand_level<'info>(
         // Zero the new slot region
         ob_data[insertion_point..insertion_point + ORDER_SLOT_SIZE].fill(0);
 
-        // Update price_map: any level offset > loff needs to shift by ORDER_SLOT_SIZE
+        // Update price_map: any level with byte offset after the expanded level
+        // needs to shift forward by ORDER_SLOT_SIZE. Guard against u16 overflow.
         for p in 1..=99u8 {
             let off = book_price_map(&ob_data, p);
             if off != PRICE_UNALLOCATED && (off as usize) > loff {
-                book_set_price_map(&mut ob_data, p, off + ORDER_SLOT_SIZE as u16);
+                let new_off = off.checked_add(ORDER_SLOT_SIZE as u16)
+                    .filter(|&v| v < PRICE_UNALLOCATED)
+                    .ok_or(MeridianError::MaxLevelsReached)?;
+                book_set_price_map(&mut ob_data, p, new_off);
             }
         }
 

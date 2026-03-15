@@ -4,15 +4,14 @@ import Link from "next/link";
 import { useMemo, useState, useCallback, useEffect } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { usePositions, type Position } from "@/hooks/usePositions";
-import { useOrderBook } from "@/hooks/useMarkets";
+import { useOrderBooks, type OrderBookData } from "@/hooks/useMarkets";
 import { useCostBasis } from "@/hooks/useCostBasis";
 import { useRedeem } from "@/hooks/useRedeem";
 import { InsightTooltip } from "@/components/InsightTooltip";
 import { interpretPosition } from "@/lib/insights";
 import { calcPositionValue } from "@/lib/positions";
 
-function PositionCard({ position, totalCost, avgPriceCents, now }: { position: Position; totalCost: number; avgPriceCents: number | null; now: number }) {
-  const { data: book } = useOrderBook(position.market.publicKey.toBase58());
+function PositionCard({ position, totalCost, avgPriceCents, now, book }: { position: Position; totalCost: number; avgPriceCents: number | null; now: number; book: OrderBookData | undefined }) {
   const { publicKey } = useWallet();
   const { redeem, submitting } = useRedeem();
 
@@ -210,6 +209,13 @@ function PositionCard({ position, totalCost, avgPriceCents, now }: { position: P
 export function PositionsTab() {
   const { data: positions = [], isLoading } = usePositions();
   const { costBasis } = useCostBasis();
+
+  // Batch-fetch order books for all positions (FH-2 fix: single RPC call instead of N)
+  const marketKeys = useMemo(
+    () => positions.map((p) => p.market.publicKey),
+    [positions],
+  );
+  const { data: orderBooks } = useOrderBooks(marketKeys);
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
   useEffect(() => {
     const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 15_000);
@@ -276,6 +282,7 @@ export function PositionsTab() {
             totalCost={cb?.totalCostUsdc ?? 0}
             avgPriceCents={cb?.avgPrice ?? null}
             now={now}
+            book={orderBooks?.get(pos.market.publicKey.toBase58())}
           />
         );
       })}

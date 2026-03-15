@@ -115,18 +115,97 @@ fn match_against_bids(
         if loff == PRICE_UNALLOCATED { continue; }
         let loff = loff as usize;
 
-        if bid_price >= min_price {
+        let match_usdc = bid_price >= min_price;
+        let max_no_price = MERGE_TOTAL_CENTS.saturating_sub(min_price);
+        let match_no = bid_price <= max_no_price;
+
+        // Match both USDC_BID and NO_BID at this level with proper FIFO.
+        // match_at_level_for_side already picks the earliest-timestamp order
+        // within a single side. To interleave across sides, we call it once
+        // per fill and let the timestamp-based selection handle priority.
+        if match_usdc && !match_no {
             match_at_level_for_side(
                 data, taker_side, SIDE_USDC_BID, bid_price, loff, result, max_fills, false,
             );
-        }
-
-        let max_no_price = MERGE_TOTAL_CENTS.saturating_sub(min_price);
-        if bid_price <= max_no_price {
+        } else if match_no && !match_usdc {
             match_at_level_for_side(
                 data, taker_side, SIDE_NO_BID, bid_price, loff, result, max_fills, true,
             );
+        } else if match_usdc && match_no {
+            // Both sides eligible — use combined FIFO matching that considers
+            // both USDC_BID and NO_BID orders by timestamp at this level.
+            match_at_level_both_sides(
+                data, taker_side, bid_price, loff, result, max_fills,
+            );
         }
+    }
+}
+
+/// Combined FIFO matching across both USDC_BID and NO_BID at a single level.
+/// Picks the order with the earliest timestamp regardless of side.
+fn match_at_level_both_sides(
+    data: &mut [u8],
+    taker_side: u8,
+    fill_price: u8,
+    loff: usize,
+    result: &mut MatchResult,
+    max_fills: u8,
+) {
+    let slot_cnt = level_slot_count(data, loff);
+
+    loop {
+        if result.remaining_quantity < MIN_ORDER_SIZE { break; }
+        if result.fills.len() >= max_fills as usize { break; }
+
+        // Find the earliest active order across both USDC_BID and NO_BID
+        let mut best_slot: Option<u8> = None;
+        let mut best_ts: i64 = i64::MAX;
+        let mut best_side: u8 = 0;
+
+        for s in 0..slot_cnt {
+            if !slot_is_active(data, loff, s) { continue; }
+            let s_side = slot_side(data, loff, s);
+            if s_side != SIDE_USDC_BID && s_side != SIDE_NO_BID { continue; }
+            let ts = slot_timestamp(data, loff, s);
+            if ts < best_ts {
+                best_ts = ts;
+                best_slot = Some(s);
+                best_side = s_side;
+            }
+        }
+
+        let s = match best_slot {
+            Some(idx) => idx,
+            None => break,
+        };
+
+        let is_merge = best_side == SIDE_NO_BID;
+        let order_qty = slot_quantity(data, loff, s);
+        let fill_qty = result.remaining_quantity.min(order_qty);
+
+        result.fills.push(Fill {
+            maker: slot_owner(data, loff, s),
+            maker_order_id: slot_order_id(data, loff, s),
+            maker_side: best_side,
+            taker_side,
+            price: fill_price,
+            quantity: fill_qty,
+            is_merge,
+            level_idx: 0,
+            slot_idx: s,
+        });
+
+        if fill_qty >= order_qty {
+            deactivate_slot(data, loff, s);
+            let cnt = level_count(data, loff);
+            if cnt > 0 {
+                set_level_count(data, loff, cnt - 1);
+            }
+        } else {
+            set_slot_quantity(data, loff, s, order_qty - fill_qty);
+        }
+
+        result.remaining_quantity -= fill_qty;
     }
 }
 
@@ -346,6 +425,11 @@ pub fn crank_cancel_batch(
             if cnt > 0 {
                 set_level_count(data, loff, cnt - 1);
             }
+        }
+
+        // Free level if all slots are now inactive (L-2 fix)
+        if level_count(data, loff) == 0 {
+            free_level(data, loff);
         }
     }
 

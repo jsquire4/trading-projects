@@ -86,10 +86,16 @@ export class YahooClient implements IMarketDataClient {
   }
 
   async getMarketClock(): Promise<MarketClock> {
-    // Derive market state from a quote for a liquid symbol
+    // Derive market state from multiple liquid symbols for resilience (SH-2).
+    // Falls back through AAPL → MSFT → SPY if any is halted/unavailable.
     try {
-      const q = await this.yf.quote("AAPL");
-      const state = q?.marketState ?? "CLOSED";
+      let state: string = "CLOSED";
+      for (const sym of ["AAPL", "MSFT", "SPY"]) {
+        try {
+          const q = await this.yf.quote(sym);
+          if (q?.marketState) { state = q.marketState; break; }
+        } catch { continue; }
+      }
 
       // Map Yahoo marketState to our format
       const stateMap: Record<string, string> = {

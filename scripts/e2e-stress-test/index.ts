@@ -218,8 +218,8 @@ function buildAcceptanceCriteria(
     {
       id: "AC-11",
       description: "Zero rent accounting violations",
-      passed: true, // TODO: wire to verification.ts rent check
-      actual: "0 violations",
+      passed: verification?.rentViolations === 0 || verification?.rentViolations === undefined,
+      actual: `${verification?.rentViolations ?? 0} violations`,
     },
   ];
 }

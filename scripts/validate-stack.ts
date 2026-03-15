@@ -222,20 +222,30 @@ function check(name: string, passed: boolean, detail: string) {
     const nextOrderId = data.readBigUInt64LE(nextOrderIdOffset);
 
     // Quick scan: check if any active bids (side=0) and asks (side=1) exist
-    const levelsOffset = 8 + 32 + 8; // disc + market + next_order_id
+    // Sparse order book layout: 270-byte header with u16 price_map at offset 48
+    const HDR_PRICE_MAP = 48;
+    const HEADER_SIZE = 270;
+    const LEVEL_HEADER_SIZE = 8;
+    const ORDER_SLOT_SIZE = 112;
+    const SLOT_SIDE = 56;
+    const SLOT_IS_ACTIVE = 72;
+    const PRICE_UNALLOCATED = 0xFFFF;
+
     let hasBids = false;
     let hasAsks = false;
 
-    for (let lvl = 0; lvl < 99 && (!hasBids || !hasAsks); lvl++) {
-      const levelBase = levelsOffset + lvl * 2568;
-      const count = data[levelBase + 32 * 80]; // count field
-      if (count === 0) continue;
+    for (let p = 1; p <= 99; p++) {
+      const mapIdx = HDR_PRICE_MAP + (p - 1) * 2;
+      const loff = data[mapIdx] | (data[mapIdx + 1] << 8);
+      if (loff === PRICE_UNALLOCATED) continue;
 
-      for (let slot = 0; slot < 32; slot++) {
-        const slotBase = levelBase + slot * 80;
-        const isActive = data[slotBase + 72];
+      const slotCount = data[loff + 2]; // LVL_SLOT_COUNT at offset 2
+      for (let s = 0; s < slotCount; s++) {
+        const slotBase = loff + LEVEL_HEADER_SIZE + s * ORDER_SLOT_SIZE;
+        if (slotBase + ORDER_SLOT_SIZE > data.length) break;
+        const isActive = data[slotBase + SLOT_IS_ACTIVE];
         if (!isActive) continue;
-        const side = data[slotBase + 56];
+        const side = data[slotBase + SLOT_SIDE];
         if (side === 0) hasBids = true;
         if (side === 1) hasAsks = true;
       }
@@ -337,19 +347,21 @@ function check(name: string, passed: boolean, detail: string) {
         const obAcct = await connection.getAccountInfo(targetMarket.orderBook);
         if (obAcct) {
           const data = obAcct.data;
-          const levelsOffset = 8 + 32 + 8;
-          // Check price level 24 (index = bidPrice - 1)
-          const levelBase = levelsOffset + (bidPrice - 1) * 2568;
+          // Sparse layout: look up price level via price_map
+          const mapIdx = 48 + (bidPrice - 1) * 2; // HDR_PRICE_MAP + (price-1) * 2
+          const loff = data[mapIdx] | (data[mapIdx + 1] << 8);
           let foundOrder = false;
-          for (let slot = 0; slot < 32; slot++) {
-            const slotBase = levelBase + slot * 80;
-            const isActive = data[slotBase + 72];
-            if (!isActive) continue;
-            // Check owner matches test user
-            const ownerBytes = data.subarray(slotBase, slotBase + 32);
-            if (Buffer.from(ownerBytes).equals(testUser.publicKey.toBuffer())) {
-              foundOrder = true;
-              break;
+          if (loff !== 0xFFFF) {
+            const slotCount = data[loff + 2]; // LVL_SLOT_COUNT
+            for (let slot = 0; slot < slotCount; slot++) {
+              const slotBase = loff + 8 + slot * 112; // LEVEL_HEADER + slot * SLOT_SIZE
+              const isActive = data[slotBase + 72];
+              if (!isActive) continue;
+              const ownerBytes = data.subarray(slotBase, slotBase + 32);
+              if (Buffer.from(ownerBytes).equals(testUser.publicKey.toBuffer())) {
+                foundOrder = true;
+                break;
+              }
             }
           }
           check("Limit order placed + verified on-chain", foundOrder,

@@ -1,3 +1,6 @@
+// DEPRECATED: Removed from admin page. Markets are now created autonomously
+// by the settlement pipeline. This component has known bugs (false ? ternary
+// on line 84 renders Unpause button unconditionally). Do not use.
 "use client";
 
 import { useState, useCallback, useMemo } from "react";

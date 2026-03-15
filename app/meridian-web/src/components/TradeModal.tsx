@@ -1,3 +1,6 @@
+// DEPRECATED: Replaced by OrderModal.tsx. This component is no longer rendered
+// in the live UI. The payout calculation on line 52 is known to be incorrect
+// (shows net profit, not total payout). Do not use.
 "use client";
 
 import { useState, useCallback, useEffect } from "react";

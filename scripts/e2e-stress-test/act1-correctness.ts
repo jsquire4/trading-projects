@@ -89,7 +89,9 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Record an instruction type hit in the shared metrics. */
+/** Record an instruction type hit in the shared metrics.
+ *  Only called after successful sendTx (inside try block), so failed
+ *  transactions do NOT inflate the instruction diversity count. */
 function track(ctx: SharedContext, ixName: string): void {
   ctx.metrics.instructionTypes.add(ixName);
 }

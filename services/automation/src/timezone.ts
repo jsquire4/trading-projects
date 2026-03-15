@@ -119,12 +119,32 @@ function getETComponents(date: Date = new Date()): {
  * Returns e.g. -300 for EST (UTC-5) or -240 for EDT (UTC-4).
  */
 export function getETOffsetMinutes(date: Date = new Date()): number {
-  // Format the date in ET and in UTC, then compute the difference
-  const etStr = date.toLocaleString("en-US", { timeZone: ET_TIMEZONE });
-  const utcStr = date.toLocaleString("en-US", { timeZone: "UTC" });
-  const etDate = new Date(etStr);
-  const utcDate = new Date(utcStr);
-  return Math.round((etDate.getTime() - utcDate.getTime()) / 60_000);
+  // Use Intl.DateTimeFormat to get ET hours/minutes, then compute offset
+  // from UTC. This avoids new Date(localeString) which is implementation-defined (SH-6).
+  const etParts = new Intl.DateTimeFormat("en-US", {
+    timeZone: ET_TIMEZONE,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(date);
+
+  const utcParts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(date);
+
+  const get = (parts: Intl.DateTimeFormatPart[], type: Intl.DateTimeFormatPartTypes) =>
+    parseInt(parts.find((p) => p.type === type)?.value ?? "0", 10);
+
+  const etMinutes = get(etParts, "day") * 24 * 60 + get(etParts, "hour") * 60 + get(etParts, "minute");
+  const utcMinutes = get(utcParts, "day") * 24 * 60 + get(utcParts, "hour") * 60 + get(utcParts, "minute");
+
+  // Handle month/day boundary (e.g., ET is 11:30 PM on the 14th, UTC is 4:30 AM on the 15th)
+  let diff = etMinutes - utcMinutes;
+  if (diff > 12 * 60) diff -= 24 * 60;
+  if (diff < -12 * 60) diff += 24 * 60;
+
+  return diff;
 }
 
 /**

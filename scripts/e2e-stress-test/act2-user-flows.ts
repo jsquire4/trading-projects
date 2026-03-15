@@ -800,9 +800,11 @@ async function test12(ctx: SharedContext, m: MarketContext): Promise<TestResult>
   await sendTx(ctx.connection, new Transaction().add(unpauseGlobalIx), [ctx.admin]);
 
   if (myOrders.length > 0) {
-    return { passed: true, detail: "Circuit breaker paused market and cancelled orders" };
+    // Correct: circuit breaker pauses trading but does NOT cancel resting orders.
+    // Orders should still be on the book after pause.
+    return { passed: true, detail: `Circuit breaker paused — ${myOrders.length} orders preserved (expected)` };
   }
-  return { passed: false, detail: `${myOrders.length} orders still active after circuit breaker` };
+  return { passed: false, detail: "Orders disappeared after circuit breaker — should have been preserved" };
 }
 
 // ── T13: Update config ───────────────────────────────────────────────────────

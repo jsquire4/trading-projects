@@ -137,6 +137,8 @@ async function redeemMarket(
     const remainingAccounts: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[] = [];
 
     for (const holder of batch) {
+      // allowOwnerOffCurve=true handles PDA-owned token accounts (SH-5).
+      // On-chain crank_redeem skips invalid/non-existent ATAs gracefully.
       const userWinningAta = getAssociatedTokenAddressSync(winningMint, holder.owner, true);
       const userUsdcAta = getAssociatedTokenAddressSync(usdcMint, holder.owner, true);
 

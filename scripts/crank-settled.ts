@@ -155,24 +155,29 @@ function expiryDayFromUnix(unix: number): number {
       const obAcct = await connection.getAccountInfo(orderBook);
       if (!obAcct) continue;
 
-      // Scan for active orders
+      // Scan for active orders (sparse order book layout)
       const data = obAcct.data;
-      const levelsOffset = 8 + 32 + 8;
+      const HDR_PRICE_MAP = 48;
+      const LEVEL_HEADER_SIZE = 8;
+      const ORDER_SLOT_SIZE = 112;
+      const PRICE_UNALLOCATED = 0xFFFF;
       interface ActiveOrder { owner: PublicKey; side: number; slotIdx: number; levelIdx: number }
       const activeOrders: ActiveOrder[] = [];
 
-      for (let lvl = 0; lvl < 99; lvl++) {
-        const levelBase = levelsOffset + lvl * 2568;
-        const count = data[levelBase + 32 * 80];
-        if (count === 0) continue;
+      for (let p = 1; p <= 99; p++) {
+        const mapIdx = HDR_PRICE_MAP + (p - 1) * 2;
+        const loff = data[mapIdx] | (data[mapIdx + 1] << 8);
+        if (loff === PRICE_UNALLOCATED) continue;
 
-        for (let slot = 0; slot < 32; slot++) {
-          const slotBase = levelBase + slot * 80;
+        const slotCount = data[loff + 2]; // LVL_SLOT_COUNT
+        for (let slot = 0; slot < slotCount; slot++) {
+          const slotBase = loff + LEVEL_HEADER_SIZE + slot * ORDER_SLOT_SIZE;
+          if (slotBase + ORDER_SLOT_SIZE > data.length) break;
           const isActive = data[slotBase + 72];
           if (!isActive) continue;
           const owner = new PublicKey(data.subarray(slotBase, slotBase + 32));
           const side = data[slotBase + 56];
-          activeOrders.push({ owner, side, slotIdx: slot, levelIdx: lvl });
+          activeOrders.push({ owner, side, slotIdx: slot, levelIdx: p - 1 });
         }
       }
 

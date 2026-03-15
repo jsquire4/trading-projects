@@ -183,12 +183,22 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
         noValue: (Number(p.noBal) / 1_000_000) * noMid,
       };
     });
-    return [{
-      ts: Date.now(),
-      wallet,
-      totalValue: liveValue,
-      positions: posSnapshots,
-    }];
+    // Synthesize two points so the chart has enough data to render (FH-3 fix).
+    // Point 1: "start of day" approximated by cost basis (what user paid).
+    // Point 2: "now" with current mark-to-market value.
+    const startOfDayTs = new Date();
+    startOfDayTs.setHours(9, 30, 0, 0); // market open approximation
+    const startTs = startOfDayTs.getTime();
+    const costBasisValue = apiPositions.reduce((sum, p) => {
+      const cost = p.totalCost / (1_000_000 * 100);
+      return p.side === 1 ? sum - cost : sum + cost;
+    }, 0);
+    const openValue = costBasisValue > 0 ? costBasisValue : liveValue;
+
+    return [
+      { ts: startTs, wallet, totalValue: openValue, positions: [] },
+      { ts: Date.now(), wallet, totalValue: liveValue, positions: posSnapshots },
+    ];
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [positions, midPricesKey, liveValue, wallet]);
 

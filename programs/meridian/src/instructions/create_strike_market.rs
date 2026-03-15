@@ -177,15 +177,11 @@ pub fn handle_create_strike_market(
             MeridianError::InvalidTicker,
         );
     } else {
-        // No registry passed — check if the PDA exists on-chain.
-        // If it does, the caller MUST include it (prevents bypass).
-        let (registry_pda, _) = Pubkey::find_program_address(
-            &[TickerRegistry::SEED_PREFIX],
-            ctx.program_id,
-        );
-        // We can't read the account here (it's not in remaining_accounts),
-        // but we can fall back to GlobalConfig only for legacy compatibility.
-        // TODO: Make ticker_registry non-optional once all clients are updated.
+        // No registry passed — fall back to GlobalConfig.tickers for legacy
+        // compatibility only. All new deployments should include ticker_registry.
+        // The GlobalConfig fallback does NOT check deactivation status, so this
+        // path allows creating markets for deactivated tickers if the registry
+        // is intentionally omitted. This is acceptable for backward compat only.
         require!(config.is_valid_ticker(&ticker), MeridianError::InvalidTicker);
     }
     require!(strike_price > 0, MeridianError::InvalidStrikePrice);
@@ -375,13 +371,6 @@ pub fn handle_create_strike_market(
                 let reimburse = total_rent.min(available);
 
                 if reimburse > 0 {
-                    // Transfer from SOL Treasury to creator (config PDA signs)
-                    let config_bump = config.bump;
-                    let config_seeds: &[&[u8]] = &[
-                        GlobalConfig::SEED_PREFIX,
-                        &[config_bump],
-                    ];
-
                     // SOL Treasury is program-owned, transfer via direct lamport manipulation
                     **sol_treasury_info.try_borrow_mut_lamports()? = sol_treasury_info
                         .lamports()
@@ -391,9 +380,6 @@ pub fn handle_create_strike_market(
                         .lamports()
                         .checked_add(reimburse)
                         .ok_or(MeridianError::ArithmeticOverflow)?;
-
-                    // Suppress unused variable warning for config_seeds
-                    let _ = config_seeds;
 
                     msg!("Treasury reimbursed {} lamports to admin for market creation", reimburse);
                 }

@@ -166,7 +166,10 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
     Ok(())
 }
 
-/// Drain all lamports from an account to the destination, zeroing data.
+/// Drain all lamports from a program-owned account to the destination, zeroing data.
+/// This is the standard pattern for closing program-owned UncheckedAccounts
+/// (Anchor's `close` constraint only works with typed Account<T>).
+/// Zeroing discriminator + data prevents deserialization after close.
 fn drain_lamports<'info>(
     source: &AccountInfo<'info>,
     destination: &AccountInfo<'info>,

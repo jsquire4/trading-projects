@@ -4,7 +4,7 @@
 providers = ["node"]
 
 [phases.setup]
-nixPkgs = ["nodejs_18", "npm-9_x", "python311", "gcc", "gnumake", "pkg-config", "libudev-zero"]
+nixPkgs = ["nodejs_18", "npm-9_x", "python311", "gcc", "gnumake", "pkg-config", "libusb1", "libudev-zero", "systemd"]
 
 [phases.install]
 cmds = ["echo 'install phase skipped — handled by NIXPACKS_BUILD_CMD'"]

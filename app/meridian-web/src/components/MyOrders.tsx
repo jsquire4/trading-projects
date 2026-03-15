@@ -3,22 +3,11 @@
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useMyOrders } from "@/hooks/useMyOrders";
 import { useCancelOrder } from "@/hooks/useCancelOrder";
+import { SIDE_LABELS, SIDE_COLORS } from "@/lib/constants";
 
 interface MyOrdersProps {
   marketKey: string;
 }
-
-const SIDE_LABELS: Record<number, string> = {
-  0: "Buy Yes",
-  1: "Sell Yes",
-  2: "Sell No",
-};
-
-const SIDE_COLORS: Record<number, string> = {
-  0: "text-green-400",
-  1: "text-amber-400",
-  2: "text-red-400",
-};
 
 export function MyOrders({ marketKey }: MyOrdersProps) {
   const { orders, isLoading } = useMyOrders(marketKey);

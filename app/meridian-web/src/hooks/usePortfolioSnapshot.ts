@@ -7,11 +7,11 @@ import type {
   PnlSnapshot,
   DailySummary,
 } from "@/lib/portfolioDb";
+import { EVENT_INDEXER_URL } from "@/lib/constants";
+import { calcPositionValue } from "@/lib/positions";
 
 // Re-export types for consumers
 export type { PnlSnapshot, DailySummary };
-
-const EVENT_INDEXER_URL = process.env.NEXT_PUBLIC_EVENT_INDEXER_URL ?? "http://localhost:3001";
 
 // ---------------------------------------------------------------------------
 // API response types (from event-indexer)
@@ -147,7 +147,7 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
         noMid = 1 - yesMid;
         if (mid === undefined) fallback = true;
       }
-      return sum + (Number(p.yesBal) / 1_000_000) * yesMid + (Number(p.noBal) / 1_000_000) * noMid;
+      return sum + calcPositionValue(Number(p.yesBal) / 1_000_000, Number(p.noBal) / 1_000_000, yesMid);
     }, 0);
     return { liveValue: value, usedFallback: fallback };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -234,7 +234,7 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
         yesMid = midPrices?.get(marketKey) ?? 0.5;
         noMid = 1 - yesMid;
       }
-      const currentVal = (Number(pos.yesBal) / 1_000_000) * yesMid + (Number(pos.noBal) / 1_000_000) * noMid;
+      const currentVal = calcPositionValue(Number(pos.yesBal) / 1_000_000, Number(pos.noBal) / 1_000_000, yesMid);
       const cost = costByMarket.get(marketKey) ?? 0;
       const pnl = currentVal - cost;
 

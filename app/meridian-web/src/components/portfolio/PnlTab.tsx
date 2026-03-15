@@ -21,6 +21,7 @@ import {
   TOOLTIP_STYLE,
   formatDollar,
 } from "@/lib/chartConfig";
+import { calcPositionValue } from "@/lib/positions";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -162,7 +163,7 @@ export function PnlTab() {
     } else {
       mid = midPriceMap.get(marketKey) ?? 0.5;
     }
-    const currentVal = yesBal * mid + noBal * (1 - mid);
+    const currentVal = calcPositionValue(yesBal, noBal, mid);
     const isWinner = pos.market.isSettled && (
       (pos.market.outcome === 1 && yesBal > 0) ||
       (pos.market.outcome === 2 && noBal > 0)

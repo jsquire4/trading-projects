@@ -6,6 +6,7 @@ import { useIndexedEvents } from "@/hooks/useAnalyticsData";
 import { parseFillEvent } from "@/lib/eventParsers";
 import { buildCsv, downloadCsv } from "@/lib/csv";
 import { getExplorerUrl } from "@/lib/network";
+import { SIDE_LABELS } from "@/lib/constants";
 
 /**
  * Derive viewer-perspective intent label when no stored intent is available.
@@ -19,10 +20,10 @@ import { getExplorerUrl } from "@/lib/network";
  */
 function deriveViewerIntent(takerSide: number, makerSide: number, isTaker: boolean): string {
   if (isTaker) {
-    return { 0: "Buy Yes", 1: "Sell Yes", 2: "Sell No" }[takerSide] ?? "Unknown";
+    return SIDE_LABELS[takerSide] ?? "Unknown";
   }
   // Maker label is determined by the maker's own resting side
-  return { 0: "Buy Yes", 1: "Sell Yes", 2: "Sell No" }[makerSide] ?? "Unknown";
+  return SIDE_LABELS[makerSide] ?? "Unknown";
 }
 
 const INTENT_COLORS: Record<string, string> = {

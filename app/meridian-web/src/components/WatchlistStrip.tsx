@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useWatchlist } from "@/hooks/useWatchlist";
 import { useQuotes } from "@/hooks/useAnalyticsData";
 import { MAG7 } from "@/lib/tickers";
+import { useTickerValidation } from "@/hooks/useTickerValidation";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -105,41 +106,16 @@ interface AddTickerInputProps {
 
 function AddTickerInput({ onAdd, onCancel }: AddTickerInputProps) {
   const [value, setValue] = useState("");
-  const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
-  const [errorMsg, setErrorMsg] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const { status, errorMsg, validate, clearError } = useTickerValidation();
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
   async function handleSubmit() {
     const upper = value.trim().toUpperCase();
-    if (!upper || status === "loading") return;
-
-    setStatus("loading");
-    setErrorMsg("");
-
-    try {
-      const res = await fetch(`/api/market-data/quotes?symbols=${encodeURIComponent(upper)}`);
-      if (!res.ok) {
-        setStatus("error");
-        setErrorMsg(`Request failed (${res.status})`);
-        return;
-      }
-      const data = await res.json();
-      const quotes: unknown[] = Array.isArray(data) ? data : [];
-      const valid = quotes.length > 0 && (quotes[0] as any)?.last > 0;
-
-      if (valid) {
-        onAdd(upper);
-      } else {
-        setStatus("error");
-        setErrorMsg(`"${upper}" not found or not tradeable`);
-      }
-    } catch (err) {
-      setStatus("error");
-      setErrorMsg("Validation failed — check connection");
-      console.error("Ticker validation error:", err);
-    }
+    if (!upper) return;
+    const valid = await validate(upper);
+    if (valid) onAdd(upper);
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -159,10 +135,7 @@ function AddTickerInput({ onAdd, onCancel }: AddTickerInputProps) {
           value={value}
           onChange={(e) => {
             setValue(e.target.value.toUpperCase());
-            if (status === "error") {
-              setStatus("idle");
-              setErrorMsg("");
-            }
+            if (status === "error") clearError();
           }}
           onKeyDown={handleKeyDown}
           placeholder="TICKER"

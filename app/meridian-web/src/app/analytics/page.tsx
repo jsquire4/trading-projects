@@ -1,12 +1,13 @@
 "use client";
 
-import { Component, type ReactNode, useState, useRef, useCallback, useEffect } from "react";
+import { Component, type ReactNode, useState } from "react";
 import Link from "next/link";
 import { useMarkets } from "@/hooks/useMarkets";
 import { HistoricalOverlay } from "@/components/analytics/HistoricalOverlay";
 import { SettlementAnalytics } from "@/components/analytics/SettlementAnalytics";
 import { PriceHistory } from "@/components/analytics/PriceHistory";
 import { TickerButton } from "@/components/analytics/TickerButton";
+import { TickerSearch } from "@/components/analytics/TickerSearch";
 import { useQuotes } from "@/hooks/useAnalyticsData";
 import { MAG7 } from "@/lib/tickers";
 
@@ -71,77 +72,6 @@ function CollapsibleSection({
         <span className={`text-xs transition-transform ${open ? "rotate-180" : ""}`}>&#9660;</span>
       </button>
       {open && <div className="px-4 sm:px-6 pb-6">{children}</div>}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Inline ticker search (validates via market data API)
-// ---------------------------------------------------------------------------
-
-function TickerSearch({ onSelect, onCancel }: { onSelect: (ticker: string) => void; onCancel: () => void }) {
-  const [value, setValue] = useState("");
-  const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
-  const [errorMsg, setErrorMsg] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
-  const validatingRef = useRef(false);
-
-  useEffect(() => { inputRef.current?.focus(); }, []);
-
-  const validate = useCallback(async (ticker: string) => {
-    const upper = ticker.trim().toUpperCase();
-    if (!upper || validatingRef.current) return;
-    validatingRef.current = true;
-    setStatus("loading");
-    setErrorMsg("");
-
-    try {
-      const res = await fetch(`/api/market-data/quotes?symbols=${encodeURIComponent(upper)}`);
-      if (!res.ok) {
-        setStatus("error");
-        setErrorMsg(`Lookup failed (${res.status})`);
-        return;
-      }
-      const data: unknown = await res.json();
-      const quotes = (Array.isArray(data) ? data : []) as Array<{ symbol?: string; last?: number }>;
-      const valid = quotes.length > 0 && typeof quotes[0]?.last === "number" && quotes[0].last > 0;
-      if (valid) {
-        onSelect(upper);
-      } else {
-        setStatus("error");
-        setErrorMsg(`"${upper}" not found`);
-      }
-    } catch {
-      setStatus("error");
-      setErrorMsg("Validation failed");
-    } finally {
-      validatingRef.current = false;
-    }
-  }, [onSelect]);
-
-  return (
-    <div className="relative flex shrink-0 items-center gap-1">
-      <div className="relative">
-        <input
-          ref={inputRef}
-          type="text"
-          value={value}
-          onChange={(e) => { setValue(e.target.value.toUpperCase()); if (status === "error") { setStatus("idle"); setErrorMsg(""); } }}
-          onKeyDown={(e) => { if (e.key === "Enter") void validate(value); else if (e.key === "Escape") onCancel(); }}
-          placeholder="TICKER"
-          maxLength={10}
-          className={`w-24 rounded-full border px-3 py-1 text-xs font-mono uppercase bg-white/5 text-white outline-none transition-all placeholder:text-white/20 ${
-            status === "error" ? "border-red-500/50 focus:border-red-500/70" : "border-white/20 focus:border-blue-500/50"
-          }`}
-        />
-        {status === "loading" && (
-          <div className="absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 animate-spin rounded-full border border-white/20 border-t-white/60" />
-        )}
-      </div>
-      <button onClick={onCancel} className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-white/40 hover:bg-white/20 hover:text-white/70 transition-colors text-xs leading-none" aria-label="Cancel">×</button>
-      {status === "error" && errorMsg && (
-        <div className="absolute left-0 -bottom-6 z-10 whitespace-nowrap rounded bg-red-500/20 border border-red-500/30 px-2 py-0.5 text-[10px] text-red-400">{errorMsg}</div>
-      )}
     </div>
   );
 }

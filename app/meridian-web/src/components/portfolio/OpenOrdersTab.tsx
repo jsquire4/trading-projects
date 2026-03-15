@@ -4,9 +4,7 @@ import { useMemo } from "react";
 import { useMarkets } from "@/hooks/useMarkets";
 import { useMyOrders } from "@/hooks/useMyOrders";
 import { useCancelOrder } from "@/hooks/useCancelOrder";
-
-const SIDE_LABELS: Record<number, string> = { 0: "Buy Yes", 1: "Sell Yes", 2: "Sell No" };
-const SIDE_COLORS: Record<number, string> = { 0: "text-green-400", 1: "text-amber-400", 2: "text-red-400" };
+import { SIDE_LABELS, SIDE_COLORS } from "@/lib/constants";
 
 function MarketOrders({ marketKey, ticker, strike }: { marketKey: string; ticker: string; strike: number }) {
   const { orders, isLoading } = useMyOrders(marketKey);

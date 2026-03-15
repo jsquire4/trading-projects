@@ -34,18 +34,5 @@ export async function getHistory(
   return mod.getHistory(symbol, start, end);
 }
 
-export function getTodayExpiration(): string {
-  // Pure date math — same implementation regardless of mode
-  const now = new Date();
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(now);
-
-  const year = parts.find((p) => p.type === "year")!.value;
-  const month = parts.find((p) => p.type === "month")!.value;
-  const day = parts.find((p) => p.type === "day")!.value;
-  return `${year}-${month}-${day}`;
-}
+// Re-export — implementation lives in yahoo-proxy (pure date math, no Yahoo dep)
+export { getTodayExpiration } from "./yahoo-proxy";

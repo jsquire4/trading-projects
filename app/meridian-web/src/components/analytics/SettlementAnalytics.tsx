@@ -12,8 +12,8 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
-import { useQuery } from "@tanstack/react-query";
 import { useSettlementEvents, type IndexedEvent } from "@/hooks/useAnalyticsData";
+import { useMarketVwaps } from "@/hooks/useMarketVwaps";
 import {
   COLORS,
   AXIS_STYLE,
@@ -21,8 +21,6 @@ import {
   TOOLTIP_STYLE,
   formatPercent,
 } from "@/lib/chartConfig";
-
-const EVENT_INDEXER_URL = process.env.NEXT_PUBLIC_EVENT_INDEXER_URL ?? "http://localhost:3001";
 
 // ---------------------------------------------------------------------------
 // Parsed settlement data shape
@@ -206,20 +204,7 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
 export function SettlementAnalytics() {
   const { data: events, isLoading, isError, error } = useSettlementEvents();
 
-  const { data: vwapData } = useQuery<Map<string, number>>({
-    queryKey: ["market-vwaps"],
-    queryFn: async () => {
-      const res = await fetch(`${EVENT_INDEXER_URL}/api/events/market-vwaps`);
-      if (!res.ok) return new Map();
-      const json = await res.json();
-      const map = new Map<string, number>();
-      for (const v of json.vwaps ?? []) {
-        map.set(v.market, v.vwap); // vwap in cents
-      }
-      return map;
-    },
-    staleTime: 60_000,
-  });
+  const { data: vwapData } = useMarketVwaps();
 
   const settlements = useMemo(() => {
     if (!events) return [];

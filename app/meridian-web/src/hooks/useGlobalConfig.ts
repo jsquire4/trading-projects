@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { PublicKey } from "@solana/web3.js";
 import { useAnchorProgram } from "./useAnchorProgram";
 import { findGlobalConfig } from "@/lib/pda";
+import { toBigInt } from "@/lib/constants";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -66,18 +67,18 @@ export function useGlobalConfig() {
           pendingAdmin,
           usdcMint: raw.usdcMint as PublicKey,
           oracleProgram: raw.oracleProgram as PublicKey,
-          stalenessThreshold: BigInt((raw.stalenessThreshold as any).toString()),
-          settlementStaleness: BigInt((raw.settlementStaleness as any).toString()),
-          confidenceBps: BigInt((raw.confidenceBps as any).toString()),
+          stalenessThreshold: toBigInt(raw.stalenessThreshold),
+          settlementStaleness: toBigInt(raw.settlementStaleness),
+          confidenceBps: toBigInt(raw.confidenceBps),
           isPaused: raw.isPaused as boolean,
           oracleType: raw.oracleType as number,
           tickers,
           tickerCount,
           bump: raw.bump as number,
           feeBps: raw.feeBps as number,
-          strikeCreationFee: BigInt((raw.strikeCreationFee as any).toString()),
-          operatingReserve: BigInt((raw.operatingReserve as any).toString()),
-          obligations: BigInt((raw.obligations as any).toString()),
+          strikeCreationFee: toBigInt(raw.strikeCreationFee),
+          operatingReserve: toBigInt(raw.operatingReserve),
+          obligations: toBigInt(raw.obligations),
           settlementBlackoutMinutes: raw.settlementBlackoutMinutes as number,
         };
       } catch {

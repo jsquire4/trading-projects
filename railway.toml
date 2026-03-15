@@ -1,0 +1,6 @@
+# Root-level railway.toml — forces Nixpacks builder for all services.
+# Without this, Railway's Railpack auto-detects Cargo.toml and tries Rust.
+# Each service uses NIXPACKS_BUILD_CMD and NIXPACKS_START_CMD env vars
+# to cd into its subdirectory.
+[build]
+builder = "NIXPACKS"

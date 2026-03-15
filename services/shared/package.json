@@ -6,6 +6,11 @@
     "vitest": "^2.1.9"
   },
   "dependencies": {
+    "@coral-xyz/anchor": "^0.31.1",
+    "@solana/web3.js": "^1.95.0",
+    "@solana/spl-token": "^0.4.0",
+    "bn.js": "^5.2.1",
+    "bs58": "^6.0.0",
     "yahoo-finance2": "^3.13.2"
   }
 }

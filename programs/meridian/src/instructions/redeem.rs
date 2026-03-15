@@ -19,8 +19,6 @@ pub struct Redeem<'info> {
         has_one = yes_mint @ MeridianError::InvalidMint,
         has_one = no_mint @ MeridianError::InvalidMint,
         has_one = usdc_vault @ MeridianError::InvalidVault,
-        constraint = !market.is_paused @ MeridianError::MarketPaused,
-        constraint = !market.is_closed @ MeridianError::MarketClosed,
     )]
     pub market: Box<Account<'info, StrikeMarket>>,
 

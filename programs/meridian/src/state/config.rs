@@ -1,9 +1,8 @@
 use anchor_lang::prelude::*;
-use super::order_book::{ADMIN_SETTLE_DELAY_SECS, OVERRIDE_WINDOW_SECS, CLOSE_GRACE_PERIOD_SECS};
+use super::order_book::{ADMIN_SETTLE_DELAY_SECS, OVERRIDE_WINDOW_SECS};
 
 #[account]
 pub struct GlobalConfig {
-    // ── v1 fields (192 bytes) ─────────────────────────────────────────
     /// Admin authority
     pub admin: Pubkey,
     /// Mock USDC mint on devnet (real USDC on mainnet)
@@ -33,7 +32,6 @@ pub struct GlobalConfig {
     /// Fee in USDC lamports charged to non-admin users creating strike markets
     pub strike_creation_fee: u64,
 
-    // ── v2 fields (56 bytes, appended by expand_config) ───────────────
     /// Proposed new admin (two-step transfer). Pubkey::default() = no pending transfer.
     pub pending_admin: Pubkey,
     /// Admin-configurable SOL reserve for next-day market creation float
@@ -51,9 +49,7 @@ impl GlobalConfig {
     pub const TREASURY_SEED: &'static [u8] = b"treasury";
     pub const FEE_VAULT_SEED: &'static [u8] = b"fee_vault";
 
-    // v1: 192 bytes, v2: 248 bytes (192 + 32 + 8 + 8 + 2 + 6)
     pub const LEN: usize = 248;
-    pub const V1_LEN: usize = 192;
 
     /// Check ticker against the legacy tickers array (for backward compat)
     pub fn is_valid_ticker(&self, ticker: &[u8; 8]) -> bool {
@@ -62,18 +58,13 @@ impl GlobalConfig {
             .any(|t| t == ticker)
     }
 
-    /// Admin settle delay: 0 for Mock oracle (admin IS the oracle), 1hr for Pyth.
+    /// Admin settle delay: 1hr for all oracle types.
     pub fn admin_settle_delay(&self) -> i64 {
-        if self.oracle_type == 0 { 0 } else { ADMIN_SETTLE_DELAY_SECS }
+        ADMIN_SETTLE_DELAY_SECS
     }
 
-    /// Override window: 0 for Mock (instant finality), 1hr for Pyth.
+    /// Override window: 1 second for all oracle types.
     pub fn override_window(&self) -> i64 {
-        if self.oracle_type == 0 { 0 } else { OVERRIDE_WINDOW_SECS }
-    }
-
-    /// Close grace period: 0 for Mock, 90 days for Pyth.
-    pub fn close_grace_period(&self) -> i64 {
-        if self.oracle_type == 0 { 0 } else { CLOSE_GRACE_PERIOD_SECS }
+        OVERRIDE_WINDOW_SECS
     }
 }

@@ -51,16 +51,12 @@ pub struct StrikeMarket {
     pub is_settled: bool,
     /// 0=unsettled, 1=YesWins, 2=NoWins
     pub outcome: u8,
-    /// Per-market pause
-    pub is_paused: bool,
-    /// True after partial close_market (Phase 6)
-    pub is_closed: bool,
     /// Number of overrides used (max 3)
     pub override_count: u8,
     /// PDA bump
     pub bump: u8,
     /// Alignment padding
-    pub _padding: [u8; 2],
+    pub _padding: [u8; 4],
 }
 
 impl StrikeMarket {
@@ -73,7 +69,7 @@ impl StrikeMarket {
     pub const NO_ESCROW_SEED: &'static [u8] = b"no_escrow";
     pub const ORDER_BOOK_SEED: &'static [u8] = b"order_book";
 
-    // Field sum: 10×32 + 8×8 + 8 + 6×1 + 2 = 320 + 64 + 8 + 6 + 2 = 400 bytes
-    // Verify with std::mem::size_of::<StrikeMarket>() after compilation
-    pub const LEN: usize = (10 * 32) + (8 * 8) + 8 + 6 + 2; // 400 bytes
+    // Field sum: 10×32 + 8×8 + 8 + 4×1 + 4 = 320 + 64 + 8 + 4 + 4 = 400 bytes
+    // is_paused and is_closed removed; padding absorbs the freed bytes
+    pub const LEN: usize = (10 * 32) + (8 * 8) + 8 + 4 + 4; // 400 bytes
 }

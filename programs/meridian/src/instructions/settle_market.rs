@@ -8,9 +8,6 @@ pub struct SettleMarket<'info> {
     #[account(mut)]
     pub caller: Signer<'info>, // anyone can call
 
-    #[account(
-        constraint = !config.is_paused @ MeridianError::MarketPaused,
-    )]
     pub config: Box<Account<'info, GlobalConfig>>,
 
     #[account(
@@ -18,8 +15,6 @@ pub struct SettleMarket<'info> {
         has_one = config @ MeridianError::InvalidMarket,
         has_one = oracle_feed @ MeridianError::OracleProgramMismatch,
         constraint = !market.is_settled @ MeridianError::MarketAlreadySettled,
-        constraint = !market.is_paused @ MeridianError::MarketPaused,
-        constraint = !market.is_closed @ MeridianError::MarketClosed,
     )]
     pub market: Box<Account<'info, StrikeMarket>>,
 

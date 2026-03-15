@@ -82,6 +82,11 @@ pub fn handle_initialize_config(
     config.fee_bps = 0;
     config._padding = [0; 2];
     config.strike_creation_fee = 0;
+    config.pending_admin = Pubkey::default();
+    config.operating_reserve = 0;
+    config.obligations = 0;
+    config.settlement_blackout_minutes = 0;
+    config._padding2 = [0; 6];
 
     msg!(
         "GlobalConfig initialized: admin={}, usdc_mint={}, oracle_program={}, tickers={}",

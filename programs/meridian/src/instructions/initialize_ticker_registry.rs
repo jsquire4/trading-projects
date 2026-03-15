@@ -26,7 +26,7 @@ pub struct InitializeTickerRegistry<'info> {
 }
 
 /// Initialize the TickerRegistry PDA with the MAG7 tickers from GlobalConfig.
-/// Called once after initialize_config + expand_config.
+/// Called once after initialize_config.
 pub fn handle_initialize_ticker_registry(ctx: Context<InitializeTickerRegistry>) -> Result<()> {
     let config = &ctx.accounts.config;
     let registry = &mut ctx.accounts.ticker_registry;

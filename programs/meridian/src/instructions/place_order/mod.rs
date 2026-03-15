@@ -37,8 +37,6 @@ pub struct PlaceOrder<'info> {
         has_one = no_escrow @ MeridianError::InvalidEscrow,
         has_one = order_book @ MeridianError::InvalidOrderBook,
         constraint = !market.is_settled @ MeridianError::MarketAlreadySettled,
-        constraint = !market.is_paused @ MeridianError::MarketPaused,
-        constraint = !market.is_closed @ MeridianError::MarketClosed,
     )]
     pub market: Box<Account<'info, StrikeMarket>>,
 
@@ -399,12 +397,12 @@ fn allocate_new_level<'info>(
         let ob_data = ob_info.try_borrow_data()?;
         orders_per_level = ob_data[HDR_ORDERS_PER_LEVEL];
         let max_levels = ob_data[HDR_MAX_LEVELS];
-        new_max_levels = max_levels + 1;
 
         require!(
-            (new_max_levels as usize) <= MAX_PRICE_LEVELS,
+            (max_levels as usize) < MAX_PRICE_LEVELS,
             MeridianError::MaxLevelsReached
         );
+        new_max_levels = max_levels + 1;
     }
 
     let entry_size = LEVEL_HEADER_SIZE + orders_per_level as usize * ORDER_SLOT_SIZE;

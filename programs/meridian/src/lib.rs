@@ -24,8 +24,6 @@ pub use instructions::admin_override_settlement::*;
 pub use instructions::redeem::*;
 pub use instructions::crank_cancel::*;
 pub use instructions::close_market::*;
-pub use instructions::treasury_redeem::*;
-pub use instructions::cleanup_market::*;
 pub use instructions::update_fee_bps::*;
 pub use instructions::update_strike_creation_fee::*;
 pub use instructions::crank_redeem::*;
@@ -38,7 +36,6 @@ pub use instructions::update_config::*;
 pub use instructions::add_ticker::*;
 pub use instructions::deactivate_ticker::*;
 pub use instructions::circuit_breaker::*;
-pub use instructions::expand_config::*;
 pub use instructions::initialize_ticker_registry::*;
 
 declare_id!("7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth");
@@ -112,12 +109,12 @@ pub mod meridian {
         instructions::cancel_order::handle_cancel_order(ctx, price, order_id)
     }
 
-    pub fn pause(ctx: Context<Pause>, market: Option<Pubkey>) -> Result<()> {
-        instructions::pause::handle_pause(ctx, market)
+    pub fn pause(ctx: Context<Pause>) -> Result<()> {
+        instructions::pause::handle_pause(ctx)
     }
 
-    pub fn unpause(ctx: Context<Unpause>, market: Option<Pubkey>) -> Result<()> {
-        instructions::unpause::handle_unpause(ctx, market)
+    pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
+        instructions::unpause::handle_unpause(ctx)
     }
 
     pub fn settle_market(ctx: Context<SettleMarket>) -> Result<()> {
@@ -151,14 +148,6 @@ pub mod meridian {
 
     pub fn close_market(ctx: Context<CloseMarket>) -> Result<()> {
         instructions::close_market::handle_close_market(ctx)
-    }
-
-    pub fn treasury_redeem(ctx: Context<TreasuryRedeem>) -> Result<()> {
-        instructions::treasury_redeem::handle_treasury_redeem(ctx)
-    }
-
-    pub fn cleanup_market(ctx: Context<CleanupMarket>) -> Result<()> {
-        instructions::cleanup_market::handle_cleanup_market(ctx)
     }
 
     pub fn update_fee_bps(ctx: Context<UpdateFeeBps>, new_fee_bps: u16) -> Result<()> {
@@ -226,14 +215,8 @@ pub mod meridian {
         instructions::deactivate_ticker::handle_deactivate_ticker(ctx, ticker)
     }
 
-    pub fn circuit_breaker<'info>(
-        ctx: Context<'_, '_, 'info, 'info, CircuitBreaker<'info>>,
-    ) -> Result<()> {
+    pub fn circuit_breaker(ctx: Context<CircuitBreaker>) -> Result<()> {
         instructions::circuit_breaker::handle_circuit_breaker(ctx)
-    }
-
-    pub fn expand_config(ctx: Context<ExpandConfig>) -> Result<()> {
-        instructions::expand_config::handle_expand_config(ctx)
     }
 
     pub fn initialize_ticker_registry(ctx: Context<InitializeTickerRegistry>) -> Result<()> {

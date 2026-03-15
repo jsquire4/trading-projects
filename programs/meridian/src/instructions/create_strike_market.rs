@@ -270,8 +270,6 @@ pub fn handle_create_strike_market(
     market.ticker = ticker;
     market.is_settled = false;
     market.outcome = 0;
-    market.is_paused = false;
-    market.is_closed = false;
     market.override_count = 0;
     market.bump = ctx.bumps.market;
 

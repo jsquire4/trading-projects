@@ -33,13 +33,13 @@ pub enum MeridianError {
     MarketAlreadySettled = 20,
     #[msg("Market has not been settled")]
     MarketNotSettled = 21,
-    #[msg("Market or global trading is paused")]
+    #[msg("Global trading is paused")]
     MarketPaused = 22,
     #[msg("Target is already paused")]
     AlreadyPaused = 23,
     #[msg("Target is not paused")]
     NotPaused = 24,
-    #[msg("Market has been closed — use treasury_redeem")]
+    #[msg("Market has been closed")]
     MarketClosed = 25,
 
     // === Account Validation (on-chain: 6030-6036) ===
@@ -152,18 +152,15 @@ pub enum MeridianError {
     CloseMarketOverrideActive = 111,
     #[msg("Cannot close market with resting orders — run crank_cancel first")]
     CloseMarketOrderBookNotEmpty = 112,
-    #[msg("Cannot partially close before 90-day grace period")]
-    CloseMarketGracePeriodActive = 113,
+    // 113 reserved (partial close removed)
     #[msg("Oracle type flag not recognized")]
     InvalidOracleType = 114,
     #[msg("Pyth price feed ID doesn't match expected stock")]
     PythFeedMismatch = 115,
-    #[msg("Market has not been closed — use standard redeem")]
-    MarketNotClosed = 116,
-    #[msg("Cannot cleanup market — tokens still outstanding")]
+    // 116 reserved (treasury_redeem removed)
+    #[msg("Cannot close market — tokens still outstanding")]
     MintSupplyNotZero = 117,
-    #[msg("Treasury has insufficient USDC to cover redemption")]
-    NoTreasuryFunds = 118,
+    // 118 reserved (treasury_redeem removed)
 
     // === ALT Management (on-chain: 6120) ===
     #[msg("Market ALT address has already been set")]
@@ -194,8 +191,7 @@ pub enum MeridianError {
     TickerNotFound = 154,
     #[msg("Ticker has been deactivated")]
     TickerDeactivated = 155,
-    #[msg("GlobalConfig already expanded to v2")]
-    ConfigAlreadyExpanded = 156,
+    // 156 reserved (expand_config removed)
     #[msg("Invalid oracle type for Pyth feed validation")]
     PythValidationRequired = 157,
     #[msg("Pyth price account is not valid or has no recent data")]
@@ -220,8 +216,7 @@ pub enum MeridianError {
     InsufficientRentDeposit = 172,
     #[msg("Order book has reached maximum level capacity")]
     MaxLevelsReached = 173,
-    #[msg("Cannot grow orders_per_level beyond 32")]
-    MaxSlotsReached = 174,
+    // 174 reserved (max slots cap removed)
     #[msg("Order book already initialized")]
     OrderBookAlreadyInitialized = 175,
 }

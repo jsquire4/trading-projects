@@ -12,23 +12,17 @@ pub const PRICE_TO_USDC_LAMPORTS: u64 = USDC_LAMPORTS_PER_DOLLAR / 100;
 pub const CRANK_BATCH_SIZE: usize = 32;
 /// Maximum settlement overrides
 pub const MAX_OVERRIDES: u8 = 3;
-/// Override window duration in seconds (1 hour; 5s in stress-test builds)
+/// Override window duration in seconds (1 second; 1s in stress-test builds)
 #[cfg(not(feature = "stress-test"))]
-pub const OVERRIDE_WINDOW_SECS: i64 = 3600;
+pub const OVERRIDE_WINDOW_SECS: i64 = 1;
 #[cfg(feature = "stress-test")]
-pub const OVERRIDE_WINDOW_SECS: i64 = 5;
+pub const OVERRIDE_WINDOW_SECS: i64 = 1;
 
-/// Admin settle delay in seconds (1 hour after market close; 5s in stress-test builds)
+/// Admin settle delay in seconds (5 minutes after market close; 5s in stress-test builds)
 #[cfg(not(feature = "stress-test"))]
-pub const ADMIN_SETTLE_DELAY_SECS: i64 = 3600;
+pub const ADMIN_SETTLE_DELAY_SECS: i64 = 300;
 #[cfg(feature = "stress-test")]
 pub const ADMIN_SETTLE_DELAY_SECS: i64 = 5;
-
-/// Grace period for partial market close (90 days in seconds; 5s in stress-test builds)
-#[cfg(not(feature = "stress-test"))]
-pub const CLOSE_GRACE_PERIOD_SECS: i64 = 7_776_000;
-#[cfg(feature = "stress-test")]
-pub const CLOSE_GRACE_PERIOD_SECS: i64 = 5;
 
 /// Order side types
 pub const SIDE_USDC_BID: u8 = 0;   // Buy Yes — escrow USDC
@@ -362,8 +356,8 @@ pub fn init_level(data: &mut [u8], level_idx: u8, price: u8) {
 
     // Update price_map
     book_set_price_map(data, price, level_idx);
-    // Increment level_count
-    data[HDR_LEVEL_COUNT] += 1;
+    // Increment level_count (saturate to guard against theoretical u8 overflow)
+    data[HDR_LEVEL_COUNT] = data[HDR_LEVEL_COUNT].saturating_add(1);
 }
 
 /// Free a level: reset its price_map entry and decrement level_count.

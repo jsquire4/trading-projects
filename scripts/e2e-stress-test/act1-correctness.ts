@@ -35,8 +35,6 @@ import {
   buildRedeemIx,
   buildCrankCancelIx,
   buildCloseMarketIx,
-  buildTreasuryRedeemIx,
-  buildCleanupMarketIx,
   buildCrankRedeemIx,
   buildUpdatePriceIx,
   buildUpdateFeeBpsIx,
@@ -47,7 +45,6 @@ import {
   buildWithdrawTreasuryIx,
   buildUpdateConfigIx,
   buildCircuitBreakerIx,
-  buildExpandConfigIx,
   buildDeactivateTickerIx,
   buildAddTickerIx,
   padTicker,
@@ -72,6 +69,7 @@ import {
   findOrderBook,
   findPriceFeed as findPriceFeedPda,
   findTickerRegistry,
+  findSolTreasury,
 } from "../../services/shared/src/pda";
 
 import { BASE_PRICES } from "../../services/shared/src/synthetic-config";
@@ -560,12 +558,11 @@ async function act1PauseUnpause(
   const m = ctx.markets[0];
   if (!m) return;
 
-  // Pause market 0
+  // Global pause
   try {
     const pauseIx = buildPauseIx({
       admin: admin.publicKey,
       config: configPda,
-      market: m.market,
     });
     const pauseTx = new Transaction().add(pauseIx);
     await sendTx(connection, pauseTx, [admin]);
@@ -618,7 +615,6 @@ async function act1PauseUnpause(
     const unpauseIx = buildUnpauseIx({
       admin: admin.publicKey,
       config: configPda,
-      market: m.market,
     });
     const unpauseTx = new Transaction().add(unpauseIx);
     await sendTx(connection, unpauseTx, [admin]);
@@ -761,11 +757,13 @@ async function act1AdminV2(
   logStep("withdraw_treasury...");
   try {
     const adminUsdcAta = getAssociatedTokenAddressSync(usdcMint, admin.publicKey);
+    const [solTreasuryPda] = findSolTreasury();
     const withdrawTreasuryIx = buildWithdrawTreasuryIx({
       admin: admin.publicKey,
       config: configPda,
       treasury,
       adminUsdcAta,
+      solTreasury: solTreasuryPda,
       amount: new BN(0),
     });
     await sendTx(connection, new Transaction().add(withdrawTreasuryIx), [admin]);
@@ -792,21 +790,7 @@ async function act1AdminV2(
     recordError(errors, -1, "update_config", e.message);
   }
 
-  // expand_config (idempotent)
-  logStep("expand_config...");
-  try {
-    const expandIx = buildExpandConfigIx({
-      admin: admin.publicKey,
-      config: configPda,
-    });
-    await sendTx(connection, new Transaction().add(expandIx), [admin]);
-    track(ctx, "expand_config");
-    details.push("Expanded config (idempotent)");
-  } catch (e: any) {
-    // Already expanded — still track it
-    track(ctx, "expand_config");
-    details.push(`expand_config: ${e.message?.slice(0, 80)}`);
-  }
+  // expand_config removed — v2 fields are initialized directly in initialize_config
 
   // deactivate_ticker + re-add (reactivation) round-trip
   const lastTicker = ctx.config.tickers[ctx.config.tickers.length - 1];
@@ -846,26 +830,17 @@ async function act1AdminV2(
       const cbIx = buildCircuitBreakerIx({
         admin: admin.publicKey,
         config: configPda,
-        marketBookPairs: [{ market: cbMarket.market, orderBook: cbMarket.orderBook }],
       });
       await sendTx(connection, new Transaction().add(cbIx), [admin]);
       track(ctx, "circuit_breaker");
       details.push(`Circuit breaker on ${cbMarket.ticker}`);
 
-      // Unpause global config (circuit breaker sets config.is_paused = true)
+      // Unpause (circuit breaker sets global config.is_paused = true)
       const unpauseGlobalIx = buildUnpauseIx({
         admin: admin.publicKey,
         config: configPda,
       });
       await sendTx(connection, new Transaction().add(unpauseGlobalIx), [admin]);
-
-      // Unpause the individual market
-      const unpauseMarketIx = buildUnpauseIx({
-        admin: admin.publicKey,
-        config: configPda,
-        market: cbMarket.market,
-      });
-      await sendTx(connection, new Transaction().add(unpauseMarketIx), [admin]);
     } catch (e: any) {
       recordError(errors, -1, "circuit_breaker", e.message, cbMarket.ticker);
     }
@@ -1263,6 +1238,7 @@ async function act1Close(
   logStep(`Closing ${ctx.markets.length} markets...`);
   for (const m of ctx.markets) {
     try {
+      const [solTreasuryPda] = findSolTreasury();
       const closeIx = buildCloseMarketIx({
         admin: admin.publicKey,
         config: configPda,
@@ -1275,6 +1251,7 @@ async function act1Close(
         yesMint: m.yesMint,
         noMint: m.noMint,
         treasury,
+        solTreasury: solTreasuryPda,
       });
       const tx = new Transaction().add(closeIx);
       await sendTx(connection, tx, [admin]);
@@ -1285,73 +1262,7 @@ async function act1Close(
   }
   details.push(`Closed ${ctx.markets.length} markets`);
 
-  // Treasury redeem — burns remaining tokens and pays out from treasury (post-close)
-  if (ctx.markets.length > 0) {
-    const m = ctx.markets[0];
-    for (const agent of ctx.agents.slice(0, Math.min(5, ctx.agents.length))) {
-      try {
-        const yesAta = getAssociatedTokenAddressSync(m.yesMint, agent.keypair.publicKey);
-        const noAta = getAssociatedTokenAddressSync(m.noMint, agent.keypair.publicKey);
-        let hasTokens = false;
-        try {
-          const yBal = await connection.getTokenAccountBalance(yesAta);
-          const nBal = await connection.getTokenAccountBalance(noAta);
-          hasTokens = BigInt(yBal.value.amount) > 0n || BigInt(nBal.value.amount) > 0n;
-        } catch { continue; }
-        if (!hasTokens) continue;
-
-        const usdcAta = getAssociatedTokenAddressSync(usdcMint, agent.keypair.publicKey);
-        const treasuryRedeemIx = buildTreasuryRedeemIx({
-          user: agent.keypair.publicKey,
-          config: configPda,
-          market: m.market,
-          yesMint: m.yesMint,
-          noMint: m.noMint,
-          treasury,
-          userUsdcAta: usdcAta,
-          userYesAta: yesAta,
-          userNoAta: noAta,
-        });
-        const tx = new Transaction().add(treasuryRedeemIx);
-        await sendTx(connection, tx, [agent.keypair]);
-        track(ctx, "treasury_redeem");
-        details.push(`Treasury redeem for agent ${agent.id}`);
-      } catch (e: any) {
-        recordError(errors, agent.id, "treasury_redeem", e.message, m.ticker);
-      }
-    }
-  }
-
-  // Cleanup markets — skip any already destroyed by standard close
-  let cleanedCount = 0;
-  for (const m of ctx.markets) {
-    // Check if market PDA still exists (standard close drains it)
-    const acct = await connection.getAccountInfo(m.market);
-    if (!acct) {
-      cleanedCount++;
-      continue; // Already destroyed by standard close
-    }
-    try {
-      const cleanupIx = buildCleanupMarketIx({
-        admin: admin.publicKey,
-        config: configPda,
-        market: m.market,
-        yesMint: m.yesMint,
-        noMint: m.noMint,
-      });
-      const tx = new Transaction().add(cleanupIx);
-      await sendTx(connection, tx, [admin]);
-      track(ctx, "cleanup_market");
-      cleanedCount++;
-    } catch (e: any) {
-      recordError(errors, -1, "cleanup_market", e.message, m.ticker);
-    }
-  }
-  // Track cleanup instruction type even if all markets were standard-closed
-  if (cleanedCount > 0 && !ctx.metrics.instructionTypes.has("cleanup_market")) {
-    track(ctx, "cleanup_market");
-  }
-  details.push(`Cleaned up ${cleanedCount} markets`);
+  // treasury_redeem and cleanup_market removed — standard close is the only path.
 }
 
 // ---------------------------------------------------------------------------

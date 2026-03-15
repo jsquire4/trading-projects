@@ -45,11 +45,12 @@ import {
   findGlobalConfig,
   findFeeVault,
   findTreasury,
+  findSolTreasury,
   findPriceFeed,
   findTickerRegistry,
   padTicker,
 } from "../../services/shared/src/pda";
-import { buildInitializeFeedIx, buildInitializeConfigIx, buildInitializeTickerRegistryIx, buildAddTickerIx, buildExpandConfigIx, MOCK_ORACLE_PROGRAM_ID } from "../../tests/helpers/instructions";
+import { buildInitializeFeedIx, buildInitializeConfigIx, buildInitializeTickerRegistryIx, buildAddTickerIx, MOCK_ORACLE_PROGRAM_ID } from "../../tests/helpers/instructions";
 import { sendTx } from "./helpers";
 import { SeededRng, hashSeed } from "../../services/shared/src/synthetic-config";
 
@@ -130,6 +131,7 @@ export async function setupTestEnvironment(config: RunConfig): Promise<SharedCon
   const [configPda] = findGlobalConfig();
   const [feeVault] = findFeeVault();
   const [treasury] = findTreasury();
+  const [solTreasury] = findSolTreasury();
   const configAcct = await connection.getAccountInfo(configPda);
   if (!configAcct) {
     console.log("  GlobalConfig PDA not found — initializing...");
@@ -139,6 +141,7 @@ export async function setupTestEnvironment(config: RunConfig): Promise<SharedCon
       usdcMint,
       treasury,
       feeVault,
+      solTreasury,
       oracleProgram: MOCK_ORACLE_PROGRAM_ID,
       tickers: config.tickers.slice(0, 7),
       tickerCount: Math.min(config.tickers.length, 7),
@@ -151,16 +154,9 @@ export async function setupTestEnvironment(config: RunConfig): Promise<SharedCon
     console.log(`  GlobalConfig initialized at ${configPda.toBase58()}`);
   }
 
-  // 4b. Expand GlobalConfig if needed (192→248 bytes for new fields)
-  try {
-    const expandIx = buildExpandConfigIx({ admin: admin.publicKey, config: configPda });
-    await sendTx(connection, new Transaction().add(expandIx), [admin]);
-    console.log("  GlobalConfig expanded (192→248 bytes)");
-  } catch {
-    // Already expanded or not needed — idempotent
-  }
+  // expand_config removed — v2 fields initialized directly in initialize_config
 
-  // 4c. Initialize TickerRegistry PDA if needed
+  // 4b. Initialize TickerRegistry PDA if needed
   const [tickerRegistry] = findTickerRegistry();
   const trAcct = await connection.getAccountInfo(tickerRegistry);
   if (!trAcct) {
@@ -259,7 +255,7 @@ export async function setupTestEnvironment(config: RunConfig): Promise<SharedCon
     },
     fillRate: 0,
     mergeCount: 0,
-    instructionTypes: new Set(["initialize_config", "initialize_feed", "expand_config", "initialize_ticker_registry", "add_ticker"]),
+    instructionTypes: new Set(["initialize_config", "initialize_feed", "initialize_ticker_registry", "add_ticker"]),
   };
 
   // 10. Assemble SharedContext

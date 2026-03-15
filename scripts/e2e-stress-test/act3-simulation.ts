@@ -52,8 +52,6 @@ import {
   buildCrankCancelIx,
   buildCrankRedeemIx,
   buildCloseMarketIx,
-  buildTreasuryRedeemIx,
-  buildCleanupMarketIx,
   buildRedeemIx,
   buildUpdatePriceIx,
   buildCircuitBreakerIx,
@@ -487,6 +485,8 @@ async function closeDay(
   let closed = 0;
   for (const m of dayMarkets) {
     try {
+      const { findSolTreasury } = await import("../../services/shared/src/pda");
+      const [solTreasuryPda] = findSolTreasury();
       const ix = buildCloseMarketIx({
         admin: ctx.admin.publicKey,
         config: ctx.configPda,
@@ -499,6 +499,7 @@ async function closeDay(
         yesMint: m.yesMint,
         noMint: m.noMint,
         treasury: ctx.treasury,
+        solTreasury: solTreasuryPda,
       });
       const tx = new Transaction().add(ix);
       await sendTx(ctx.connection, tx, [ctx.admin]);
@@ -515,49 +516,7 @@ async function closeDay(
     }
   }
 
-  // Treasury redeem on first market (exercise the instruction)
-  if (dayMarkets.length > 0 && ctx.agents.length > 0) {
-    const m = dayMarkets[0];
-    const agent = ctx.agents[0];
-    try {
-      const ix = buildTreasuryRedeemIx({
-        user: agent.keypair.publicKey,
-        config: ctx.configPda,
-        market: m.market,
-        yesMint: m.yesMint,
-        noMint: m.noMint,
-        treasury: ctx.treasury,
-        userUsdcAta: getAssociatedTokenAddressSync(ctx.usdcMint, agent.keypair.publicKey),
-        userYesAta: getAssociatedTokenAddressSync(m.yesMint, agent.keypair.publicKey),
-        userNoAta: getAssociatedTokenAddressSync(m.noMint, agent.keypair.publicKey),
-      });
-      const tx = new Transaction().add(ix);
-      await sendTx(ctx.connection, tx, [agent.keypair]);
-      ctx.metrics.instructionTypes.add("treasury_redeem");
-    } catch {
-      // May fail if no tokens to redeem — that's fine
-    }
-  }
-
-  // Cleanup markets (skip already-destroyed PDAs from standard close)
-  for (const m of dayMarkets) {
-    try {
-      const acct = await ctx.connection.getAccountInfo(m.market);
-      if (!acct) continue; // Already destroyed by standard close
-      const ix = buildCleanupMarketIx({
-        admin: ctx.admin.publicKey,
-        config: ctx.configPda,
-        market: m.market,
-        yesMint: m.yesMint,
-        noMint: m.noMint,
-      });
-      const tx = new Transaction().add(ix);
-      await sendTx(ctx.connection, tx, [ctx.admin]);
-      ctx.metrics.instructionTypes.add("cleanup_market");
-    } catch {
-      // May fail if supply not zero — that's fine
-    }
-  }
+  // treasury_redeem and cleanup_market removed — standard close is the only path.
 
   return closed;
 }
@@ -574,22 +533,16 @@ async function injectCircuitBreaker(
   console.log("    ⚡ Injecting circuit breaker...");
 
   // Build market+orderBook pairs for remaining_accounts
-  const marketBookPairs = dayMarkets.map((m) => ({
-    market: m.market,
-    orderBook: m.orderBook,
-  }));
-
   try {
     const cbIx = buildCircuitBreakerIx({
       admin: ctx.admin.publicKey,
       config: ctx.configPda,
-      marketBookPairs,
     });
     const tx = new Transaction().add(cbIx);
     await sendTx(ctx.connection, tx, [ctx.admin]);
     ctx.metrics.instructionTypes.add("circuit_breaker");
 
-    // Unpause global config first (circuit breaker sets config.is_paused = true)
+    // Unpause global config (circuit breaker sets config.is_paused = true)
     try {
       const unpauseGlobalIx = buildUnpauseIx({
         admin: ctx.admin.publicKey,
@@ -598,20 +551,6 @@ async function injectCircuitBreaker(
       await sendTx(ctx.connection, new Transaction().add(unpauseGlobalIx), [ctx.admin]);
     } catch {
       // May already be unpaused
-    }
-
-    // Unpause all individual markets
-    for (const m of dayMarkets) {
-      try {
-        const unpauseIx = buildUnpauseIx({
-          admin: ctx.admin.publicKey,
-          config: ctx.configPda,
-          market: m.market,
-        });
-        await sendTx(ctx.connection, new Transaction().add(unpauseIx), [ctx.admin]);
-      } catch {
-        // May already be unpaused
-      }
     }
 
     console.log(`    ⚡ Circuit breaker fired on ${dayMarkets.length} markets, all unpaused`);

@@ -80,7 +80,6 @@ const KNOWN_INSTRUCTIONS = [
   "add_ticker",
   "deactivate_ticker",
   "circuit_breaker",
-  "expand_config",
   "initialize_ticker_registry",
   // Settlement
   "settle_market",
@@ -92,8 +91,6 @@ const KNOWN_INSTRUCTIONS = [
   "crank_redeem",
   // Cleanup
   "close_market",
-  "treasury_redeem",
-  "cleanup_market",
 ];
 
 // ─── Main render ──────────────────────────────────────────────────────────────

@@ -2,6 +2,9 @@
 builder = "NIXPACKS"
 buildCommand = "npm install"
 
+[phases.install]
+cmds = ["npm install"]
+
 [deploy]
 startCommand = "npx tsx src/index.ts"
 healthcheckPath = "/api/health"

@@ -2,7 +2,10 @@
 builder = "NIXPACKS"
 buildCommand = "npm install"
 
+[phases.install]
+cmds = ["npm install"]
+
 [deploy]
 startCommand = "npx tsx src/index.ts"
 restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 3
+restartPolicyMaxRetries = 5

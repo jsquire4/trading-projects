@@ -487,10 +487,9 @@ describe("Crank Redeem", () => {
   it("rejects crank_redeem during override window", async () => {
 
 
-    // Still within override window (settled_at + 3600)
+    // Override window is 1 second — must NOT advance past settledAt + 1
     const m = await readMarket(ctx, ma.market);
-    const withinWindow = m.settledAt + 100;
-    await advanceClock(ctx, withinWindow);
+    // Don't advance clock — stay within the 1-second window
 
     const ix = buildCrankRedeemIx(
       {

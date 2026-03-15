@@ -36,6 +36,7 @@ import {
   mintTestUsdc,
   createAta,
   readOrderSlot,
+  priceLevelIdx,
 } from "../helpers";
 
 import {
@@ -377,12 +378,12 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("increments override_count", async () => {
-      // Second override: flip back to Yes wins
+      // Second override: flip back to Yes wins (strike is 250M)
       const ix = buildAdminOverrideIx({
         admin: ctx.admin.publicKey,
         config,
         market: maOverride.market,
-        newSettlementPrice: new BN(210_000_000), // above strike
+        newSettlementPrice: new BN(260_000_000), // above 250M strike
       });
 
       await provider.sendAndConfirm!(
@@ -447,15 +448,15 @@ describe("Settlement Lifecycle", () => {
 
       const maExpiry = await createTestMarket(
         ctx.context, ctx.admin, config, TICKER,
-        250_000_000, // unique strike for PDA
+        255_000_000, // unique strike for PDA
         now0 + 5,
         PREVIOUS_CLOSE,
         oracleFeed,
         usdcMint,
       );
 
-      // Advance past close + 1hr for admin settle
-      const adminTime = now0 + 5 + 3601;
+      // Advance past close + 5min for admin settle
+      const adminTime = now0 + 5 + 301;
       await advanceClock(ctx, adminTime);
 
       const settleIx = buildAdminSettleIx({
@@ -2384,7 +2385,8 @@ describe("Settlement Lifecycle", () => {
       // Read order book to get the order_id (level index for price 40 is 39, since 1-based prices map to 0-based)
       const obAcct = await ctx.context.banksClient.getAccount(ma.orderBook);
       const obData = Buffer.from(obAcct!.data);
-      const slot = readOrderSlot(obData, 39, 0); // price=40 → levelIdx=39
+      const loff = priceLevelIdx(obData, 40);
+      const slot = readOrderSlot(obData, loff, 0);
       expect(slot.isActive).to.be.true;
       const orderId = slot.orderId;
 

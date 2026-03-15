@@ -51,6 +51,24 @@ function PositionCard({ position, totalCost, now }: { position: Position; totalC
   const inOverrideWindow = isSettled && now < overrideDeadline;
   const canRedeem = isSettled && isWinner && !inOverrideWindow && winnerBal > BigInt(0);
 
+  // Pair burn: if user holds both Yes AND No on the same strike
+  const hedgedPairs = Math.min(yesBal, noBal);
+  const canPairBurn = hedgedPairs > 0 && !isSettled;
+  const netExposure = yesBal > noBal
+    ? { side: "Yes" as const, qty: yesBal - noBal }
+    : { side: "No" as const, qty: noBal - yesBal };
+
+  const handlePairBurn = useCallback(async () => {
+    if (!publicKey || hedgedPairs <= 0) return;
+    const amount = BigInt(Math.floor(hedgedPairs * 1_000_000));
+    await redeem({
+      mode: 0,
+      amount,
+      marketPublicKey: position.market.publicKey,
+      description: `Cash out ${hedgedPairs.toFixed(0)} hedged pairs for $${hedgedPairs.toFixed(2)} USDC`,
+    });
+  }, [publicKey, hedgedPairs, position.market.publicKey, redeem]);
+
   const minutesLeft = Math.max(0, remaining / 60);
   const side = yesBal >= noBal ? "yes" : "no";
   const pnl = totalValue !== null ? totalValue - totalCost : null;
@@ -132,6 +150,27 @@ function PositionCard({ position, totalCost, now }: { position: Position; totalC
           </div>
         )}
       </div>
+
+      {/* Pair burn: cash out hedged pairs */}
+      {canPairBurn && (
+        <div className="mb-3 rounded-md border border-blue-500/20 bg-blue-500/5 px-3 py-2 space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-blue-300">
+              {hedgedPairs.toFixed(0)} hedged pairs ({netExposure.qty > 0
+                ? `net ${netExposure.qty.toFixed(0)} ${netExposure.side}`
+                : "fully hedged"})
+            </span>
+            <span className="text-blue-400 font-mono">${hedgedPairs.toFixed(2)} USDC</span>
+          </div>
+          <button
+            onClick={handlePairBurn}
+            disabled={submitting}
+            className="w-full rounded-md py-1.5 text-xs font-semibold text-blue-400 bg-blue-500/20 hover:bg-blue-500/30 disabled:bg-white/5 disabled:text-white/20 transition-colors"
+          >
+            {submitting ? "Cashing out..." : `Cash Out $${hedgedPairs.toFixed(2)} USDC`}
+          </button>
+        </div>
+      )}
 
       {/* Redeem button for winning settled positions */}
       {canRedeem ? (

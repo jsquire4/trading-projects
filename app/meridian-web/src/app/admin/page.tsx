@@ -5,18 +5,14 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { useGlobalConfig } from "@/hooks/useGlobalConfig";
 import { AdminOverview } from "@/components/admin/tabs/AdminOverview";
 import { FeesRevenue } from "@/components/admin/tabs/FeesRevenue";
-import { MarketsPanel } from "@/components/admin/tabs/MarketsPanel";
 import { PlatformSettings } from "@/components/admin/tabs/PlatformSettings";
-import { TickerManagement } from "@/components/admin/tabs/TickerManagement";
 
-type AdminTab = "overview" | "fees" | "markets" | "settings" | "tickers";
+type AdminTab = "overview" | "fees" | "settings";
 
 const TABS: { key: AdminTab; label: string }[] = [
-  { key: "overview", label: "Overview" },
-  { key: "fees", label: "Fees & Revenue" },
-  { key: "markets", label: "Markets" },
+  { key: "overview", label: "Emergency Controls" },
+  { key: "fees", label: "Treasury & Fees" },
   { key: "settings", label: "Settings" },
-  { key: "tickers", label: "Tickers" },
 ];
 
 export default function AdminPage() {
@@ -72,7 +68,7 @@ export default function AdminPage() {
       <div>
         <h1 className="text-2xl font-bold text-gradient mb-1">Admin Dashboard</h1>
         <p className="text-white/50 text-sm">
-          Manage fees, markets, settings, and tickers.
+          Emergency controls, treasury management, and platform settings.
         </p>
       </div>
 
@@ -96,9 +92,7 @@ export default function AdminPage() {
       {/* Tab content */}
       {tab === "overview" && <AdminOverview />}
       {tab === "fees" && <FeesRevenue />}
-      {tab === "markets" && <MarketsPanel />}
       {tab === "settings" && <PlatformSettings />}
-      {tab === "tickers" && <TickerManagement />}
     </div>
   );
 }

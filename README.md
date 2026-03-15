@@ -139,6 +139,30 @@ git push origin main
 - [Dev Log](docs/DEV_LOG.md) — Decision reasoning, spec deviations, dependency justification
 - [Spec](docs/Meridian%20-%20Binary%20Stock%20Outcome%20Markets%20on%20Blockchain.md) — Original assignment requirements
 
+## Known Risks & Limitations
+
+### On-Chain
+- **Pyth oracle not yet integrated.** `settle_market` only supports `oracle_type=0` (mock oracle). Pyth settlement (type=1) requires `admin_settle` fallback until full Pyth integration. Not a blocker for devnet.
+- **Override window is 1 second.** Effectively instant finality — admin has minimal time to dispute oracle prices post-settlement. Intentional for devnet speed; should be configurable (via GlobalConfig) for mainnet.
+- **`obligations` field is new.** Treasury withdrawal cap (`balance - obligations`) is now enforced, but existing deployed accounts have `obligations = 0`. First settlement after upgrade will initialize the field correctly.
+- **Conflicting position constraint.** Users cannot hold both Yes and No tokens on the same strike. This blocks same-strike straddles and limits market-maker flexibility. Cross-strike positions are unrestricted.
+- **Early close detection is brittle.** NYSE half-day dates (1 PM close) are hardcoded through 2028. Falls back to 4 PM if stale or Yahoo is unreachable.
+- **max_fills = 50 with ALT, 10 without.** Large sweeps across many price levels may leave a remainder as a resting limit order if liquidity is spread across 50+ levels.
+
+### Services
+- **Yahoo Finance is the sole market data source.** Unofficial API (yahoo-finance2 npm), no SLA. Rate limit ~100-200 req/min in practice. If Yahoo is down, oracle prices go stale and settlement uses last-known prices after 30-min timeout.
+- **Market state detection relies on single AAPL quote.** If AAPL is halted, the entire system thinks the market is closed. Should query multiple tickers for consensus.
+- **Circuit breaker state is in-memory.** If the oracle feeder restarts, it forgets that it tripped the circuit breaker. The on-chain pause state persists independently.
+
+### Frontend
+- **`todayPnl` is all-time unrealized P&L**, not intraday. The event-indexer doesn't provide intraday snapshots, so true daily P&L is not available.
+- **NavPnl uses 50¢ fallback** for mid-price when order book data isn't available (approximate flag shown).
+- **Dead components remain in the codebase.** `OrderForm.tsx`, `MarketCard.tsx`, `PayoffDisplay.tsx`, `DepthChart.tsx`, `RedeemPanel.tsx` are deprecated but not deleted (some have test dependencies).
+
+### Deployment
+- **Railway services need rootDirectory set manually** via the dashboard. CLI can't set this.
+- **No database.** Event indexer uses flat-file storage. Production would need Postgres for reliability.
+
 ## License
 
 MIT

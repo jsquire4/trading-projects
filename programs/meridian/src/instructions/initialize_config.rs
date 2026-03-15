@@ -1,4 +1,6 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::solana_program::system_instruction;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 use crate::error::MeridianError;
 use crate::state::GlobalConfig;
@@ -20,7 +22,7 @@ pub struct InitializeConfig<'info> {
     /// Mock USDC mint (or real USDC on mainnet)
     pub usdc_mint: Account<'info, Mint>,
 
-    /// Treasury USDC account owned by config PDA — receives unclaimed USDC from force-closed markets
+    /// Treasury USDC account owned by config PDA — receives escrow dust from closed markets
     #[account(
         init,
         payer = admin,
@@ -41,6 +43,11 @@ pub struct InitializeConfig<'info> {
         bump,
     )]
     pub fee_vault: Account<'info, TokenAccount>,
+
+    /// CHECK: SOL Treasury PDA — holds SOL for market creation rent and operational tx fees.
+    /// Created inline via invoke_signed (system account, not token account).
+    #[account(mut)]
+    pub sol_treasury: UncheckedAccount<'info>,
 
     /// CHECK: Oracle program ID — validated by admin, stored for future CPI checks
     pub oracle_program: UncheckedAccount<'info>,
@@ -67,6 +74,44 @@ pub fn handle_initialize_config(
         MeridianError::InvalidConfidenceThreshold
     );
 
+    // Create SOL Treasury PDA (system account — just holds SOL, not an SPL token account)
+    let sol_treasury_info = ctx.accounts.sol_treasury.to_account_info();
+    let (expected_sol_treasury, sol_treasury_bump) = Pubkey::find_program_address(
+        &[GlobalConfig::SOL_TREASURY_SEED],
+        ctx.program_id,
+    );
+    require!(
+        sol_treasury_info.key() == expected_sol_treasury,
+        MeridianError::InvalidVault
+    );
+    require!(
+        sol_treasury_info.data_len() == 0,
+        MeridianError::ConfigAlreadyInitialized
+    );
+
+    // Allocate 0 data bytes — this is a pure SOL-holding account owned by the program
+    let sol_treasury_seeds: &[&[u8]] = &[
+        GlobalConfig::SOL_TREASURY_SEED,
+        &[sol_treasury_bump],
+    ];
+    let rent = Rent::get()?;
+    let sol_treasury_lamports = rent.minimum_balance(0);
+    invoke_signed(
+        &system_instruction::create_account(
+            ctx.accounts.admin.key,
+            &expected_sol_treasury,
+            sol_treasury_lamports,
+            0,
+            ctx.program_id,
+        ),
+        &[
+            ctx.accounts.admin.to_account_info(),
+            sol_treasury_info,
+            ctx.accounts.system_program.to_account_info(),
+        ],
+        &[sol_treasury_seeds],
+    )?;
+
     let config = &mut ctx.accounts.config;
     config.admin = ctx.accounts.admin.key();
     config.usdc_mint = ctx.accounts.usdc_mint.key();
@@ -87,13 +132,16 @@ pub fn handle_initialize_config(
     config.obligations = 0;
     config.settlement_blackout_minutes = 0;
     config._padding2 = [0; 6];
+    config.sol_treasury = expected_sol_treasury;
+    config.slot_rent_markup = 0;
 
     msg!(
-        "GlobalConfig initialized: admin={}, usdc_mint={}, oracle_program={}, tickers={}",
+        "GlobalConfig initialized: admin={}, usdc_mint={}, oracle_program={}, tickers={}, sol_treasury={}",
         config.admin,
         config.usdc_mint,
         config.oracle_program,
         config.ticker_count,
+        config.sol_treasury,
     );
 
     Ok(())

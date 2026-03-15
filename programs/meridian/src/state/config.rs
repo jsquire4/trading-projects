@@ -42,14 +42,20 @@ pub struct GlobalConfig {
     pub settlement_blackout_minutes: u16,
     /// Padding for 8-byte alignment
     pub _padding2: [u8; 6],
+    /// SOL Treasury PDA pubkey
+    pub sol_treasury: Pubkey,
+    /// Configurable SOL markup per order slot (covers lifecycle tx fees)
+    pub slot_rent_markup: u64,
 }
 
 impl GlobalConfig {
     pub const SEED_PREFIX: &'static [u8] = b"config";
     pub const TREASURY_SEED: &'static [u8] = b"treasury";
     pub const FEE_VAULT_SEED: &'static [u8] = b"fee_vault";
+    pub const SOL_TREASURY_SEED: &'static [u8] = b"sol_treasury";
 
-    pub const LEN: usize = 248;
+    // 248 (old) + 32 (sol_treasury) + 8 (slot_rent_markup) = 288
+    pub const LEN: usize = 288;
 
     /// Check ticker against the legacy tickers array (for backward compat)
     pub fn is_valid_ticker(&self, ticker: &[u8; 8]) -> bool {
@@ -58,7 +64,7 @@ impl GlobalConfig {
             .any(|t| t == ticker)
     }
 
-    /// Admin settle delay: 1hr for all oracle types.
+    /// Admin settle delay: 5 minutes for all oracle types.
     pub fn admin_settle_delay(&self) -> i64 {
         ADMIN_SETTLE_DELAY_SECS
     }

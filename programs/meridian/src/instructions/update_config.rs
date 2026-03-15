@@ -23,6 +23,7 @@ pub fn handle_update_config(
     confidence_bps: Option<u64>,
     operating_reserve: Option<u64>,
     settlement_blackout_minutes: Option<u16>,
+    slot_rent_markup: Option<u64>,
 ) -> Result<()> {
     let config = &mut ctx.accounts.config;
 
@@ -48,6 +49,10 @@ pub fn handle_update_config(
     if let Some(v) = settlement_blackout_minutes {
         require!(v <= 60, MeridianError::InvalidBlackoutMinutes);
         config.settlement_blackout_minutes = v;
+    }
+
+    if let Some(v) = slot_rent_markup {
+        config.slot_rent_markup = v;
     }
 
     msg!("Config updated by admin={}", ctx.accounts.admin.key());

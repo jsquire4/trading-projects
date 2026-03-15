@@ -125,6 +125,13 @@ export function findOrderBook(market: PublicKey): [PublicKey, number] {
   );
 }
 
+export function findSolTreasury(): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("sol_treasury")],
+    MERIDIAN_PROGRAM_ID,
+  );
+}
+
 export function findFeeVault(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("fee_vault")],

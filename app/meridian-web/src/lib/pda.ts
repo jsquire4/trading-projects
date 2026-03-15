@@ -14,6 +14,7 @@ export {
   findYesEscrow,
   findNoEscrow,
   findOrderBook,
+  findSolTreasury,
   findFeeVault,
   findTickerRegistry,
   findPriceFeed,

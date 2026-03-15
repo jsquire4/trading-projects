@@ -170,9 +170,9 @@ export function OrderTree({
                 key={row.yesPrice}
                 className="grid grid-cols-[1fr_60px_60px_1fr] gap-0 border-b border-white/5 last:border-b-0"
               >
-                {/* Yes side — clickable */}
+                {/* Yes side — clickable. If orders exist, default to buy (fill). If empty, default to sell (post). */}
                 <button
-                  onClick={() => handleRowClick("buy-yes", row.yesPrice)}
+                  onClick={() => handleRowClick(row.yesQty > 0 ? "buy-yes" : "sell-yes", row.yesPrice)}
                   className="relative text-right pr-3 py-1.5 hover:bg-green-500/10 transition-colors group"
                 >
                   {/* Volume bar */}
@@ -202,9 +202,9 @@ export function OrderTree({
                   {row.noPrice}
                 </div>
 
-                {/* No side — clickable */}
+                {/* No side — clickable. If orders exist, default to buy (fill). If empty, default to sell (post). */}
                 <button
-                  onClick={() => handleRowClick("buy-no", row.yesPrice)}
+                  onClick={() => handleRowClick(row.noQty > 0 ? "buy-no" : "sell-no", row.yesPrice)}
                   className="relative text-left pl-3 py-1.5 hover:bg-red-500/10 transition-colors group"
                 >
                   {/* Volume bar */}

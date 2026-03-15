@@ -17,6 +17,7 @@ import { PublicKey } from "@solana/web3.js";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { usePlaceOrder, type PlaceOrderParams } from "@/hooks/usePlaceOrder";
 import { usePositions } from "@/hooks/usePositions";
+import { PayoffDisplay } from "@/components/PayoffDisplay";
 import type { OrderBookData } from "@/hooks/useMarkets";
 import { Side, type ActiveOrder } from "@/lib/orderbook";
 
@@ -432,32 +433,13 @@ export function OrderModal({
             </button>
           </div>
 
-          {/* Payoff explanation */}
-          {isBuy && (
-            <div className={`rounded-lg border px-3 py-2 text-xs ${
-              isYesSide
-                ? "border-green-500/20 bg-green-500/5 text-white/70"
-                : "border-red-500/20 bg-red-500/5 text-white/70"
-            }`}>
-              {isYesSide ? (
-                <p>
-                  Pay <span className="text-white font-medium">{displayPrice}¢</span> per contract.
-                  Win <span className="text-white font-medium">$1.00</span> if {ticker} closes at or above ${(strikePrice / 1_000_000).toFixed(0)}.
-                  <span className="text-white/40 ml-1">
-                    Max profit: {100 - displayPrice}¢ | Max loss: {displayPrice}¢
-                  </span>
-                </p>
-              ) : (
-                <p>
-                  Pay <span className="text-white font-medium">{displayPrice}¢</span> per contract.
-                  Win <span className="text-white font-medium">$1.00</span> if {ticker} closes below ${(strikePrice / 1_000_000).toFixed(0)}.
-                  <span className="text-white/40 ml-1">
-                    Max profit: {100 - displayPrice}¢ | Max loss: {displayPrice}¢
-                  </span>
-                </p>
-              )}
-            </div>
-          )}
+          {/* Payoff explanation — uses PayoffDisplay component for all sides */}
+          <PayoffDisplay
+            side={isYesSide ? "yes" : "no"}
+            price={displayPrice}
+            ticker={ticker}
+            strikePrice={strikePrice}
+          />
 
           {/* Cost summary */}
           {quantityNum > 0 && (

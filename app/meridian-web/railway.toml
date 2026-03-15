@@ -2,9 +2,6 @@
 builder = "NIXPACKS"
 buildCommand = "npm install && npm run build"
 
-[phases.install]
-cmds = ["npm install"]
-
 [deploy]
 startCommand = "npm start"
 healthcheckPath = "/"

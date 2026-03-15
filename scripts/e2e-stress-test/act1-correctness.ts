@@ -58,6 +58,7 @@ import {
   batch,
   parseOrderBook,
   readMarketState,
+  sleep,
 } from "./helpers";
 
 import {
@@ -89,10 +90,6 @@ import {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
 
 /** Record an instruction type hit in the shared metrics. */
 function track(ctx: SharedContext, ixName: string): void {

@@ -142,6 +142,7 @@ describe("Admin V2 — Phase 6A", () => {
   let tickerRegistry: PublicKey;
   let oracleFeed: PublicKey;
   let ma: MarketAccounts;
+  let provider: BankrunProvider;
 
   const TICKER = "AAPL";
   const STRIKE_PRICE = 200_000_000;
@@ -170,6 +171,8 @@ describe("Admin V2 — Phase 6A", () => {
       STRIKE_PRICE, marketCloseUnix, PREVIOUS_CLOSE,
       oracleFeed, usdcMint,
     );
+
+    provider = new BankrunProvider(ctx.context);
   });
 
   // =========================================================================
@@ -201,7 +204,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects expand on already-v2 config (ConfigAlreadyExpanded)", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildExpandConfigIx({ admin: ctx.admin.publicKey, config });
       try {
         await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), ix), [ctx.admin]);
@@ -212,7 +215,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("expands a v1 config to v2 (migration scenario)", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // Simulate a v1 config by shrinking to 200 bytes
       const fullData = await readConfigRaw(ctx, config);
@@ -242,7 +245,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects non-admin caller", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const { user } = await createFundedUser(ctx.context, ctx.admin, usdcMint, 0);
       const ix = buildExpandConfigIx({ admin: user.publicKey, config });
       try {
@@ -261,7 +264,7 @@ describe("Admin V2 — Phase 6A", () => {
 
   describe("initialize_ticker_registry", () => {
     it("creates TickerRegistry PDA with MAG7 tickers", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       const ix = buildInitializeTickerRegistryIx({
         admin: ctx.admin.publicKey,
@@ -286,7 +289,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects double initialization", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildInitializeTickerRegistryIx({
         admin: ctx.admin.publicKey,
         config,
@@ -301,7 +304,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects non-admin caller", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const { user } = await createFundedUser(ctx.context, ctx.admin, usdcMint, 0);
       const ix = buildInitializeTickerRegistryIx({
         admin: user.publicKey,
@@ -324,7 +327,7 @@ describe("Admin V2 — Phase 6A", () => {
 
   describe("update_config", () => {
     it("updates staleness_threshold only", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildUpdateConfigIx({
         admin: ctx.admin.publicKey,
         config,
@@ -339,7 +342,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("updates operating_reserve and blackout_minutes", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildUpdateConfigIx({
         admin: ctx.admin.publicKey,
         config,
@@ -354,7 +357,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("updates all fields at once", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildUpdateConfigIx({
         admin: ctx.admin.publicKey,
         config,
@@ -375,7 +378,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects staleness_threshold = 0", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildUpdateConfigIx({
         admin: ctx.admin.publicKey,
         config,
@@ -390,7 +393,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects confidence_bps > 10000", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildUpdateConfigIx({
         admin: ctx.admin.publicKey,
         config,
@@ -405,7 +408,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects blackout_minutes > 60", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildUpdateConfigIx({
         admin: ctx.admin.publicKey,
         config,
@@ -420,7 +423,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects non-admin caller", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const { user } = await createFundedUser(ctx.context, ctx.admin, usdcMint, 0);
       const ix = buildUpdateConfigIx({
         admin: user.publicKey,
@@ -437,7 +440,7 @@ describe("Admin V2 — Phase 6A", () => {
 
     // Reset to reasonable defaults for subsequent tests
     after(async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildUpdateConfigIx({
         admin: ctx.admin.publicKey,
         config,
@@ -457,7 +460,7 @@ describe("Admin V2 — Phase 6A", () => {
 
   describe("add_ticker", () => {
     it("anyone can add a new ticker (permissionless)", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const { user } = await createFundedUser(ctx.context, ctx.admin, usdcMint, 0);
 
       const ix = buildAddTickerIx({
@@ -479,7 +482,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects duplicate ticker (TickerAlreadyExists)", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildAddTickerIx({
         payer: ctx.admin.publicKey,
         config,
@@ -495,7 +498,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects duplicate user-added ticker", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildAddTickerIx({
         payer: ctx.admin.publicKey,
         config,
@@ -511,7 +514,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("adds a second user ticker", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const { user } = await createFundedUser(ctx.context, ctx.admin, usdcMint, 0);
 
       const ix = buildAddTickerIx({
@@ -537,7 +540,7 @@ describe("Admin V2 — Phase 6A", () => {
 
   describe("deactivate_ticker", () => {
     it("admin deactivates a ticker", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildDeactivateTickerIx({
         admin: ctx.admin.publicKey,
         config,
@@ -553,7 +556,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects deactivating already-deactivated ticker", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildDeactivateTickerIx({
         admin: ctx.admin.publicKey,
         config,
@@ -569,7 +572,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects non-existent ticker (TickerNotFound)", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildDeactivateTickerIx({
         admin: ctx.admin.publicKey,
         config,
@@ -585,7 +588,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects non-admin caller", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const { user } = await createFundedUser(ctx.context, ctx.admin, usdcMint, 0);
       const ix = buildDeactivateTickerIx({
         admin: user.publicKey,
@@ -608,7 +611,7 @@ describe("Admin V2 — Phase 6A", () => {
 
   describe("add_ticker reactivation", () => {
     it("reactivates a deactivated ticker via add_ticker", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       // JPM was deactivated in the deactivate_ticker tests above
       const ix = buildAddTickerIx({
         payer: ctx.admin.publicKey,
@@ -625,7 +628,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("still rejects adding an active ticker", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       // JPM is now active again — re-adding should fail
       const ix = buildAddTickerIx({
         payer: ctx.admin.publicKey,
@@ -655,7 +658,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects when fee_vault is empty (InsufficientBalance)", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildWithdrawFeesIx({
         admin: ctx.admin.publicKey,
         config,
@@ -671,7 +674,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("withdraws fees after strike creation fee is collected", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // Set a strike creation fee (100 USDC lamports for testing)
       const feeAmount = 100_000; // 0.1 USDC
@@ -771,7 +774,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects non-admin caller", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const { user, userUsdcAta: uAta } = await createFundedUser(ctx.context, ctx.admin, usdcMint, 0);
       const ix = buildWithdrawFeesIx({
         admin: user.publicKey,
@@ -789,7 +792,7 @@ describe("Admin V2 — Phase 6A", () => {
 
     // Reset strike creation fee to 0
     after(async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildUpdateStrikeCreationFeeIx({
         admin: ctx.admin.publicKey,
         config,
@@ -818,7 +821,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("withdraws surplus from treasury (balance - obligations - reserve)", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // Set operating_reserve to 2 USDC
       const updateIx = buildUpdateConfigIx({
@@ -848,7 +851,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects withdrawal exceeding available surplus", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       // Treasury has 5 USDC, reserve is 2 USDC → available = 3 USDC
       const ix = buildWithdrawTreasuryIx({
         admin: ctx.admin.publicKey,
@@ -866,7 +869,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects zero-amount withdrawal", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildWithdrawTreasuryIx({
         admin: ctx.admin.publicKey,
         config,
@@ -883,7 +886,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects non-admin caller", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const { user, userUsdcAta: uAta } = await createFundedUser(ctx.context, ctx.admin, usdcMint, 0);
       const ix = buildWithdrawTreasuryIx({
         admin: user.publicKey,
@@ -902,7 +905,7 @@ describe("Admin V2 — Phase 6A", () => {
 
     // Reset operating_reserve to 0
     after(async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildUpdateConfigIx({
         admin: ctx.admin.publicKey,
         config,
@@ -925,7 +928,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects non-admin calling transfer_admin (Unauthorized)", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const { user: rando } = await createFundedUser(ctx.context, ctx.admin, usdcMint, 0);
       const ix = buildTransferAdminIx({
         admin: rando.publicKey,
@@ -941,7 +944,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("current admin proposes new admin", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildTransferAdminIx({
         admin: ctx.admin.publicKey,
         config,
@@ -959,7 +962,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects accept_admin from wrong signer (NotPendingAdmin)", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const { user: rando } = await createFundedUser(ctx.context, ctx.admin, usdcMint, 0);
       const ix = buildAcceptAdminIx({
         newAdmin: rando.publicKey,
@@ -974,7 +977,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("pending admin accepts", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildAcceptAdminIx({
         newAdmin: newAdmin.publicKey,
         config,
@@ -993,7 +996,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("old admin can no longer call admin instructions", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildUpdateConfigIx({
         admin: ctx.admin.publicKey,
         config,
@@ -1008,7 +1011,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects accept_admin when no pending transfer (NoPendingAdmin)", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const { user: rando } = await createFundedUser(ctx.context, ctx.admin, usdcMint, 0);
       const ix = buildAcceptAdminIx({
         newAdmin: rando.publicKey,
@@ -1024,7 +1027,7 @@ describe("Admin V2 — Phase 6A", () => {
 
     // Transfer admin back to original for remaining tests
     after(async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // newAdmin proposes original admin
       const transferIx = buildTransferAdminIx({
@@ -1072,7 +1075,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("activates global pause and pauses markets", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       const ix = buildCircuitBreakerIx({
         admin: ctx.admin.publicKey,
@@ -1097,7 +1100,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("works without any markets (global pause only)", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // Already paused, but should succeed without error
       const ix = buildCircuitBreakerIx({
@@ -1111,7 +1114,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects non-admin caller", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const { user } = await createFundedUser(ctx.context, ctx.admin, usdcMint, 0);
       const ix = buildCircuitBreakerIx({
         admin: user.publicKey,
@@ -1127,7 +1130,7 @@ describe("Admin V2 — Phase 6A", () => {
 
     // Unpause for any subsequent tests
     after(async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const { buildUnpauseIx } = await import("../helpers/instructions");
       const ix = buildUnpauseIx({
         admin: ctx.admin.publicKey,
@@ -1143,7 +1146,7 @@ describe("Admin V2 — Phase 6A", () => {
 
   describe("create_strike_market with TickerRegistry", () => {
     it("succeeds when ticker is active in registry", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // Create a market on COST ticker (user-added, active)
       const costFeed = await initializeOracleFeed(ctx.context, ctx.admin, "COST")
@@ -1219,7 +1222,7 @@ describe("Admin V2 — Phase 6A", () => {
     });
 
     it("rejects market creation with deactivated ticker in registry", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // JPM was reactivated in the reactivation tests — deactivate it again
       const deactIx = buildDeactivateTickerIx({

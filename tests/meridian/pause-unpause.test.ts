@@ -26,6 +26,7 @@ describe("Pause / Unpause", () => {
   let config: PublicKey;
   let oracleFeed: PublicKey;
   let ma: MarketAccounts;
+  let provider: BankrunProvider;
 
   const TICKER = "TSLA";
   const STRIKE_PRICE = 300_000_000;
@@ -47,10 +48,12 @@ describe("Pause / Unpause", () => {
       STRIKE_PRICE, marketCloseUnix, PREVIOUS_CLOSE,
       oracleFeed, usdcMint,
     );
+
+    provider = new BankrunProvider(ctx.context);
   });
 
   it("pauses globally", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
     const ix = buildPauseIx({ admin: ctx.admin.publicKey, config });
     await provider.sendAndConfirm!(new Transaction().add(ix), [ctx.admin]);
 
@@ -65,7 +68,7 @@ describe("Pause / Unpause", () => {
   });
 
   it("rejects double pause", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
     const ix = buildPauseIx({ admin: ctx.admin.publicKey, config });
     // Add unique compute budget to avoid duplicate tx hash
     const tx = new Transaction().add(
@@ -82,7 +85,7 @@ describe("Pause / Unpause", () => {
   });
 
   it("unpauses globally", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
     const ix = buildUnpauseIx({ admin: ctx.admin.publicKey, config });
     await provider.sendAndConfirm!(new Transaction().add(ix), [ctx.admin]);
 
@@ -93,7 +96,7 @@ describe("Pause / Unpause", () => {
   });
 
   it("rejects unpause when not paused", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
     const ix = buildUnpauseIx({ admin: ctx.admin.publicKey, config });
     // Add unique compute budget to avoid duplicate tx hash
     const budgetIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 199_998 });
@@ -107,7 +110,7 @@ describe("Pause / Unpause", () => {
   });
 
   it("rejects pause from non-admin", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
     const nonAdmin = Keypair.generate();
     ctx.context.setAccount(nonAdmin.publicKey, {
       lamports: 10_000_000_000,
@@ -127,7 +130,7 @@ describe("Pause / Unpause", () => {
   });
 
   it("pauses and unpauses a specific market", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
 
     // Pause market
     const pauseIx = buildPauseIx({

@@ -66,6 +66,7 @@ import {
   parseOrderBook,
   readMarketState,
   findPriceFeed,
+  sleep,
 } from "./helpers";
 import {
   findStrikeMarket,
@@ -87,10 +88,6 @@ import { Directional } from "./agents/directional";
 import { Scalper } from "./agents/scalper";
 import { StrikeCreator } from "./agents/strike-creator";
 import type { BaseAgent } from "./agents/base-agent";
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
 
 // ── Market creation helper ─────────────────────────────────────────────────
 

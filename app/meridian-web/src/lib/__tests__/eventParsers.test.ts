@@ -30,6 +30,23 @@ function makeFillEvent(overrides?: Partial<IndexedEvent>): IndexedEvent {
   };
 }
 
+/** Build a fill data JSON string with field overrides. */
+function makeFillData(overrides?: Record<string, unknown>): string {
+  return JSON.stringify({
+    market: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+    maker: "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+    taker: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    price: 65,
+    quantity: 1000,
+    makerSide: 0,
+    takerSide: 1,
+    isMerge: false,
+    makerOrderId: "42",
+    timestamp: 1710100000,
+    ...overrides,
+  });
+}
+
 function makeSettlementEvent(overrides?: Partial<IndexedEvent>): IndexedEvent {
   return {
     type: "settlement",
@@ -107,31 +124,11 @@ describe("parseFillEvent", () => {
   });
 
   it("returns null when maker is not a string", () => {
-    const data = JSON.stringify({
-      market: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
-      maker: 12345,
-      taker: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-      price: 65,
-      quantity: 1000,
-      makerSide: 0,
-      takerSide: 1,
-      timestamp: 1710100000,
-    });
-    expect(parseFillEvent(makeFillEvent({ data }))).toBeNull();
+    expect(parseFillEvent(makeFillEvent({ data: makeFillData({ maker: 12345 }) }))).toBeNull();
   });
 
   it("returns null when taker is not a string", () => {
-    const data = JSON.stringify({
-      market: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
-      maker: "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
-      taker: null,
-      price: 65,
-      quantity: 1000,
-      makerSide: 0,
-      takerSide: 1,
-      timestamp: 1710100000,
-    });
-    expect(parseFillEvent(makeFillEvent({ data }))).toBeNull();
+    expect(parseFillEvent(makeFillEvent({ data: makeFillData({ taker: null }) }))).toBeNull();
   });
 
   it("falls back to event.timestamp when d.timestamp is absent", () => {

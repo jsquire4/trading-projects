@@ -14,9 +14,11 @@ import { BankrunProvider } from "anchor-bankrun";
 
 describe("Oracle CRUD", () => {
   let ctx: BankrunContext;
+  let provider: BankrunProvider;
 
   before(async () => {
     ctx = await setupBankrun();
+    provider = new BankrunProvider(ctx.context);
   });
 
   it("initializes a price feed", async () => {
@@ -48,7 +50,7 @@ describe("Oracle CRUD", () => {
     const clock = await ctx.context.banksClient.getClock();
     const timestamp = Number(clock.unixTimestamp);
 
-    const provider = new BankrunProvider(ctx.context);
+
     const ix = buildUpdatePriceIx({
       authority: ctx.admin.publicKey,
       priceFeed: pda,
@@ -82,7 +84,7 @@ describe("Oracle CRUD", () => {
     const imposter = Keypair.generate();
 
     // Fund the imposter so it can sign transactions
-    const provider = new BankrunProvider(ctx.context);
+
     const clock = await ctx.context.banksClient.getClock();
     const timestamp = Number(clock.unixTimestamp);
 
@@ -112,7 +114,7 @@ describe("Oracle CRUD", () => {
     const clock = await ctx.context.banksClient.getClock();
     const timestamp = Number(clock.unixTimestamp);
 
-    const provider = new BankrunProvider(ctx.context);
+
     const ix = buildUpdatePriceIx({
       authority: ctx.admin.publicKey,
       priceFeed: pda,
@@ -136,7 +138,7 @@ describe("Oracle CRUD", () => {
     const ticker = "NVDA";
     const pda = await initializeOracleFeed(ctx.context, ctx.admin, ticker);
 
-    const provider = new BankrunProvider(ctx.context);
+
     const ix = buildUpdatePriceIx({
       authority: ctx.admin.publicKey,
       priceFeed: pda,

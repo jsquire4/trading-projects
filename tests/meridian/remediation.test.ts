@@ -66,6 +66,17 @@ import { makeUniqueCuIxFactory } from "../helpers/tx-helpers";
 const uniqueCuIx = makeUniqueCuIxFactory(400_000);
 const ONE_TOKEN = 1_000_000;
 
+/** Shared setup: bankrun context, USDC mint, config, fee vault, provider. */
+async function setupRemediationBase() {
+  const ctx = await setupBankrun();
+  const usdcMint = await createMockUsdc(ctx.context, ctx.admin);
+  await initializeConfig(ctx.context, ctx.admin, usdcMint, MOCK_ORACLE_PROGRAM_ID);
+  const [config] = findGlobalConfig();
+  const [feeVault] = findFeeVault();
+  const provider = new BankrunProvider(ctx.context);
+  return { ctx, usdcMint, config, feeVault, provider };
+}
+
 // ===========================================================================
 // update_strike_creation_fee
 // ===========================================================================
@@ -73,12 +84,10 @@ describe("Update Strike Creation Fee", () => {
   let ctx: BankrunContext;
   let usdcMint: PublicKey;
   let config: PublicKey;
+  let provider: BankrunProvider;
 
   before(async () => {
-    ctx = await setupBankrun();
-    usdcMint = await createMockUsdc(ctx.context, ctx.admin);
-    await initializeConfig(ctx.context, ctx.admin, usdcMint, MOCK_ORACLE_PROGRAM_ID);
-    [config] = findGlobalConfig();
+    ({ ctx, usdcMint, config, provider } = await setupRemediationBase());
   });
 
   // strike_creation_fee offset: 8 (disc) + 32+32+32 (pubkeys) + 8+8+8 (u64s)
@@ -97,7 +106,7 @@ describe("Update Strike Creation Fee", () => {
   });
 
   it("admin can set strike_creation_fee", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
     const ix = buildUpdateStrikeCreationFeeIx(
       { admin: ctx.admin.publicKey, config },
       new BN(5_000_000), // $5 fee
@@ -109,7 +118,7 @@ describe("Update Strike Creation Fee", () => {
   });
 
   it("admin can set strike_creation_fee to 0", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
     const ix = buildUpdateStrikeCreationFeeIx(
       { admin: ctx.admin.publicKey, config },
       new BN(0),
@@ -129,7 +138,7 @@ describe("Update Strike Creation Fee", () => {
       executable: false,
     });
 
-    const provider = new BankrunProvider(ctx.context);
+
     const ix = buildUpdateStrikeCreationFeeIx(
       { admin: nonAdmin.publicKey, config },
       new BN(1_000_000),
@@ -154,15 +163,12 @@ describe("Permissionless Strike Creation", () => {
   let config: PublicKey;
   let feeVault: PublicKey;
   let oracleFeed: PublicKey;
+  let provider: BankrunProvider;
 
   const TICKER = "AAPL";
 
   before(async () => {
-    ctx = await setupBankrun();
-    usdcMint = await createMockUsdc(ctx.context, ctx.admin);
-    await initializeConfig(ctx.context, ctx.admin, usdcMint, MOCK_ORACLE_PROGRAM_ID);
-    [config] = findGlobalConfig();
-    [feeVault] = findFeeVault();
+    ({ ctx, usdcMint, config, feeVault, provider } = await setupRemediationBase());
     oracleFeed = await initializeOracleFeed(ctx.context, ctx.admin, TICKER);
     await updateOraclePrice(ctx.context, ctx.admin, oracleFeed, 198_000_000, 500_000);
   });
@@ -178,7 +184,7 @@ describe("Permissionless Strike Creation", () => {
     marketCloseUnix: number,
     creatorUsdcAta?: PublicKey,
   ): Promise<MarketAccounts> {
-    const provider = new BankrunProvider(ctx.context);
+
     const strikePriceBN = new BN(strikePrice);
     const expiryDay = Math.floor(marketCloseUnix / 86400);
 
@@ -230,7 +236,7 @@ describe("Permissionless Strike Creation", () => {
 
   it("non-admin can create a market when fee is 0", async () => {
     // Ensure fee is 0
-    const provider = new BankrunProvider(ctx.context);
+
     const setFeeIx = buildUpdateStrikeCreationFeeIx(
       { admin: ctx.admin.publicKey, config },
       new BN(0),
@@ -262,7 +268,7 @@ describe("Permissionless Strike Creation", () => {
   });
 
   it("admin creates market without paying fee even when fee > 0", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
 
     // Set a fee
     const setFeeIx = buildUpdateStrikeCreationFeeIx(
@@ -293,7 +299,7 @@ describe("Permissionless Strike Creation", () => {
   });
 
   it("non-admin pays strike_creation_fee when fee > 0", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
 
     // Ensure fee is set to $5
     const setFeeIx = buildUpdateStrikeCreationFeeIx(
@@ -332,7 +338,7 @@ describe("Permissionless Strike Creation", () => {
   });
 
   it("non-admin without USDC fails when fee > 0", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
 
     // Ensure fee is set
     const strikeFeeOffset = 192;
@@ -376,6 +382,7 @@ describe("Crank Redeem", () => {
   let oracleFeed: PublicKey;
   let ma: MarketAccounts;
   let marketCloseUnix: number;
+  let provider: BankrunProvider;
 
   const TICKER = "NVDA";
   const STRIKE_PRICE = 500_000_000;
@@ -393,15 +400,11 @@ describe("Crank Redeem", () => {
   let user2NoAta: PublicKey;
 
   before(async () => {
-    ctx = await setupBankrun();
+    ({ ctx, usdcMint, config, feeVault, provider } = await setupRemediationBase());
 
     const clock = await ctx.context.banksClient.getClock();
     marketCloseUnix = Number(clock.unixTimestamp) + 5;
 
-    usdcMint = await createMockUsdc(ctx.context, ctx.admin);
-    await initializeConfig(ctx.context, ctx.admin, usdcMint, MOCK_ORACLE_PROGRAM_ID);
-    [config] = findGlobalConfig();
-    [feeVault] = findFeeVault();
     oracleFeed = await initializeOracleFeed(ctx.context, ctx.admin, TICKER);
     await updateOraclePrice(ctx.context, ctx.admin, oracleFeed, 510_000_000, 500_000);
 
@@ -429,7 +432,7 @@ describe("Crank Redeem", () => {
     user2NoAta = u2.userNoAta;
 
     // Mint pairs for both users
-    const provider = new BankrunProvider(ctx.context);
+    provider = new BankrunProvider(ctx.context);
     for (const [user, uAta, yAta, nAta] of [
       [user1, user1UsdcAta, user1YesAta, user1NoAta],
       [user2, user2UsdcAta, user2YesAta, user2NoAta],
@@ -482,7 +485,7 @@ describe("Crank Redeem", () => {
   });
 
   it("rejects crank_redeem during override window", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
 
     // Still within override window (settled_at + 3600)
     const m = await readMarket(ctx, ma.market);
@@ -518,7 +521,7 @@ describe("Crank Redeem", () => {
   });
 
   it("rejects crank_redeem with no remaining accounts", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
 
     // Advance past override window
     const m = await readMarket(ctx, ma.market);
@@ -552,7 +555,7 @@ describe("Crank Redeem", () => {
   it("crank_redeem successfully burns winning tokens and transfers USDC", async () => {
     // mint_pair pre-approves the market PDA as delegate on both Yes and No ATAs,
     // so crank_redeem can burn winning tokens and transfer USDC without user interaction.
-    const provider = new BankrunProvider(ctx.context);
+
 
     // Advance past override deadline
     const m = await readMarket(ctx, ma.market);
@@ -599,7 +602,7 @@ describe("Crank Redeem", () => {
 
   it("multi-user batch: cranks both users in one tx", async () => {
     // user1 was already redeemed in previous test; user2 still has 50 Yes tokens
-    const provider = new BankrunProvider(ctx.context);
+
     const m = await readMarket(ctx, ma.market);
     await advanceClock(ctx, m.overrideDeadline + 200);
 
@@ -648,7 +651,7 @@ describe("Crank Redeem", () => {
 
   it("double-crank of already-redeemed users returns CrankRedeemEmpty", async () => {
     // Both users already redeemed — all balances are 0
-    const provider = new BankrunProvider(ctx.context);
+
     const m = await readMarket(ctx, ma.market);
     await advanceClock(ctx, m.overrideDeadline + 300);
 
@@ -692,6 +695,7 @@ describe("Crank Redeem (No Wins)", () => {
   let oracleFeed: PublicKey;
   let ma: MarketAccounts;
   let marketCloseUnix: number;
+  let provider: BankrunProvider;
 
   const TICKER = "GOOGL";
   const STRIKE_PRICE = 500_000_000;
@@ -703,15 +707,11 @@ describe("Crank Redeem (No Wins)", () => {
   let user1NoAta: PublicKey;
 
   before(async () => {
-    ctx = await setupBankrun();
+    ({ ctx, usdcMint, config, feeVault, provider } = await setupRemediationBase());
 
     const clock = await ctx.context.banksClient.getClock();
     marketCloseUnix = Number(clock.unixTimestamp) + 5;
 
-    usdcMint = await createMockUsdc(ctx.context, ctx.admin);
-    await initializeConfig(ctx.context, ctx.admin, usdcMint, MOCK_ORACLE_PROGRAM_ID);
-    [config] = findGlobalConfig();
-    [feeVault] = findFeeVault();
     oracleFeed = await initializeOracleFeed(ctx.context, ctx.admin, TICKER);
     // Oracle price BELOW strike → No wins
     await updateOraclePrice(ctx.context, ctx.admin, oracleFeed, 480_000_000, 500_000);
@@ -731,7 +731,7 @@ describe("Crank Redeem (No Wins)", () => {
     user1NoAta = u1.userNoAta;
 
     // Mint pairs
-    const provider = new BankrunProvider(ctx.context);
+    provider = new BankrunProvider(ctx.context);
     const mintIx = buildMintPairIx({
       user: user1.publicKey,
       config,
@@ -778,7 +778,7 @@ describe("Crank Redeem (No Wins)", () => {
   });
 
   it("crank_redeem redeems No winners (outcome=2)", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
 
     const m = await readMarket(ctx, ma.market);
     await advanceClock(ctx, m.overrideDeadline + 100);
@@ -823,7 +823,7 @@ describe("Crank Redeem (No Wins)", () => {
   });
 
   it("skips user with wrong mint (Yes ATA when No wins) gracefully", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
 
     const m = await readMarket(ctx, ma.market);
     await advanceClock(ctx, m.overrideDeadline + 200);

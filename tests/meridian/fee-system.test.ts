@@ -54,6 +54,7 @@ describe("Fee System", () => {
   let feeVault: PublicKey;
   let oracleFeed: PublicKey;
   let ma: MarketAccounts;
+  let provider: BankrunProvider;
 
   const TICKER = "AAPL";
   const STRIKE_PRICE = 200_000_000;
@@ -63,6 +64,11 @@ describe("Fee System", () => {
   const TEN_TOKENS = 10_000_000;
 
   const uniqueCuIx = makeUniqueCuIxFactory(300_000);
+
+  // GlobalConfig layout offset for fee_bps (u16):
+  // 8 (disc) + 32+32+32 (pubkeys) + 8+8+8 (u64s) + 1 (is_paused)
+  // + 1 (oracle_type) + 56 (tickers) + 1 (ticker_count) + 1 (bump) = 188
+  const FEE_BPS_OFFSET = 188;
 
   before(async () => {
     ctx = await setupBankrun();
@@ -82,6 +88,8 @@ describe("Fee System", () => {
       STRIKE_PRICE, marketCloseUnix, PREVIOUS_CLOSE,
       oracleFeed, usdcMint,
     );
+
+    provider = new BankrunProvider(ctx.context);
   });
 
   // -----------------------------------------------------------------------
@@ -93,12 +101,12 @@ describe("Fee System", () => {
     expect(acct).to.not.be.null;
     // offset of fee_bps = 8 + 32 + 32 + 32 + 8 + 8 + 8 + 1 + 1 + 56 + 1 + 1 = 188
     const data = Buffer.from(acct!.data);
-    const feeBps = data.readUInt16LE(188);
+    const feeBps = data.readUInt16LE(FEE_BPS_OFFSET);
     expect(feeBps).to.equal(0);
   });
 
   it("admin can set fee_bps to 50", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
     const ix = buildUpdateFeeBpsIx({
       admin: ctx.admin.publicKey,
       config,
@@ -107,12 +115,12 @@ describe("Fee System", () => {
     await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), ix), [ctx.admin]);
 
     const acct = await ctx.context.banksClient.getAccount(config);
-    const feeBps = Buffer.from(acct!.data).readUInt16LE(188);
+    const feeBps = Buffer.from(acct!.data).readUInt16LE(FEE_BPS_OFFSET);
     expect(feeBps).to.equal(50);
   });
 
   it("rejects fee_bps > 1000 (FeeBpsOutOfRange)", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
     const ix = buildUpdateFeeBpsIx({
       admin: ctx.admin.publicKey,
       config,
@@ -138,7 +146,7 @@ describe("Fee System", () => {
       executable: false,
     });
 
-    const provider = new BankrunProvider(ctx.context);
+
     const ix = buildUpdateFeeBpsIx({
       admin: nonAdmin.publicKey,
       config,
@@ -153,7 +161,7 @@ describe("Fee System", () => {
   });
 
   it("admin can set fee_bps to 0 (zero-fee)", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
     const ix = buildUpdateFeeBpsIx({
       admin: ctx.admin.publicKey,
       config,
@@ -162,7 +170,7 @@ describe("Fee System", () => {
     await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), ix), [ctx.admin]);
 
     const acct = await ctx.context.banksClient.getAccount(config);
-    const feeBps = Buffer.from(acct!.data).readUInt16LE(188);
+    const feeBps = Buffer.from(acct!.data).readUInt16LE(FEE_BPS_OFFSET);
     expect(feeBps).to.equal(0);
   });
 
@@ -171,7 +179,7 @@ describe("Fee System", () => {
   // -----------------------------------------------------------------------
 
   it("swap fill: fee deducted from escrow, fee_vault receives fee", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
 
     // Set fee to 50 bps (0.5%)
     const setFeeIx = buildUpdateFeeBpsIx({
@@ -270,7 +278,7 @@ describe("Fee System", () => {
   // -----------------------------------------------------------------------
 
   it("merge fill: fee deducted from pool, fee_vault receives fee", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
 
     // fee_bps is still 50 from previous test
 
@@ -409,7 +417,7 @@ describe("Fee System", () => {
   // -----------------------------------------------------------------------
 
   it("orders work correctly at zero fee", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
 
     // Reset fee to 0
     const resetIx = buildUpdateFeeBpsIx({
@@ -500,7 +508,7 @@ describe("Fee System", () => {
   // -----------------------------------------------------------------------
 
   it("multiple fills accumulate fees in fee_vault", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
 
     // Set fee to 100 bps (1%)
     const setFeeIx = buildUpdateFeeBpsIx({

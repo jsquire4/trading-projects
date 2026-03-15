@@ -40,7 +40,7 @@ async function get(path: string): Promise<{
 }
 
 /** Helper: make a POST request and return parsed JSON + status. */
-async function post(baseUrl: string, path: string, body: unknown): Promise<{
+async function post(path: string, body: unknown): Promise<{
   status: number;
   body: any;
 }> {
@@ -218,50 +218,50 @@ describe("API Server", () => {
     };
 
     it("stores a valid intent and returns ok", async () => {
-      const { status, body } = await post(baseUrl, "/api/order-intent", validIntent);
+      const { status, body } = await post("/api/order-intent", validIntent);
       expect(status).toBe(200);
       expect(body.ok).toBe(true);
     });
 
     it("accepts orderId=0 as valid", async () => {
-      const { status, body } = await post(baseUrl, "/api/order-intent", { ...validIntent, orderId: 0 });
+      const { status, body } = await post("/api/order-intent", { ...validIntent, orderId: 0 });
       expect(status).toBe(200);
       expect(body.ok).toBe(true);
     });
 
     it("rejects missing required fields", async () => {
-      const { status, body } = await post(baseUrl, "/api/order-intent", { orderId: 1 });
+      const { status, body } = await post("/api/order-intent", { orderId: 1 });
       expect(status).toBe(400);
       expect(body.error).toMatch(/Missing required fields/);
     });
 
     it("rejects invalid intent value", async () => {
-      const { status, body } = await post(baseUrl, "/api/order-intent", { ...validIntent, intent: "invalid" });
+      const { status, body } = await post("/api/order-intent", { ...validIntent, intent: "invalid" });
       expect(status).toBe(400);
       expect(body.error).toMatch(/Invalid intent/);
     });
 
     it("rejects displayPrice out of range", async () => {
-      const { status, body } = await post(baseUrl, "/api/order-intent", { ...validIntent, displayPrice: 0 });
+      const { status, body } = await post("/api/order-intent", { ...validIntent, displayPrice: 0 });
       expect(status).toBe(400);
       expect(body.error).toMatch(/displayPrice/);
     });
 
     it("rejects invalid base58 addresses", async () => {
-      const { status, body } = await post(baseUrl, "/api/order-intent", { ...validIntent, market: "!!invalid!!" });
+      const { status, body } = await post("/api/order-intent", { ...validIntent, market: "!!invalid!!" });
       expect(status).toBe(400);
       expect(body.error).toMatch(/Invalid market or wallet/);
     });
 
     it("rejects too-short base58 addresses", async () => {
-      const { status, body } = await post(baseUrl, "/api/order-intent", { ...validIntent, market: "ABC123" });
+      const { status, body } = await post("/api/order-intent", { ...validIntent, market: "ABC123" });
       expect(status).toBe(400);
       expect(body.error).toMatch(/Invalid market or wallet/);
     });
 
     it("returns 413 for oversized request body", async () => {
       const oversized = { ...validIntent, extra: "x".repeat(5000) };
-      const { status, body } = await post(baseUrl, "/api/order-intent", oversized);
+      const { status, body } = await post("/api/order-intent", oversized);
       expect(status).toBe(413);
       expect(body.error).toMatch(/too large/i);
     });

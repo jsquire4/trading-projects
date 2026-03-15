@@ -36,15 +36,7 @@ import {
   ALT_WARMUP_SLEEP_MS,
   DEFAULT_MINT_QUANTITY,
 } from "../config";
-import { sendTx } from "../helpers";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+import { sendTx, sleep } from "../helpers";
 
 // ---------------------------------------------------------------------------
 // StrikeCreator

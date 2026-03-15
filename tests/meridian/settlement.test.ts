@@ -73,6 +73,7 @@ describe("Settlement Lifecycle", () => {
   let config: PublicKey;
   let feeVault: PublicKey;
   let oracleFeed: PublicKey;
+  let provider: BankrunProvider;
 
   // Market 1: oracle-settled market (for settle_market + admin_override tests)
   let ma1: MarketAccounts;
@@ -122,7 +123,7 @@ describe("Settlement Lifecycle", () => {
     userNoAta1 = getAssociatedTokenAddressSync(ma1.noMint, ctx.admin.publicKey);
 
     // Mint 100 pairs on market 1 — user gets 100 Yes + 100 No tokens
-    const provider = new BankrunProvider(ctx.context);
+    provider = new BankrunProvider(ctx.context);
     const mintIx = buildMintPairIx({
       user: ctx.admin.publicKey,
       config,
@@ -143,7 +144,7 @@ describe("Settlement Lifecycle", () => {
   // =========================================================================
   describe("settle_market", () => {
     it("rejects settlement before market close", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildSettleMarketIx({
         caller: ctx.admin.publicKey,
         config,
@@ -164,7 +165,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("settles Yes wins when oracle price >= strike", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // Advance clock past market close
       const settleTime = m1CloseUnix + 10;
@@ -205,7 +206,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("rejects double settlement", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const ix = buildSettleMarketIx({
         caller: ctx.admin.publicKey,
         config,
@@ -251,7 +252,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("rejects admin settle before 1hr delay", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // Advance past market close but less than 1hr after close
       await advanceClock(ctx, m2CloseUnix + 60);
@@ -276,7 +277,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("admin settles after 1hr delay", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // Advance past close + 3600
       const adminSettleTime = m2CloseUnix + 3601;
@@ -310,7 +311,7 @@ describe("Settlement Lifecycle", () => {
     // Uses market 1 which was oracle-settled above with outcome=1 (Yes wins)
 
     it("overrides outcome within window", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // Ensure we're within override window of market 1
       const m = await readMarket(ctx, ma1.market);
@@ -339,7 +340,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("increments override_count", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // Second override: flip back to Yes wins
       const ix = buildAdminOverrideIx({
@@ -360,7 +361,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("rejects after 3 overrides", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // Third override (count goes to 3)
       const ix3 = buildAdminOverrideIx({
@@ -402,7 +403,7 @@ describe("Settlement Lifecycle", () => {
       // override_count=0 but we can advance past its override_deadline.
       // We need to find market 2's key. Since it was created in a nested before(),
       // we re-derive it here with the same params.
-      const provider = new BankrunProvider(ctx.context);
+
 
       // Market 1 has count=3, so we get MaxOverridesExceeded. To isolate the
       // window-expired error, create a one-off market, settle it, then expire.
@@ -487,7 +488,7 @@ describe("Settlement Lifecycle", () => {
       userNoAta3 = getAssociatedTokenAddressSync(ma3.noMint, ctx.admin.publicKey);
 
       // Mint 50 pairs
-      const provider = new BankrunProvider(ctx.context);
+
       const mintIx = buildMintPairIx({
         user: ctx.admin.publicKey,
         config,
@@ -504,7 +505,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("pair burn redeems Yes+No for $1 USDC anytime (before settlement)", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       const usdcBefore = await getTokenBalance(ctx, userUsdcAta);
       const yesBefore = await getTokenBalance(ctx, userYesAta3);
@@ -540,7 +541,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("rejects winner redeem during override window", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // Advance past market close and settle market 3
       const settleTime = m3CloseUnix + 10;
@@ -603,7 +604,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("winner redeems after override window", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // Advance past override deadline
       const m = await readMarket(ctx, ma3.market);
@@ -678,7 +679,7 @@ describe("Settlement Lifecycle", () => {
       userNoAta4 = getAssociatedTokenAddressSync(ma4.noMint, ctx.admin.publicKey);
 
       // Mint 50 pairs on market 4 (by admin — puts tokens in vault)
-      const provider = new BankrunProvider(ctx.context);
+
       const mintIx = buildMintPairIx({
         user: ctx.admin.publicKey,
         config,
@@ -733,7 +734,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("rejects crank on unsettled market", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       const ix = buildCrankCancelIx({
         caller: ctx.admin.publicKey,
@@ -759,7 +760,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("cancels resting orders post-settlement and returns escrow", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // Advance past market 4 close
       const settleTime = m4CloseUnix + 10;
@@ -821,7 +822,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("rejects crank on empty settled book (CrankNotNeeded)", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // Market 4 was just cranked — book should be empty now
       const crankIx = buildCrankCancelIx({
@@ -871,7 +872,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("rejects stale oracle price", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const settleTime = maOracleCloseUnix + 10;
       await advanceClock(ctx, settleTime);
 
@@ -908,7 +909,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("rejects oracle with too-wide confidence band", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
 
@@ -945,7 +946,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("settles No wins when oracle price < strike", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
 
@@ -982,7 +983,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("settles Yes at exact strike boundary (price == strike)", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
 
@@ -1057,7 +1058,7 @@ describe("Settlement Lifecycle", () => {
       userNoAta6 = getAssociatedTokenAddressSync(ma6.noMint, ctx.admin.publicKey);
 
       // Mint 50 pairs
-      const provider = new BankrunProvider(ctx.context);
+
       const mintIx = buildMintPairIx({
         user: ctx.admin.publicKey,
         config,
@@ -1106,7 +1107,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("No-wins: winner redeems No tokens for USDC", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       const usdcBefore = await getTokenBalance(ctx, userUsdcAta);
       const noBefore = await getTokenBalance(ctx, userNoAta6);
@@ -1144,7 +1145,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("pair burn rejects with insufficient Yes balance", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // Try to pair-burn more than available (user has 50 pairs minted, 10 No redeemed above)
       // Yes balance is still 50, but let's try 100 — more than available
@@ -1175,7 +1176,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("pair burn rejects with insufficient No balance", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // User redeemed 10 No tokens above via winner redeem, so No balance < Yes balance
       // Try to pair-burn more No tokens than available (user has 40 No, 50 Yes)
@@ -1205,7 +1206,7 @@ describe("Settlement Lifecycle", () => {
     });
 
     it("total_redeemed accumulates across multiple redemptions", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
 
       // Do another winner redeem of 5 No tokens
       const redeemQty = 5 * ONE_TOKEN;
@@ -1247,7 +1248,7 @@ describe("Settlement Lifecycle", () => {
     // Test 1: admin_settle on already-settled market → rejected
     // ---------------------------------------------------------------------------
     it("admin_settle on already-settled market is rejected", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
       const closeUnix = now + 5;
@@ -1305,7 +1306,7 @@ describe("Settlement Lifecycle", () => {
     // Test 2: admin_override on unsettled market → rejected
     // ---------------------------------------------------------------------------
     it("admin_override on unsettled market is rejected", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
 
@@ -1343,7 +1344,7 @@ describe("Settlement Lifecycle", () => {
     // Test 3: crank_cancel succeeds during override window
     // ---------------------------------------------------------------------------
     it("crank_cancel succeeds during override window", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
       const closeUnix = now + 5;
@@ -1449,7 +1450,7 @@ describe("Settlement Lifecycle", () => {
     // Test 4: admin overrides outcome → post-deadline redeem pays corrected outcome
     // ---------------------------------------------------------------------------
     it("post-override redemption pays the corrected outcome", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
       const closeUnix = now + 5;
@@ -1562,7 +1563,7 @@ describe("Settlement Lifecycle", () => {
     // Test 5: losing token holder attempts winner-redeem → InsufficientBalance
     // ---------------------------------------------------------------------------
     it("losing-side winner-redeem is rejected with InsufficientBalance", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
       const closeUnix = now + 5;
@@ -1689,7 +1690,7 @@ describe("Settlement Lifecycle", () => {
     // Test 6: vault balance reaches zero after full redemption
     // ---------------------------------------------------------------------------
     it("vault balance is zero after all tokens are redeemed", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
       const closeUnix = now + 5;
@@ -1782,7 +1783,7 @@ describe("Settlement Lifecycle", () => {
     // Test 7: pair burn during override window succeeds
     // ---------------------------------------------------------------------------
     it("pair burn during override window succeeds", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
       const closeUnix = now + 5;
@@ -1876,7 +1877,7 @@ describe("Settlement Lifecycle", () => {
     // Test 8: admin_settle with zero price → rejected
     // ---------------------------------------------------------------------------
     it("admin_settle with zero price is rejected", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
       const closeUnix = now + 5;
@@ -1916,7 +1917,7 @@ describe("Settlement Lifecycle", () => {
     // Test 9: oracle future-timestamp → rejected
     // ---------------------------------------------------------------------------
     it("oracle with future timestamp is rejected as stale", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
       const closeUnix = now + 5;
@@ -1960,7 +1961,7 @@ describe("Settlement Lifecycle", () => {
     // Test 10: pause blocks settlement
     // ---------------------------------------------------------------------------
     it("pause blocks settle_market", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
       const closeUnix = now + 5;
@@ -2040,7 +2041,7 @@ describe("Settlement Lifecycle", () => {
     // Test 11: pause blocks winner-redeem
     // ---------------------------------------------------------------------------
     it("pause blocks winner-redeem after settlement", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
       const closeUnix = now + 5;
@@ -2157,7 +2158,7 @@ describe("Settlement Lifecycle", () => {
     // Test 12: admin_override with zero price → rejected
     // ---------------------------------------------------------------------------
     it("admin_override with zero price is rejected", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
       const closeUnix = now + 5;
@@ -2213,7 +2214,7 @@ describe("Settlement Lifecycle", () => {
     // Test 13: vault balance delta matches redemption amount
     // ---------------------------------------------------------------------------
     it("vault balance delta equals the redemption quantity", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
       const closeUnix = now + 5;
@@ -2313,7 +2314,7 @@ describe("Settlement Lifecycle", () => {
     // Test 14: Manual cancel_order still works post-settlement
     // ---------------------------------------------------------------------------
     it("manual cancel_order works post-settlement (refunds escrow)", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
       const closeUnix = now + 5;
@@ -2424,7 +2425,7 @@ describe("Settlement Lifecycle", () => {
     // Test 15: Full lifecycle e2e — two-user happy path
     // ---------------------------------------------------------------------------
     it("full lifecycle e2e: create → mint → orders → fill → settle → crank → redeem → vault empty", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
       const closeUnix = now + 5;
@@ -2639,7 +2640,7 @@ describe("Settlement Lifecycle", () => {
     // Test 16: Multi-user lifecycle (maker + taker)
     // ---------------------------------------------------------------------------
     it("multi-user lifecycle: maker posts quotes, taker fills, both settle and redeem", async () => {
-      const provider = new BankrunProvider(ctx.context);
+
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
       const closeUnix = now + 5;

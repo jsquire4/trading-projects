@@ -1,7 +1,5 @@
 import { describe, it, expect } from "vitest";
 import {
-  normalPdf,
-  normalCdf,
   d2,
   binaryDelta,
   binaryGamma,
@@ -9,47 +7,8 @@ import {
   binaryVega,
 } from "../greeks.ts";
 
-describe("normalPdf (re-exported)", () => {
-  it("peaks at x=0 with value ~0.3989", () => {
-    expect(normalPdf(0)).toBeCloseTo(0.3989, 3);
-  });
-
-  it("is symmetric", () => {
-    expect(normalPdf(1)).toBeCloseTo(normalPdf(-1), 10);
-    expect(normalPdf(2.5)).toBeCloseTo(normalPdf(-2.5), 10);
-  });
-
-  it("approaches 0 at tails", () => {
-    expect(normalPdf(5)).toBeLessThan(0.001);
-    expect(normalPdf(-5)).toBeLessThan(0.001);
-  });
-});
-
-describe("normalCdf (re-exported)", () => {
-  it("returns 0.5 at x=0", () => {
-    expect(normalCdf(0)).toBeCloseTo(0.5, 5);
-  });
-
-  it("returns ~0.8413 at x=1", () => {
-    expect(normalCdf(1)).toBeCloseTo(0.8413, 3);
-  });
-
-  it("returns ~0.975 at x=1.96", () => {
-    expect(normalCdf(1.96)).toBeCloseTo(0.975, 3);
-  });
-
-  it("symmetry: cdf(x) + cdf(-x) = 1", () => {
-    expect(normalCdf(-1)).toBeCloseTo(1 - normalCdf(1), 10);
-  });
-
-  it("approaches 0 for very negative x", () => {
-    expect(normalCdf(-10)).toBe(0);
-  });
-
-  it("approaches 1 for very positive x", () => {
-    expect(normalCdf(10)).toBe(1);
-  });
-});
+// normalPdf and normalCdf are tested in pricer.test.ts — only Greeks-specific
+// functions are tested here.
 
 describe("d2", () => {
   it("returns 0 when S=K and drift term cancels", () => {

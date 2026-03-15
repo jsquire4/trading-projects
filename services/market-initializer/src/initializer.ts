@@ -22,6 +22,25 @@ import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { createMarketDataClient, type IMarketDataClient } from "../../shared/src/market-data.js";
 import { createLogger } from "../../shared/src/alerting.js";
 import { getETOffsetMinutes, isMarketDay } from "../../shared/src/timezone.js";
+
+// Known NYSE early close days (1:00 PM ET instead of 4:00 PM ET).
+// These are the same every year: day before Independence Day, day after Thanksgiving, Christmas Eve.
+// If the holiday falls on a weekend, the early close shifts to the preceding Friday.
+const EARLY_CLOSE_DATES: Set<string> = new Set([
+  // 2025
+  "2025-07-03", "2025-11-28", "2025-12-24",
+  // 2026
+  "2026-07-02", "2026-11-27", "2026-12-24",
+  // 2027
+  "2027-07-02", "2027-11-26", "2027-12-23",
+  // 2028
+  "2028-07-03", "2028-11-24", "2028-12-22",
+]);
+
+/** Get the close hour (ET) for a given date — 13 for early close days, 16 for normal. */
+function getCloseHourET(dateStr: string): number {
+  return EARLY_CLOSE_DATES.has(dateStr) ? 13 : 16;
+}
 import { generateVolAwareStrikes } from "./strikeSelector.js";
 import {
   findGlobalConfig,
@@ -397,67 +416,91 @@ async function createSingleMarket(
 // ---------------------------------------------------------------------------
 
 /**
+ * Compute the market close UTC timestamp for a given ET date, accounting
+ * for early close days (1 PM ET) and normal days (4 PM ET).
+ */
+function computeCloseForDate(startOfDayUTC: number, dateStr: string): number {
+  const closeHourET = getCloseHourET(dateStr);
+  const closeMinutesET = closeHourET * 60; // 780 for 1 PM, 960 for 4 PM
+  const etOffset = getETOffsetMinutes(new Date(startOfDayUTC + closeMinutesET * 60 * 1000));
+  const closeUTC = startOfDayUTC + (closeMinutesET - etOffset) * 60 * 1000;
+  return Math.floor(closeUTC / 1000);
+}
+
+/** Format a UTC ms timestamp as YYYY-MM-DD in ET. */
+function formatETDate(utcMs: number): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(utcMs));
+  const y = parts.find((p) => p.type === "year")!.value;
+  const m = parts.find((p) => p.type === "month")!.value;
+  const d = parts.find((p) => p.type === "day")!.value;
+  return `${y}-${m}-${d}`;
+}
+
+/**
  * Search forward day-by-day (up to 7 days) for the next valid trading day
- * and return its 4:00 PM ET close as a unix timestamp. Returns null if none found.
+ * and return its close time as a unix timestamp. Accounts for early close days.
  */
 async function findNextTradingDayClose(startOfDayUTC: number): Promise<number | null> {
   for (let advance = 1; advance <= 7; advance++) {
     const candidateStartUTC = startOfDayUTC + advance * 86_400_000;
-    const candidate4pmUTC = candidateStartUTC + 16 * 60 * 60 * 1000;
-    const candidateETOffset = getETOffsetMinutes(new Date(candidate4pmUTC));
-    const candidateCloseUTC = candidateStartUTC + (16 * 60 - candidateETOffset) * 60 * 1000;
+    const candidateDateStr = formatETDate(candidateStartUTC);
+    const candidateCloseUTC = candidateStartUTC + 16 * 60 * 60 * 1000; // rough UTC for isMarketDay
     const candidateDate = new Date(candidateCloseUTC);
 
     if (await isMarketDay(candidateDate)) {
-      return Math.floor(candidateCloseUTC / 1000);
+      return computeCloseForDate(candidateStartUTC, candidateDateStr);
     }
   }
   return null;
 }
 
+/**
+ * Compute the next market close as a unix timestamp.
+ * Accounts for early close days (1 PM ET) and weekends/holidays.
+ * If today's close has passed, advances to the next valid trading day.
+ */
 export async function computeMarketCloseUnix(date?: Date): Promise<number> {
   const now = date ?? new Date();
 
-  // Format in America/New_York to figure out the local date
-  const nyFormatter = new Intl.DateTimeFormat("en-US", {
+  // Get today's ET date components
+  const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  });
+  }).formatToParts(now);
 
-  const parts = nyFormatter.formatToParts(now);
   const year = parseInt(parts.find((p) => p.type === "year")!.value);
   const month = parseInt(parts.find((p) => p.type === "month")!.value);
   const day = parseInt(parts.find((p) => p.type === "day")!.value);
 
-  // Compute ET-to-UTC offset (DST-aware) via shared timezone helper
-  const etOffsetMinutes = getETOffsetMinutes(now);
+  const startOfDayUTC = Date.UTC(year, month - 1, day, 0, 0, 0);
+  const todayDateStr = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const closeUnix = computeCloseForDate(startOfDayUTC, todayDateStr);
 
-  // Start of day in UTC
-  let startOfDayUTC = Date.UTC(year, month - 1, day, 0, 0, 0);
-  // 4 PM ET in minutes from midnight ET = 960 minutes
-  // Convert to UTC: 960 - etOffsetMinutes (offset is negative for behind UTC)
-  const marketCloseUTC = startOfDayUTC + (16 * 60 - etOffsetMinutes) * 60 * 1000;
-
-  const closeUnix = Math.floor(marketCloseUTC / 1000);
+  const closeHourET = getCloseHourET(todayDateStr);
+  if (closeHourET !== 16) {
+    log.info(`Early close detected for ${todayDateStr}: ${closeHourET}:00 ET`);
+  }
 
   // If today's close has already passed, advance to the next valid trading day
   if (closeUnix <= Math.floor(Date.now() / 1000)) {
     const nextClose = await findNextTradingDayClose(startOfDayUTC);
     if (nextClose !== null) return nextClose;
 
-    // Fallback: if no valid day found within 7 days (shouldn't happen), use +1 day
+    // Fallback: if no valid day found within 7 days, use tomorrow at 4 PM
     const fallbackStartUTC = startOfDayUTC + 86_400_000;
-    const fallback4pmUTC = fallbackStartUTC + 16 * 60 * 60 * 1000;
-    const fallbackETOffset = getETOffsetMinutes(new Date(fallback4pmUTC));
-    const fallbackCloseUTC = fallbackStartUTC + (16 * 60 - fallbackETOffset) * 60 * 1000;
-    return Math.floor(fallbackCloseUTC / 1000);
+    const fallbackDateStr = formatETDate(fallbackStartUTC);
+    return computeCloseForDate(fallbackStartUTC, fallbackDateStr);
   }
 
   // Today's close hasn't passed yet — check if today is a market day
   if (!(await isMarketDay(now))) {
-    // Today is not a market day — advance to next valid trading day
     const nextClose = await findNextTradingDayClose(startOfDayUTC);
     if (nextClose !== null) return nextClose;
   }

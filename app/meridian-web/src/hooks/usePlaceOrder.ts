@@ -1,7 +1,15 @@
 "use client";
 
 import { useCallback } from "react";
-import { PublicKey, Transaction, AccountMeta, SystemProgram } from "@solana/web3.js";
+import {
+  PublicKey,
+  TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
+  AddressLookupTableAccount,
+  AccountMeta,
+  SystemProgram,
+} from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -11,6 +19,7 @@ import {
 } from "@solana/spl-token";
 import { BN } from "@coral-xyz/anchor";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { useConnection } from "@solana/wallet-adapter-react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { useAnchorProgram } from "./useAnchorProgram";
@@ -43,11 +52,25 @@ export interface PlaceOrderParams {
   effectivePrice: number | null;
   quantityLamports: number;
   orderBookData: OrderBookData | null | undefined;
+  /** Market's ALT address for versioned transactions. Pubkey.default = no ALT. */
+  altAddress?: PublicKey;
 }
 
 interface UsePlaceOrderReturn {
   placeOrder: (params: PlaceOrderParams) => Promise<string | null>;
 }
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/**
+ * Max fills per place_order instruction. With ALT, each remaining_account
+ * compresses from 32 bytes to 1 byte, allowing 50+ fills per tx.
+ * Without ALT, falls back to 10 (legacy tx size limit).
+ */
+const MAX_FILLS_WITH_ALT = 50;
+const MAX_FILLS_WITHOUT_ALT = 10;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -166,18 +189,37 @@ function buildStandardMakerAccounts(
   return makerAccounts;
 }
 
+/**
+ * Fetch an Address Lookup Table account. Returns null if not found or default pubkey.
+ */
+async function fetchALT(
+  connection: ReturnType<typeof useConnection>["connection"],
+  altAddress: PublicKey | undefined,
+): Promise<AddressLookupTableAccount | null> {
+  if (!altAddress || altAddress.equals(PublicKey.default)) return null;
+
+  try {
+    const result = await connection.getAddressLookupTable(altAddress);
+    return result.value;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Hook
 // ---------------------------------------------------------------------------
 
 /**
- * Extracts the transaction-building logic from OrderForm into a reusable hook.
- * Handles all four order sides including atomic Buy-No (mint pair + sell Yes).
+ * Builds versioned transactions with ALT support for order placement.
+ * Falls back to legacy transactions if no ALT is available.
+ * With ALT: up to 50 fills per instruction. Without: up to 10.
  */
 export function usePlaceOrder(): UsePlaceOrderReturn {
   const { program } = useAnchorProgram();
   const { sendTransaction } = useTransaction();
   const { publicKey: walletPublicKey } = useWallet();
+  const { connection } = useConnection();
   const queryClient = useQueryClient();
 
   const placeOrder = useCallback(
@@ -190,6 +232,7 @@ export function usePlaceOrder(): UsePlaceOrderReturn {
         effectivePrice,
         quantityLamports,
         orderBookData,
+        altAddress,
       } = params;
 
       if (!program || !walletPublicKey) return null;
@@ -209,13 +252,17 @@ export function usePlaceOrder(): UsePlaceOrderReturn {
       const userYesAta = await getAssociatedTokenAddress(yesMint, user);
       const userNoAta = await getAssociatedTokenAddress(noMint, user);
 
-      // Idempotent ATA creation
-      const tx = new Transaction();
-      tx.add(createAssociatedTokenAccountIdempotentInstruction(user, userUsdcAta, user, USDC_MINT));
-      tx.add(createAssociatedTokenAccountIdempotentInstruction(user, userYesAta, user, yesMint));
-      tx.add(createAssociatedTokenAccountIdempotentInstruction(user, userNoAta, user, noMint));
+      // Fetch ALT for versioned transaction
+      const alt = await fetchALT(connection, altAddress);
+      const maxFills = alt ? MAX_FILLS_WITH_ALT : MAX_FILLS_WITHOUT_ALT;
 
-      const maxFills = 10;
+      // Build instructions
+      const instructions: TransactionInstruction[] = [];
+
+      // Idempotent ATA creation
+      instructions.push(createAssociatedTokenAccountIdempotentInstruction(user, userUsdcAta, user, USDC_MINT));
+      instructions.push(createAssociatedTokenAccountIdempotentInstruction(user, userYesAta, user, yesMint));
+      instructions.push(createAssociatedTokenAccountIdempotentInstruction(user, userNoAta, user, noMint));
 
       if (side === "buy-no") {
         // Atomic Buy No: mint pair + sell Yes + (optional) redeem cleanup
@@ -236,7 +283,7 @@ export function usePlaceOrder(): UsePlaceOrderReturn {
             systemProgram: SystemProgram.programId,
           })
           .instruction();
-        tx.add(mintPairIx);
+        instructions.push(mintPairIx);
 
         const noPrice = orderType === "market" ? 1 : effectivePrice!;
         const yesSellPrice = orderType === "market" ? 1 : 100 - noPrice;
@@ -266,7 +313,7 @@ export function usePlaceOrder(): UsePlaceOrderReturn {
           })
           .remainingAccounts(makerAccounts)
           .instruction();
-        tx.add(sellYesIx);
+        instructions.push(sellYesIx);
 
         // For market orders, add pair-burn cleanup
         if (orderType === "market") {
@@ -285,9 +332,10 @@ export function usePlaceOrder(): UsePlaceOrderReturn {
               tokenProgram: TOKEN_PROGRAM_ID,
             })
             .instruction();
-          tx.add(redeemIx);
+          instructions.push(redeemIx);
         }
 
+        const tx = await buildVersionedTx(connection, user, instructions, alt);
         const signature = await sendTransaction(tx, { description: "Buy No (Atomic)" });
         if (signature) {
           queryClient.invalidateQueries({ queryKey: ["positions"] });
@@ -331,11 +379,13 @@ export function usePlaceOrder(): UsePlaceOrderReturn {
         })
         .remainingAccounts(makerAccounts)
         .instruction();
-      tx.add(placeOrderIx);
+      instructions.push(placeOrderIx);
 
       const sideLabel = side
         .replace("-", " ")
         .replace(/\b\w/g, (c) => c.toUpperCase());
+
+      const tx = await buildVersionedTx(connection, user, instructions, alt);
       const signature = await sendTransaction(tx, {
         description: `Place ${sideLabel} Order`,
       });
@@ -346,8 +396,35 @@ export function usePlaceOrder(): UsePlaceOrderReturn {
       }
       return signature;
     },
-    [program, walletPublicKey, sendTransaction, queryClient],
+    [program, walletPublicKey, connection, sendTransaction, queryClient],
   );
 
   return { placeOrder };
+}
+
+// ---------------------------------------------------------------------------
+// Versioned transaction builder
+// ---------------------------------------------------------------------------
+
+async function buildVersionedTx(
+  connection: ReturnType<typeof useConnection>["connection"],
+  payer: PublicKey,
+  instructions: TransactionInstruction[],
+  alt: AddressLookupTableAccount | null,
+): Promise<VersionedTransaction> {
+  const { blockhash, lastValidBlockHeight } =
+    await connection.getLatestBlockhash("confirmed");
+
+  const lookupTables = alt ? [alt] : [];
+
+  const message = new TransactionMessage({
+    payerKey: payer,
+    recentBlockhash: blockhash,
+    instructions,
+  }).compileToV0Message(lookupTables);
+
+  const tx = new VersionedTransaction(message);
+  // Note: lastValidBlockHeight is used by useTransaction for confirmation
+  // but VersionedTransaction doesn't store it — useTransaction handles this
+  return tx;
 }

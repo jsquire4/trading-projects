@@ -3,16 +3,25 @@
 //
 // Polls real-time stock prices via the market data client (Yahoo Finance or
 // synthetic) and pushes them on-chain to mock_oracle PriceFeed accounts.
+//
+// Also monitors Yahoo marketState:
+// - Only updates prices when market is REGULAR
+// - Trips circuit breaker if market closes unexpectedly before market_close_unix
 // ---------------------------------------------------------------------------
 
 import { Program, AnchorProvider, Wallet } from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import BN from "bn.js";
 import { createMarketDataClient, type IMarketDataClient } from "../../shared/src/market-data.js";
 import { createLogger } from "../../shared/src/alerting.js";
-import { findPriceFeed } from "../../shared/src/pda.js";
+import { findPriceFeed, findGlobalConfig } from "../../shared/src/pda.js";
+import { tickerFromBytes } from "../../shared/src/utils.js";
 import { updateOnChain } from "./oracle-helpers.js";
 import type { MockOracle } from "../../shared/src/idl/mock_oracle.js";
 import MockOracleIDL from "../../shared/src/idl/mock_oracle.json" with { type: "json" };
+
+import type { Meridian } from "../../shared/src/idl/meridian.js";
+import MeridianIDL from "../../shared/src/idl/meridian.json" with { type: "json" };
 
 const log = createLogger("oracle-feeder");
 
@@ -21,6 +30,9 @@ const RATE_LIMIT_MS = 5_000;
 
 // Poll interval (configurable via env)
 const POLL_INTERVAL_MS = parseInt(process.env.ORACLE_POLL_INTERVAL_MS ?? "10000", 10);
+
+// Market state check interval — every 30s (separate from price poll)
+const MARKET_STATE_CHECK_INTERVAL_MS = 30_000;
 
 // Retry config
 const MAX_RETRIES = 3;
@@ -44,13 +56,18 @@ export async function startFeeder(
     throw new Error("No tickers provided to feeder");
   }
 
-  // Build Anchor program handle
+  // Build Anchor program handles
   const wallet = new Wallet(authority);
   const provider = new AnchorProvider(connection, wallet, {
     commitment: "confirmed",
   });
-  const program = new Program<MockOracle>(
+  const oracleProgram = new Program<MockOracle>(
     MockOracleIDL as unknown as MockOracle,
+    provider,
+  );
+  // Meridian program needed for pause instruction
+  const meridianProgram = new Program<Meridian>(
+    MeridianIDL as unknown as Meridian,
     provider,
   );
 
@@ -68,7 +85,12 @@ export async function startFeeder(
   // Market data client (Yahoo Finance or synthetic)
   const client: IMarketDataClient = createMarketDataClient();
 
+  // Market state tracking
+  let lastKnownState = "unknown";
+  let circuitBreakerTripped = false;
+
   let pollInterval: ReturnType<typeof setInterval> | null = null;
+  let stateCheckInterval: ReturnType<typeof setInterval> | null = null;
 
   // ------ On-chain update with rate limiting + retry ------
 
@@ -81,7 +103,7 @@ export async function startFeeder(
     const last = lastUpdate.get(ticker) ?? 0;
     if (now - last < RATE_LIMIT_MS) return;
 
-    const ok = await updateOnChain(program, authority, priceFeed, ticker, price, {
+    const ok = await updateOnChain(oracleProgram, authority, priceFeed, ticker, price, {
       maxRetries: MAX_RETRIES,
       baseRetryDelayMs: BASE_RETRY_DELAY_MS,
     });
@@ -90,9 +112,103 @@ export async function startFeeder(
     }
   }
 
+  // ------ Get earliest active market close time ------
+
+  async function getEarliestMarketClose(): Promise<number | null> {
+    try {
+      const allMarkets = await (meridianProgram.account as any).strikeMarket.all();
+      const now = Math.floor(Date.now() / 1000);
+      let earliest: number | null = null;
+
+      for (const m of allMarkets) {
+        if (m.account.isSettled) continue;
+        const closeUnix = (m.account.marketCloseUnix as BN).toNumber();
+        if (closeUnix > now) {
+          if (earliest === null || closeUnix < earliest) {
+            earliest = closeUnix;
+          }
+        }
+      }
+
+      return earliest;
+    } catch {
+      return null;
+    }
+  }
+
+  // ------ Trip circuit breaker ------
+
+  async function tripCircuitBreaker(reason: string): Promise<void> {
+    if (circuitBreakerTripped) return;
+
+    log.critical(`Tripping circuit breaker: ${reason}`);
+    circuitBreakerTripped = true;
+
+    const [configPda] = findGlobalConfig();
+
+    try {
+      await (meridianProgram.methods as any)
+        .pause()
+        .accounts({
+          admin: authority.publicKey,
+          config: configPda,
+        })
+        .rpc();
+
+      log.critical("Circuit breaker activated — platform paused", { reason });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // AlreadyPaused (6023) is fine — someone else paused it
+      if (msg.includes("AlreadyPaused") || msg.includes("6023")) {
+        log.info("Platform already paused — circuit breaker is a no-op");
+      } else {
+        log.critical(`Failed to trip circuit breaker: ${msg}`, { reason });
+      }
+    }
+  }
+
+  // ------ Market state monitor ------
+
+  async function checkMarketState(): Promise<void> {
+    try {
+      const clock = await client.getMarketClock();
+      const state = clock.state.toLowerCase();
+
+      // Detect transition from REGULAR to CLOSED/POST
+      if (lastKnownState === "open" && (state === "closed" || state === "postmarket")) {
+        // Is this expected? Check if it's after the earliest market close time
+        const earliestClose = await getEarliestMarketClose();
+        const now = Math.floor(Date.now() / 1000);
+
+        if (earliestClose !== null && now < earliestClose) {
+          // Unexpected close — market closed before our market_close_unix
+          await tripCircuitBreaker(
+            `Yahoo reports market ${state} but earliest market_close_unix is ${earliestClose} (${Math.round((earliestClose - now) / 60)} min from now)`,
+          );
+        } else {
+          // Expected close — settlement service will handle it
+          log.info(`Market transitioned to ${state} (expected — at or past market close)`);
+        }
+      }
+
+      lastKnownState = state;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`Market state check failed: ${msg}`);
+      // Don't change lastKnownState on failure — preserve last known good state
+    }
+  }
+
   // ------ REST-based price fetch ------
 
   async function fetchAndUpdateViaREST(): Promise<void> {
+    // Skip price updates if market isn't in REGULAR session or circuit breaker is tripped
+    if (circuitBreakerTripped) return;
+    if (lastKnownState !== "open" && lastKnownState !== "unknown") {
+      // Only update during regular trading hours (or when state is unknown on startup)
+      return;
+    }
+
     try {
       const quotes = await client.getQuotes(tickers);
       for (const q of quotes) {
@@ -106,19 +222,32 @@ export async function startFeeder(
     }
   }
 
-  // Seed prices immediately via REST so feeds aren't stale on startup
+  // ------ Start ------
+
+  // Check market state first
+  await checkMarketState();
+  log.info(`Market state on startup: ${lastKnownState}`);
+
+  // Seed prices immediately via REST (if market is open)
   log.info("Seeding initial prices via REST API...");
   await fetchAndUpdateViaREST();
 
-  // Poll at configured interval
+  // Poll prices at configured interval
   log.info(`Starting REST poll loop (interval: ${POLL_INTERVAL_MS}ms)`);
   pollInterval = setInterval(() => {
     fetchAndUpdateViaREST().catch(() => {});
   }, POLL_INTERVAL_MS);
 
+  // Market state check at separate interval
+  log.info(`Starting market state monitor (interval: ${MARKET_STATE_CHECK_INTERVAL_MS}ms)`);
+  stateCheckInterval = setInterval(() => {
+    checkMarketState().catch(() => {});
+  }, MARKET_STATE_CHECK_INTERVAL_MS);
+
   return {
     stop() {
       if (pollInterval) clearInterval(pollInterval);
+      if (stateCheckInterval) clearInterval(stateCheckInterval);
       log.info("Feeder stopped");
     },
   };

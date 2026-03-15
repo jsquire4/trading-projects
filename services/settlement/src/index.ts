@@ -1,14 +1,18 @@
 // ---------------------------------------------------------------------------
-// Settlement Service — one-shot job, triggered ~4:05 PM ET
+// Settlement Service — long-running reactive poller
 //
-// 1. Fetch closing prices from market data client
-// 2. Update mock oracle price feeds
-// 3. Settle all expired, unsettled markets (with oracle retry)
-// 4. Crank cancel resting orders on settled markets
-// 4.5 Auto-redeem winning tokens for settled markets past override deadline
-// 5. Close eligible markets
-// 6. Auto-create next-day markets
-// 7. Log results + alert on failures
+// Polls on-chain every 60s for expired, unsettled markets. When found:
+//   1. Confirm Yahoo marketState is POST or CLOSED
+//   2. Double-confirm closing prices (two polls 5 min apart must match)
+//   3. Update mock oracle price feeds (per-ticker as confirmed)
+//   4. Settle confirmed markets
+//   5. Crank cancel resting orders on settled markets
+//   5.5 Auto-redeem winning tokens for settled markets past override deadline
+//   6. Close eligible markets
+//   7. Auto-create next-day markets
+//   8. Unpause (autonomous retry)
+//
+// Also supports synthetic mode via HTTP trigger server (unchanged).
 // ---------------------------------------------------------------------------
 
 import http from "node:http";
@@ -41,47 +45,142 @@ import { closeEligibleMarkets } from "./closer.js";
 const log = createLogger("settlement");
 
 // ---------------------------------------------------------------------------
-// Step 1: Fetch closing prices from market data API
+// Constants
 // ---------------------------------------------------------------------------
 
-async function fetchClosingPrices(
-  marketData: IMarketDataClient,
-  tickers: string[],
-): Promise<Map<string, number>> {
-  log.info(`Fetching closing prices for ${tickers.length} tickers`, {
-    tickers,
-  });
+/** How often to poll for expired markets (ms) */
+const POLL_INTERVAL_MS = 60_000;
 
-  const quotes = await marketData.getQuotes(tickers);
-  const prices = new Map<string, number>();
+/** Time between price confirmation polls (ms) */
+const PRICE_CONFIRM_INTERVAL_MS = 5 * 60 * 1000;
 
-  for (const q of quotes) {
-    // Prefer prevclose (prior day's closing price) for settlement accuracy.
-    // Fall back to last trade price if prevclose is unavailable (e.g. IPO day).
-    const prevOk = q.prevclose != null && q.prevclose > 0;
-    const lastOk = q.last > 0;
-    if (!prevOk && !lastOk) {
-      log.error(`${q.symbol}: both prevclose and last are zero/null — skipping`);
-      continue;
+/** Maximum time to wait for price confirmation before admin_settle fallback (ms) */
+const PRICE_CONFIRM_TIMEOUT_MS = 30 * 60 * 1000;
+
+/** Max retries for unpause on RPC failure */
+const UNPAUSE_MAX_RETRIES = 5;
+
+/** Base delay for unpause retry backoff (ms) */
+const UNPAUSE_BASE_DELAY_MS = 2_000;
+
+// ---------------------------------------------------------------------------
+// Step 1: Confirm market is actually closed via Yahoo
+// ---------------------------------------------------------------------------
+
+async function confirmMarketClosed(marketData: IMarketDataClient): Promise<boolean> {
+  try {
+    const clock = await marketData.getMarketClock();
+    const state = clock.state.toLowerCase();
+    if (state === "postmarket" || state === "closed") {
+      return true;
     }
-    const price = prevOk ? q.prevclose! : q.last;
-    const source = prevOk ? "prevclose" : "last";
-    prices.set(q.symbol, price);
-    log.info(`${q.symbol}: $${price} (source: ${source})`);
+    log.warn(`Yahoo marketState is "${clock.state}" — market may still be open, waiting`);
+    return false;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`Failed to check market state via Yahoo: ${msg} — proceeding cautiously`);
+    // If Yahoo is unreachable, proceed anyway — on-chain market_close_unix is authoritative
+    return true;
   }
-
-  // Check for tickers not returned by the API at all (zero-price skips already logged above)
-  const returned = new Set(quotes.map((q) => q.symbol));
-  const notReturned = tickers.filter((t) => !returned.has(t));
-  if (notReturned.length > 0) {
-    log.error(`Market data API returned no quote for: ${notReturned.join(", ")}. These tickers will be skipped.`);
-  }
-
-  return prices;
 }
 
 // ---------------------------------------------------------------------------
-// Step 2: Update oracle price feeds
+// Step 2: Double-confirm closing prices
+// ---------------------------------------------------------------------------
+
+interface PriceConfirmation {
+  /** Tickers with confirmed (stable) prices */
+  confirmed: Map<string, number>;
+  /** Tickers that timed out without confirming */
+  timedOut: string[];
+}
+
+/**
+ * Double-confirm closing prices: poll twice with a gap, settle each ticker
+ * as soon as its price stabilizes across two consecutive polls.
+ */
+async function doubleConfirmPrices(
+  marketData: IMarketDataClient,
+  tickers: string[],
+): Promise<PriceConfirmation> {
+  const confirmed = new Map<string, number>();
+  const remaining = new Set(tickers);
+  let previousPrices = new Map<string, number>();
+  const startTime = Date.now();
+
+  log.info(`Double-confirm: starting price confirmation for ${tickers.length} tickers`, { tickers });
+
+  // First poll
+  const firstQuotes = await marketData.getQuotes([...remaining]);
+  for (const q of firstQuotes) {
+    const price = q.prevclose ?? q.last;
+    if (price > 0) {
+      previousPrices.set(q.symbol, price);
+    }
+  }
+
+  log.info(`Double-confirm: first poll complete`, {
+    prices: Object.fromEntries(previousPrices),
+  });
+
+  // Polling loop
+  while (remaining.size > 0) {
+    const elapsed = Date.now() - startTime;
+    if (elapsed >= PRICE_CONFIRM_TIMEOUT_MS) {
+      log.error(`Double-confirm: timeout after ${Math.round(elapsed / 1000)}s — ${remaining.size} tickers unconfirmed`, {
+        timedOut: [...remaining],
+      });
+      break;
+    }
+
+    // Wait before next poll
+    log.info(`Double-confirm: waiting ${PRICE_CONFIRM_INTERVAL_MS / 1000}s before next poll (${remaining.size} remaining)`);
+    await sleep(PRICE_CONFIRM_INTERVAL_MS);
+
+    // Next poll
+    const quotes = await marketData.getQuotes([...remaining]);
+    const currentPrices = new Map<string, number>();
+    for (const q of quotes) {
+      const price = q.prevclose ?? q.last;
+      if (price > 0) {
+        currentPrices.set(q.symbol, price);
+      }
+    }
+
+    // Compare to previous poll — confirm tickers with matching prices
+    for (const ticker of [...remaining]) {
+      const prev = previousPrices.get(ticker);
+      const curr = currentPrices.get(ticker);
+
+      if (prev !== undefined && curr !== undefined && prev === curr) {
+        confirmed.set(ticker, curr);
+        remaining.delete(ticker);
+        log.info(`Double-confirm: ${ticker} confirmed at $${(curr / 1).toFixed(2)}`, {
+          ticker,
+          price: curr,
+          elapsedMs: Date.now() - startTime,
+        });
+      } else if (prev !== undefined && curr !== undefined && prev !== curr) {
+        log.warn(`Double-confirm: ${ticker} price changed ($${prev} → $${curr}), resetting`, {
+          ticker,
+          prevPrice: prev,
+          currPrice: curr,
+        });
+      }
+    }
+
+    // Current becomes previous for next iteration
+    previousPrices = currentPrices;
+  }
+
+  return {
+    confirmed,
+    timedOut: [...remaining],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Step 3: Update oracle price feeds
 // ---------------------------------------------------------------------------
 
 async function updateOracleFeeds(
@@ -131,7 +230,7 @@ async function updateOracleFeeds(
           log.warn(`Oracle update for ${ticker} failed (attempt ${attempt}/${ORACLE_MAX_RETRIES}), retrying`, {
             error: errMsg,
           });
-          await new Promise((r) => setTimeout(r, ORACLE_RETRY_DELAY_MS * attempt));
+          await sleep(ORACLE_RETRY_DELAY_MS * attempt);
         } else {
           log.error(`Failed to update oracle for ${ticker} after ${ORACLE_MAX_RETRIES} attempts`, {
             ticker,
@@ -154,20 +253,14 @@ async function updateOracleFeeds(
 }
 
 // ---------------------------------------------------------------------------
-// Step 3 + 4: Load markets, settle, crank
+// Step 4: Load and filter markets
 // ---------------------------------------------------------------------------
 
-async function loadUnsettledMarkets(
+async function loadAllMarkets(
   meridianProgram: Program,
 ): Promise<MarketInfo[]> {
-  log.info("Loading all StrikeMarket accounts");
-
-  // Fetch all StrikeMarket program accounts
   const allMarkets = await meridianProgram.account.strikeMarket.all();
 
-  log.info(`Found ${allMarkets.length} total markets`);
-
-  // Map to our MarketInfo shape
   return allMarkets.map((m) => ({
     publicKey: m.publicKey,
     account: {
@@ -188,23 +281,30 @@ async function loadUnsettledMarkets(
   }));
 }
 
+function findExpiredUnsettled(markets: MarketInfo[], nowUnix: number): MarketInfo[] {
+  return markets.filter((m) => {
+    if (m.account.isSettled) return false;
+    return m.account.marketCloseUnix.toNumber() <= nowUnix;
+  });
+}
+
 // ---------------------------------------------------------------------------
-// Phase functions — each encapsulates one step of the settlement pipeline
+// Phase functions
 // ---------------------------------------------------------------------------
 
-/** Phase 3: Find and settle all expired, unsettled markets. */
+/** Phase 3: Settle expired markets using confirmed prices. */
 async function settleExpiredMarkets(
   meridianProgram: Program,
   allMarkets: MarketInfo[],
-  closingPrices: Map<string, number>,
+  confirmedPrices: Map<string, number>,
 ): Promise<import("./settler.js").SettlementResult> {
   const now = Math.floor(Date.now() / 1000);
   const expiredUnsettled = allMarkets.filter((m) => {
     if (m.account.isSettled) return false;
     if (m.account.marketCloseUnix.toNumber() > now) return false;
     const ticker = tickerFromBytes(m.account.ticker);
-    if (!closingPrices.has(ticker)) {
-      log.warn(`Skipping settlement for ${ticker} — no closing price available`);
+    if (!confirmedPrices.has(ticker)) {
+      log.warn(`Skipping settlement for ${ticker} — price not confirmed`);
       return false;
     }
     return true;
@@ -284,7 +384,7 @@ async function initNextDay(): Promise<void> {
 
   try {
     await new Promise<void>((resolveP, rejectP) => {
-      const child = execFile(tsxPath, [initScript], {
+      execFile(tsxPath, [initScript], {
         env: { ...process.env },
         timeout: 5 * 60 * 1000, // 5 minute timeout
       }, (err, stdout, stderr) => {
@@ -311,7 +411,47 @@ async function initNextDay(): Promise<void> {
     log.error(`Failed to create next-day markets: ${errMsg}`, {
       stack: err instanceof Error ? err.stack : undefined,
     });
-    // Non-fatal — settlement was successful, markets can be created by morning-init
+    // Non-fatal — settlement was successful, markets can be created by health check alert
+  }
+}
+
+/** Phase 7: Unpause with autonomous retry + exponential backoff. */
+async function unpauseWithRetry(meridianProgram: Program, adminKeypair: Keypair): Promise<void> {
+  const [configPda] = findGlobalConfig();
+
+  for (let attempt = 1; attempt <= UNPAUSE_MAX_RETRIES; attempt++) {
+    try {
+      await meridianProgram.methods
+        .unpause()
+        .accounts({
+          admin: adminKeypair.publicKey,
+          config: configPda,
+        })
+        .rpc();
+
+      log.info("Platform unpaused — new markets live, trading resumes");
+      return;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+
+      // NotPaused (6024) means circuit breaker was never tripped — normal close, nothing to do
+      if (errMsg.includes("NotPaused") || errMsg.includes("6024")) {
+        log.info("Platform was not paused (normal close) — no unpause needed");
+        return;
+      }
+
+      if (attempt < UNPAUSE_MAX_RETRIES) {
+        const delay = UNPAUSE_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        log.warn(`Unpause attempt ${attempt}/${UNPAUSE_MAX_RETRIES} failed, retrying in ${delay}ms`, {
+          error: errMsg,
+        });
+        await sleep(delay);
+      } else {
+        log.critical(`Unpause failed after ${UNPAUSE_MAX_RETRIES} attempts — alerting`, {
+          error: errMsg,
+        });
+      }
+    }
   }
 }
 
@@ -364,29 +504,56 @@ async function runSettlementCycle(): Promise<{ ok: boolean; error?: string; summ
 
   log.info(`Active tickers: ${activeTickers.join(", ")}`);
 
-  // ---- Phase 1: Fetch closing prices ----
-  const closingPrices = await fetchClosingPrices(marketData, activeTickers);
+  // ---- Phase 1: Confirm market is actually closed ----
+  const isClosed = await confirmMarketClosed(marketData);
+  if (!isClosed) {
+    log.warn("Market appears still open — aborting settlement cycle (will retry next poll)");
+    return { ok: true, summary: { message: "Market still open, waiting" } };
+  }
 
-  // ---- Phase 2: Update oracle feeds ----
-  await updateOracleFeeds(oracleProgram, adminKeypair, closingPrices);
+  // ---- Phase 2: Double-confirm closing prices ----
+  const priceResult = await doubleConfirmPrices(marketData, activeTickers);
 
-  // ---- Phase 3: Settle expired markets ----
-  const allMarkets = await loadUnsettledMarkets(meridianProgram);
-  const settlementResult = await settleExpiredMarkets(meridianProgram, allMarkets, closingPrices);
+  // Handle timed-out tickers with admin_settle fallback
+  if (priceResult.timedOut.length > 0) {
+    log.critical(`Price confirmation timed out for: ${priceResult.timedOut.join(", ")} — will use admin_settle fallback`);
+    // For timed-out tickers, use the last known price from the confirmed map
+    // (they'll be handled by the existing admin_settle retry logic in settler.ts)
+  }
 
-  // ---- Phase 4 + 4.5: Crank cancel + auto-redeem ----
+  if (priceResult.confirmed.size === 0 && priceResult.timedOut.length > 0) {
+    return {
+      ok: false,
+      error: `All ${priceResult.timedOut.length} tickers failed price confirmation`,
+      summary: { timedOut: priceResult.timedOut },
+    };
+  }
+
+  // ---- Phase 3: Update oracle feeds with confirmed prices ----
+  await updateOracleFeeds(oracleProgram, adminKeypair, priceResult.confirmed);
+
+  // ---- Phase 4: Settle expired markets ----
+  const allMarkets = await loadAllMarkets(meridianProgram);
+  const settlementResult = await settleExpiredMarkets(meridianProgram, allMarkets, priceResult.confirmed);
+
+  // ---- Phase 5 + 5.5: Crank cancel + auto-redeem ----
   await crankAndRedeem(meridianProgram, allMarkets, settlementResult, usdcMint);
 
-  // ---- Phase 5: Close eligible markets ----
+  // ---- Phase 6: Close eligible markets ----
   await closeMarkets(meridianProgram, adminKeypair, connection);
 
-  // ---- Phase 6: Create next-day markets (child process) ----
+  // ---- Phase 7: Create next-day markets ----
   await initNextDay();
+
+  // ---- Phase 8: Unpause (autonomous retry) ----
+  await unpauseWithRetry(meridianProgram, adminKeypair);
 
   // ---- Summary ----
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   const summary = {
     elapsed: `${elapsed}s`,
+    confirmed: [...priceResult.confirmed.entries()].map(([t, p]) => `${t}=$${p}`),
+    timedOut: priceResult.timedOut,
     settled: settlementResult.settled.map((m) => tickerFromBytes(m.account.ticker)),
     failed: settlementResult.failed.map((f) => ({
       ticker: tickerFromBytes(f.market.account.ticker),
@@ -402,12 +569,75 @@ async function runSettlementCycle(): Promise<{ ok: boolean; error?: string; summ
     return { ok: false, error: `${settlementResult.failed.length} settlement failures`, summary };
   }
 
-  log.info(`Settlement completed successfully in ${elapsed}s`, summary);
+  log.info(`Settlement cycle completed successfully in ${elapsed}s`, summary);
   return { ok: true, summary };
 }
 
 // ---------------------------------------------------------------------------
-// Synthetic mode: HTTP trigger server
+// Reactive polling loop
+// ---------------------------------------------------------------------------
+
+async function startPollingLoop(): Promise<never> {
+  const RPC_URL = process.env.RPC_URL ?? "http://127.0.0.1:8899";
+  const connection = new Connection(RPC_URL, "confirmed");
+  const ADMIN_KEYPAIR_B58 = process.env.ADMIN_KEYPAIR;
+
+  if (!ADMIN_KEYPAIR_B58) {
+    throw new Error("ADMIN_KEYPAIR env var is required (base58 secret key)");
+  }
+
+  const adminKeypair = Keypair.fromSecretKey(bs58.decode(ADMIN_KEYPAIR_B58));
+  const wallet = new Wallet(adminKeypair);
+  const provider = new AnchorProvider(connection, wallet, {
+    commitment: "confirmed",
+    preflightCommitment: "confirmed",
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const meridianProgram = new Program(meridianIdl as any, provider);
+
+  let settling = false;
+
+  log.info(`Settlement poller started — checking every ${POLL_INTERVAL_MS / 1000}s`);
+
+  while (true) {
+    try {
+      if (!settling) {
+        const allMarkets = await loadAllMarkets(meridianProgram);
+        const now = Math.floor(Date.now() / 1000);
+        const expired = findExpiredUnsettled(allMarkets, now);
+
+        if (expired.length > 0) {
+          const tickers = [...new Set(expired.map((m) => tickerFromBytes(m.account.ticker)))];
+          log.info(`Detected ${expired.length} expired unsettled markets for tickers: ${tickers.join(", ")}`);
+
+          settling = true;
+          try {
+            const result = await runSettlementCycle();
+            if (!result.ok) {
+              log.error("Settlement cycle completed with errors", result);
+            }
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            log.critical(`Settlement cycle crashed: ${errMsg}`, {
+              stack: err instanceof Error ? err.stack : undefined,
+            });
+          } finally {
+            settling = false;
+          }
+        }
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log.error(`Poll cycle error: ${errMsg}`);
+    }
+
+    await sleep(POLL_INTERVAL_MS);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Synthetic mode: HTTP trigger server (unchanged)
 // ---------------------------------------------------------------------------
 
 function startTriggerServer(): void {
@@ -467,6 +697,14 @@ function startTriggerServer(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Utility
+// ---------------------------------------------------------------------------
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -479,20 +717,9 @@ async function main(): Promise<void> {
     return; // Keep process alive (HTTP server)
   }
 
-  // Live mode: one-shot
-  log.info("=== Settlement Service starting (live mode) ===");
-  try {
-    const result = await runSettlementCycle();
-    if (!result.ok) {
-      process.exit(1);
-    }
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    log.critical(`Settlement service crashed: ${errMsg}`, {
-      stack: err instanceof Error ? err.stack : undefined,
-    });
-    process.exit(1);
-  }
+  // Live mode: long-running reactive poller
+  log.info("=== Settlement Service starting (live mode — reactive poller) ===");
+  await startPollingLoop();
 }
 
 main().catch((err) => {

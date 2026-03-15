@@ -79,6 +79,7 @@ export function CreateMarketPanel({ ticker }: CreateMarketPanelProps) {
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
   const [loadingQuote, setLoadingQuote] = useState(true);
   const [selectedStrike, setSelectedStrike] = useState<number | null>(null);
+  const [customStrike, setCustomStrike] = useState("");
   const [step, setStep] = useState<CreateStep>("idle");
   const [error, setError] = useState<string | null>(null);
   const [oracleFeedExists, setOracleFeedExists] = useState<boolean | null>(null);
@@ -312,18 +313,18 @@ export function CreateMarketPanel({ ticker }: CreateMarketPanelProps) {
       </div>
 
       {/* Strike price selection */}
-      {strikes.length > 0 && (
-        <div className="space-y-2">
-          <label className="block text-xs text-white/50">Select strike price</label>
+      <div className="space-y-3">
+        <label className="block text-xs text-white/50">Select strike price</label>
+        {strikes.length > 0 && (
           <div className="flex flex-wrap gap-2 justify-center">
             {strikes.map((strike) => {
               const isAtm = prevClose && Math.abs(strike - prevClose) < (prevClose * 0.035);
               return (
                 <button
                   key={strike}
-                  onClick={() => setSelectedStrike(strike)}
+                  onClick={() => { setSelectedStrike(strike); setCustomStrike(""); }}
                   className={`px-3 py-1.5 rounded-md text-sm font-mono transition-all ${
-                    selectedStrike === strike
+                    selectedStrike === strike && customStrike === ""
                       ? "bg-accent/20 text-accent border border-accent/30"
                       : "bg-white/5 text-white/50 border border-white/10 hover:text-white/80 hover:border-white/20"
                   }`}
@@ -336,24 +337,26 @@ export function CreateMarketPanel({ ticker }: CreateMarketPanelProps) {
               );
             })}
           </div>
-        </div>
-      )}
-
-      {/* Custom strike input if no auto-strikes */}
-      {strikes.length === 0 && (
-        <div>
-          <label className="block text-xs text-white/50 mb-1">Strike Price ($)</label>
+        )}
+        <div className="flex items-center gap-2">
+          {strikes.length > 0 && (
+            <span className="text-xs text-white/30 shrink-0">or</span>
+          )}
           <input
             type="number"
             step="1"
             min="1"
-            value={selectedStrike ?? ""}
-            onChange={(e) => setSelectedStrike(parseFloat(e.target.value) || null)}
-            placeholder="Enter strike price"
-            className="w-full rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-white placeholder-white/30 focus:border-accent focus:outline-none"
+            value={customStrike}
+            onChange={(e) => {
+              setCustomStrike(e.target.value);
+              const val = parseFloat(e.target.value);
+              setSelectedStrike(val > 0 ? val : null);
+            }}
+            placeholder="Custom strike price"
+            className="flex-1 rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-white placeholder-white/30 focus:border-accent focus:outline-none font-mono"
           />
         </div>
-      )}
+      </div>
 
       {/* Info line */}
       <div className="text-center text-xs text-white/30 space-y-1">

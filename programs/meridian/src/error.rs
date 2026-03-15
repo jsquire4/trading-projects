@@ -155,8 +155,7 @@ pub enum MeridianError {
     // 113 reserved (partial close removed)
     #[msg("Oracle type flag not recognized")]
     InvalidOracleType = 114,
-    #[msg("Pyth price feed ID doesn't match expected stock")]
-    PythFeedMismatch = 115,
+    // 115 reserved (PythFeedMismatch removed — never referenced)
     // 116 reserved (treasury_redeem removed)
     #[msg("Cannot close market — tokens still outstanding")]
     MintSupplyNotZero = 117,

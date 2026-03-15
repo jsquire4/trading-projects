@@ -205,6 +205,8 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
     }, 0);
   }, [apiPositions]);
 
+  // Unrealized P&L: current mark-to-market value minus total cost basis.
+  // Named "todayPnl" for backward compat with consumers but is actually all-time unrealized.
   const todayPnl = apiPositions.length > 0 ? liveValue - totalCostFromApi : 0;
   const currentValue = liveValue;
 

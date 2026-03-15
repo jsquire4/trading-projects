@@ -30,19 +30,41 @@ pub fn handle_add_ticker<'info>(
     ctx: Context<'_, '_, '_, 'info, AddTicker<'info>>,
     ticker: [u8; 8],
 ) -> Result<()> {
+    // M-6: Reject all-zero tickers (uninitialized / empty bytes).
+    require!(
+        ticker.iter().any(|&b| b != 0),
+        MeridianError::InvalidTicker,
+    );
+
     let registry = &mut ctx.accounts.ticker_registry;
+
+    // M-5: Cap registry size to prevent griefing via unbounded growth.
+    // Reuses MaxLevelsReached — semantically "capacity exceeded".
+    require!(
+        registry.entries.len() < 256,
+        MeridianError::MaxLevelsReached,
+    );
 
     // Determine pyth_feed based on oracle_type
     let pyth_feed = if ctx.accounts.config.oracle_type == 1 {
-        // Pyth mode: validate remaining_accounts[0] is a valid Pyth account
+        // Pyth mode: validate remaining_accounts[0] is a Pyth price account
         require!(
             !ctx.remaining_accounts.is_empty(),
             MeridianError::PythValidationRequired,
         );
         let pyth_account = &ctx.remaining_accounts[0];
-        // Basic validation: account must exist and have data
+        // Validate: account must have data, be owned by a known Pyth program,
+        // and have sufficient size for a Pyth price feed (~3312 bytes).
         require!(
-            pyth_account.data_len() > 0,
+            pyth_account.data_len() >= 3312,
+            MeridianError::InvalidPythFeed,
+        );
+        // Pyth V2 program IDs (mainnet + devnet)
+        let pyth_mainnet = "FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH";
+        let pyth_devnet = "gSbePebfvPy7tRqimPoVecS2UsBvYv46ynrzWocc92s";
+        let owner_str = pyth_account.owner.to_string();
+        require!(
+            owner_str == pyth_mainnet || owner_str == pyth_devnet,
             MeridianError::InvalidPythFeed,
         );
         pyth_account.key()

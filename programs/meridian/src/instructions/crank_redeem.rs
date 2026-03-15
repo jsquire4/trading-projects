@@ -11,6 +11,7 @@ pub struct CrankRedeem<'info> {
     #[account(mut)]
     pub caller: Signer<'info>, // permissionless — anyone can crank
 
+    #[account(mut)]
     pub config: Box<Account<'info, GlobalConfig>>,
 
     #[account(
@@ -36,6 +37,14 @@ pub struct CrankRedeem<'info> {
     pub token_program: Program<'info, Token>,
     // remaining_accounts: pairs of (user_winning_ata, user_usdc_ata) per user
 }
+
+// SPL Token account layout byte offsets (after the standard 165-byte account):
+//   delegate:         COption<Pubkey>  at offset  72  (4-byte discriminant + 32-byte key)
+//   state:            u8               at offset 108  (0=Uninitialized, 1=Initialized, 2=Frozen)
+//   delegated_amount: u64              at offset 121
+const SPL_DELEGATE_OFFSET: usize = 72;
+const SPL_STATE_OFFSET: usize = 108;
+const SPL_DELEGATED_AMOUNT_OFFSET: usize = 121;
 
 pub fn handle_crank_redeem<'info>(
     ctx: Context<'_, '_, '_, 'info, CrankRedeem<'info>>,
@@ -141,34 +150,30 @@ pub fn handle_crank_redeem<'info>(
         }
 
         // Check delegation and account state before attempting burn.
-        // SPL Token account layout:
-        //   delegate: COption<Pubkey> at offset 72 (4-byte discriminant + 32-byte key)
-        //   state:    u8 at offset 108 (0=Uninitialized, 1=Initialized, 2=Frozen)
         let winning_data2 = user_winning_ata.try_borrow_data()?;
-        if winning_data2.len() < 109 {
+        if winning_data2.len() < SPL_STATE_OFFSET + 1 {
             drop(winning_data2);
             continue; // Account too small to have delegate + state fields
         }
 
         // Skip frozen accounts (state == 2) — burn CPI would revert the whole batch
-        let account_state = winning_data2[108];
+        let account_state = winning_data2[SPL_STATE_OFFSET];
         if account_state != 1 {
             drop(winning_data2);
             continue; // Not in Initialized state — skip
         }
 
-        let delegate_option = u32::from_le_bytes(winning_data2[72..76].try_into().unwrap());
+        let delegate_option = u32::from_le_bytes(winning_data2[SPL_DELEGATE_OFFSET..SPL_DELEGATE_OFFSET + 4].try_into().unwrap());
         if delegate_option != 1 {
             drop(winning_data2);
             continue; // No delegate set — user must redeem manually
         }
-        let delegate_key = Pubkey::new_from_array(winning_data2[76..108].try_into().unwrap());
+        let delegate_key = Pubkey::new_from_array(winning_data2[SPL_DELEGATE_OFFSET + 4..SPL_DELEGATE_OFFSET + 36].try_into().unwrap());
 
-        // Parse delegated_amount (u64 LE at offset 121) to ensure the delegate
-        // is approved for enough tokens; skip if insufficient to avoid reverting
-        // the entire batch.
+        // Parse delegated_amount to ensure the delegate is approved for enough tokens;
+        // skip if insufficient to avoid reverting the entire batch.
         let delegated_amount = u64::from_le_bytes(
-            winning_data2[121..129].try_into().unwrap(),
+            winning_data2[SPL_DELEGATED_AMOUNT_OFFSET..SPL_DELEGATED_AMOUNT_OFFSET + 8].try_into().unwrap(),
         );
         drop(winning_data2);
 
@@ -208,7 +213,9 @@ pub fn handle_crank_redeem<'info>(
             winning_fields.amount,
         )?;
 
-        total_redeemed_amount += winning_fields.amount;
+        total_redeemed_amount = total_redeemed_amount
+            .checked_add(winning_fields.amount)
+            .ok_or(MeridianError::ArithmeticOverflow)?;
         redeemed_count += 1;
     }
 
@@ -220,6 +227,10 @@ pub fn handle_crank_redeem<'info>(
         .total_redeemed
         .checked_add(total_redeemed_amount)
         .ok_or(MeridianError::ArithmeticOverflow)?;
+
+    // Decrement global obligations
+    let config = &mut ctx.accounts.config;
+    config.obligations = config.obligations.saturating_sub(total_redeemed_amount);
 
     emit!(CrankRedeemEvent {
         market: market.key(),

@@ -118,6 +118,11 @@ export async function cancelBotOrders(
 
   let cancelled = 0;
 
+  // NOTE (M-16): Each cancel_order call below is a separate RPC transaction.
+  // For high-frequency or high-order-count scenarios this is a known performance
+  // bottleneck. Future improvement: batch multiple cancel_order instructions into
+  // a single versioned transaction using Address Lookup Tables.
+
   // Iterate all 99 price levels (index 0 = price 1, index 98 = price 99)
   for (let levelIdx = 0; levelIdx < 99; levelIdx++) {
     const level = (obAccount.levels as any)[levelIdx];

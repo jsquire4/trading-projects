@@ -9,6 +9,11 @@ interface FillFeedProps {
   limit?: number;
 }
 
+// NOTE (M-11): FillFeed and LiveFillTicker share near-identical fill rendering
+// logic (parseFillEvent, timestamp formatting, token direction display). They
+// differ in data source (per-market vs. global), layout (vertical list vs.
+// horizontal ticker), and slice size. If the rendering logic grows significantly,
+// extract a shared `formatFillRow` helper.
 export function FillFeed({ marketKey, limit = 20 }: FillFeedProps) {
   const { data: events = [], isLoading } = useFillEvents(marketKey, limit);
   const { isOffline } = useEventIndexerStatus();

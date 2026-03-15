@@ -12,7 +12,10 @@ pub const PRICE_TO_USDC_LAMPORTS: u64 = USDC_LAMPORTS_PER_DOLLAR / 100;
 pub const CRANK_BATCH_SIZE: usize = 32;
 /// Maximum settlement overrides
 pub const MAX_OVERRIDES: u8 = 3;
-/// Override window duration in seconds (1 second; 1s in stress-test builds)
+/// Override window duration in seconds.
+/// TODO: For mainnet deployment, increase to 300 (5 min) to give admin
+/// time to dispute incorrect settlements. Currently 1s for devnet/test
+/// compatibility. Consider making this a config parameter instead of a constant.
 #[cfg(not(feature = "stress-test"))]
 pub const OVERRIDE_WINDOW_SECS: i64 = 1;
 #[cfg(feature = "stress-test")]
@@ -396,5 +399,3 @@ pub fn verify_discriminator(data: &[u8]) -> bool {
     data[..DISC_SIZE] == sparse_book_discriminator()
 }
 
-// Re-export StrikeMarket constants for backward compat
-pub use super::StrikeMarket;

@@ -40,8 +40,9 @@ pub fn handle_admin_override_settlement(
         MeridianError::MaxOverridesExceeded
     );
 
-    // Reject zero price (same invariant as settle_market and admin_settle)
+    // Reject zero price and cap at $1M (same invariants as admin_settle)
     require!(new_settlement_price > 0, MeridianError::OraclePriceInvalid);
+    require!(new_settlement_price <= 1_000_000_000_000, MeridianError::OraclePriceInvalid);
 
     // Determine the new outcome: 1 = Yes wins, 2 = No wins
     let new_outcome: u8 = if new_settlement_price >= market.strike_price {

@@ -40,6 +40,11 @@ pub use instructions::initialize_ticker_registry::*;
 
 declare_id!("7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth");
 
+// NOTE (M-2): Admin auth style is intentionally mixed across instructions.
+// Some use `has_one = admin @ MeridianError::Unauthorized` (declarative, preferred),
+// others use an explicit `constraint` check. Both are correct — do not refactor
+// for cosmetic consistency unless a full audit pass is planned.
+
 #[program]
 pub mod meridian {
     use super::*;

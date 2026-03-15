@@ -60,7 +60,7 @@ describe("OrderBook Initialization (Sparse)", () => {
     );
   });
 
-  it("creates sparse order book with header-only size (168 bytes)", async () => {
+  it("creates sparse order book with header-only size (270 bytes)", async () => {
     const acctInfo = await ctx.context.banksClient.getAccount(marketAccounts.orderBook);
     expect(acctInfo).to.not.be.null;
     const data = Buffer.from(acctInfo!.data);

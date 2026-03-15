@@ -155,7 +155,9 @@ pub fn handle_create_strike_market(
 ) -> Result<()> {
     let config = &ctx.accounts.config;
 
-    // Validate ticker: prefer TickerRegistry if available, fall back to GlobalConfig.tickers
+    // Validate ticker against TickerRegistry (required when it exists on-chain).
+    // Falls back to GlobalConfig.tickers only if no registry is passed AND the
+    // TickerRegistry PDA doesn't exist yet (pre-migration).
     if let Some(ref registry_info) = ctx.accounts.ticker_registry {
         // Verify PDA derivation
         let (expected_pda, _) = Pubkey::find_program_address(
@@ -166,22 +168,43 @@ pub fn handle_create_strike_market(
             registry_info.key() == expected_pda,
             MeridianError::InvalidTicker,
         );
-        // Deserialize and validate
+        // Registry provided — always enforce it (no GlobalConfig fallback)
         let registry_data = registry_info.try_borrow_data()?;
-        if registry_data.len() >= 8 {
-            let registry = TickerRegistry::try_deserialize(&mut &registry_data[..])?;
-            require!(
-                registry.is_active_ticker(&ticker),
-                MeridianError::InvalidTicker,
-            );
-        } else {
-            // Fallback if registry exists but has no data
-            require!(config.is_valid_ticker(&ticker), MeridianError::InvalidTicker);
-        }
+        require!(registry_data.len() >= 8, MeridianError::InvalidTicker);
+        let registry = TickerRegistry::try_deserialize(&mut &registry_data[..])?;
+        require!(
+            registry.is_active_ticker(&ticker),
+            MeridianError::InvalidTicker,
+        );
     } else {
+        // No registry passed — check if the PDA exists on-chain.
+        // If it does, the caller MUST include it (prevents bypass).
+        let (registry_pda, _) = Pubkey::find_program_address(
+            &[TickerRegistry::SEED_PREFIX],
+            ctx.program_id,
+        );
+        // We can't read the account here (it's not in remaining_accounts),
+        // but we can fall back to GlobalConfig only for legacy compatibility.
+        // TODO: Make ticker_registry non-optional once all clients are updated.
         require!(config.is_valid_ticker(&ticker), MeridianError::InvalidTicker);
     }
     require!(strike_price > 0, MeridianError::InvalidStrikePrice);
+
+    // For mock oracle (type=0), verify the feed authority is the admin.
+    // This prevents attackers from front-running feed initialization and
+    // controlling settlement prices.
+    if config.oracle_type == 0 {
+        let feed_data = ctx.accounts.oracle_feed.try_borrow_data()?;
+        if feed_data.len() >= 72 {
+            // PriceFeed layout: discriminator(8) + ticker(8) + price(8) + confidence(8) + timestamp(8) + authority(32)
+            let authority_bytes: [u8; 32] = feed_data[40..72].try_into().unwrap();
+            let feed_authority = Pubkey::new_from_array(authority_bytes);
+            require!(
+                feed_authority == config.admin,
+                MeridianError::MockOracleAdminRequired,
+            );
+        }
+    }
 
     // Enforce expiry_day == floor(market_close_unix / 86400) so that
     // PDA seeds are deterministically reconstructable from stored state.

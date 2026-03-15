@@ -20,9 +20,11 @@ export function MarketInfo({ market, currentPrice }: MarketInfoProps) {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
 
   useEffect(() => {
+    // Stop ticking once the market has closed — the countdown is no longer needed.
+    if (market.isSettled || Math.floor(Date.now() / 1000) >= Number(market.marketCloseUnix)) return;
     const interval = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [market.isSettled, market.marketCloseUnix]);
 
   const strikeDollars = Number(market.strikePrice) / 1_000_000;
   const closeUnix = Number(market.marketCloseUnix);

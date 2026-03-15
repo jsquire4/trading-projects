@@ -9,6 +9,7 @@ pub struct Redeem<'info> {
     pub user: Signer<'info>,
 
     #[account(
+        mut,
         constraint = !config.is_paused @ MeridianError::MarketPaused,
     )]
     pub config: Box<Account<'info, GlobalConfig>>,
@@ -253,6 +254,10 @@ fn handle_winner_redeem(ctx: Context<Redeem>, quantity: u64) -> Result<()> {
         .total_redeemed
         .checked_add(quantity)
         .ok_or(MeridianError::ArithmeticOverflow)?;
+
+    // Decrement obligations (winner redemption reduces outstanding USDC owed)
+    let config = &mut ctx.accounts.config;
+    config.obligations = config.obligations.saturating_sub(quantity);
 
     msg!(
         "Winner redeemed: user={}, market={}, outcome={}, quantity={}, total_redeemed={}",

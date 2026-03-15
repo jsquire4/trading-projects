@@ -100,17 +100,15 @@ const SM = {
   TICKER: 392,
   IS_SETTLED: 400,
   OUTCOME: 401,
-  IS_PAUSED: 402,
-  IS_CLOSED: 403,
-  OVERRIDE_COUNT: 404,
-  BUMP: 405,
+  OVERRIDE_COUNT: 402,
+  BUMP: 403,
+  // _padding: [u8; 4] at 404-407
 };
 
 export interface MarketState {
   isSettled: boolean;
   outcome: number;
-  isPaused: boolean;
-  isClosed: boolean;
+  overrideCount: number;
   totalMinted: bigint;
   totalRedeemed: bigint;
   settlementPrice: bigint;
@@ -129,8 +127,7 @@ export async function readMarketState(
   return {
     isSettled: d[SM.IS_SETTLED] !== 0,
     outcome: d[SM.OUTCOME],
-    isPaused: d[SM.IS_PAUSED] !== 0,
-    isClosed: d[SM.IS_CLOSED] !== 0,
+    overrideCount: d[SM.OVERRIDE_COUNT],
     totalMinted: d.readBigUInt64LE(SM.TOTAL_MINTED),
     totalRedeemed: d.readBigUInt64LE(SM.TOTAL_REDEEMED),
     settlementPrice: d.readBigUInt64LE(SM.SETTLEMENT_PRICE),

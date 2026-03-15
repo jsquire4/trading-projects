@@ -14,20 +14,21 @@ pub struct CircuitBreaker<'info> {
     pub config: Box<Account<'info, GlobalConfig>>,
 }
 
-/// Global emergency stop. Sets config.is_paused = true.
-/// All market creation, minting, and trading are blocked.
-/// Users can still cancel resting orders.
-/// End-of-day settlement lifecycle fires regardless of pause.
+/// Global emergency stop. Semantically distinct from `pause` — this is intended
+/// for automated/urgent triggers whereas `pause` is a deliberate admin action.
+/// Both instructions are kept as separate entry points (different semantic meaning),
+/// but delegate to the same shared core logic to avoid duplication.
 pub fn handle_circuit_breaker(
     ctx: Context<CircuitBreaker>,
 ) -> Result<()> {
-    require!(!ctx.accounts.config.is_paused, MeridianError::AlreadyPaused);
-    ctx.accounts.config.is_paused = true;
+    msg!("Circuit breaker activated: admin={}", ctx.accounts.admin.key());
+    // Delegate to shared core logic — identical to handle_pause body.
+    do_pause(&mut ctx.accounts.config)
+}
 
-    msg!(
-        "Circuit breaker activated: admin={}",
-        ctx.accounts.admin.key(),
-    );
-
+/// Shared core: set is_paused = true. Called by both pause and circuit_breaker.
+pub(crate) fn do_pause(config: &mut GlobalConfig) -> Result<()> {
+    require!(!config.is_paused, MeridianError::AlreadyPaused);
+    config.is_paused = true;
     Ok(())
 }

@@ -13,6 +13,17 @@ import { buildMintPairIx } from "./instructions";
 import { createAta, mintTestUsdc, MarketAccounts, findYesMint, findNoMint } from "./setup";
 
 // ---------------------------------------------------------------------------
+// Deterministic CU nonce counter (M-21)
+// ---------------------------------------------------------------------------
+// Replaces Math.random() to avoid rare collisions and make test deduplication
+// behavior reproducible. Bankrun rejects duplicate transactions — appending a
+// unique CU limit prevents that without randomness.
+let cuNonce = 0;
+function getNextNonce(): number {
+  return ++cuNonce;
+}
+
+// ---------------------------------------------------------------------------
 // createFundedUser
 // ---------------------------------------------------------------------------
 
@@ -122,8 +133,9 @@ export async function executeMintPair(
     quantity: new BN(quantity),
   });
 
-  // Add a unique CU nonce to prevent bankrun "already processed" dedup
-  const cuIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 + Math.floor(Math.random() * 100_000) });
+  // Add a unique CU nonce to prevent bankrun "already processed" dedup.
+  // Uses a deterministic counter instead of Math.random() for reproducibility.
+  const cuIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 + getNextNonce() });
   const tx = new Transaction().add(cuIx).add(ix);
   await provider.sendAndConfirm!(tx, [user]);
 }

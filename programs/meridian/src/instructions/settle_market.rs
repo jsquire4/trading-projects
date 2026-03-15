@@ -8,6 +8,7 @@ pub struct SettleMarket<'info> {
     #[account(mut)]
     pub caller: Signer<'info>, // anyone can call
 
+    #[account(mut)]
     pub config: Box<Account<'info, GlobalConfig>>,
 
     #[account(
@@ -24,6 +25,9 @@ pub struct SettleMarket<'info> {
     )]
     pub oracle_feed: UncheckedAccount<'info>,
 }
+
+// NOTE (M-8): Layout must match mock_oracle::state::PriceFeed. If that struct
+// changes, update the byte offsets and MIN_DATA_LEN in OraclePriceFeed below.
 
 /// Manually parsed PriceFeed from mock_oracle program.
 /// Layout after 8-byte Anchor discriminator:
@@ -107,8 +111,28 @@ pub fn handle_settle_market(ctx: Context<SettleMarket>) -> Result<()> {
         MeridianError::SettlementTooEarly
     );
 
-    // ── Verify oracle discriminator (sha256("account:PriceFeed")[..8]) ──
+    // ── Gate: settlement blackout window ──
+    // If configured, settlement is blocked for N minutes after market close.
+    if config.settlement_blackout_minutes > 0 {
+        let blackout_secs = (config.settlement_blackout_minutes as i64) * 60;
+        let earliest_settle = market.market_close_unix
+            .checked_add(blackout_secs)
+            .ok_or(MeridianError::ArithmeticOverflow)?;
+        require!(
+            clock.unix_timestamp >= earliest_settle,
+            MeridianError::SettlementTooEarly,
+        );
+    }
+
+    // ── Verify oracle discriminator ──
+    // Mock oracle (type=0): sha256("account:PriceFeed")[..8]
+    // Pyth oracle (type=1): Pyth uses a different account format — settlement via
+    // admin_settle fallback until Pyth integration is complete.
     let oracle_data = ctx.accounts.oracle_feed.try_borrow_data()?;
+    require!(
+        config.oracle_type == 0,
+        MeridianError::InvalidOracleType
+    );
     {
         use anchor_lang::solana_program::hash::hash;
         let expected = hash(b"account:PriceFeed");
@@ -118,7 +142,7 @@ pub fn handle_settle_market(ctx: Context<SettleMarket>) -> Result<()> {
         );
     }
 
-    // ── Parse oracle price feed ──
+    // ── Parse oracle price feed (mock oracle layout) ──
     let feed = OraclePriceFeed::parse(&oracle_data)?;
 
     // ── Oracle validation ──
@@ -162,6 +186,16 @@ pub fn handle_settle_market(ctx: Context<SettleMarket>) -> Result<()> {
     market.override_deadline = clock
         .unix_timestamp
         .checked_add(config.override_window())
+        .ok_or(MeridianError::ArithmeticOverflow)?;
+
+    // ── Track obligations: winning token supply owed to holders ──
+    // Outstanding = total_minted - total_redeemed (pair burns already deducted)
+    let outstanding = market.total_minted
+        .checked_sub(market.total_redeemed)
+        .ok_or(MeridianError::ArithmeticOverflow)?;
+    let config = &mut ctx.accounts.config;
+    config.obligations = config.obligations
+        .checked_add(outstanding)
         .ok_or(MeridianError::ArithmeticOverflow)?;
 
     emit!(SettlementEvent {

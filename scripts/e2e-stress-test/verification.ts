@@ -81,7 +81,7 @@ export async function verifyDayEnd(
   for (const m of dayMarkets) {
     try {
       const state = await readMarketState(ctx.connection, m.market);
-      if (!state || !state.isClosed) continue; // only check closed markets
+      if (!state || !state.isSettled) continue; // only check settled markets
 
       const obAcct = await ctx.connection.getAccountInfo(m.orderBook);
       if (!obAcct) continue; // account may be reclaimed

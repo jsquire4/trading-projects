@@ -1,6 +1,5 @@
 "use client";
 
-import { useMemo } from "react";
 import { useMarkets } from "@/hooks/useMarkets";
 import { useMyOrders } from "@/hooks/useMyOrders";
 import { useCancelOrder } from "@/hooks/useCancelOrder";
@@ -43,10 +42,7 @@ function MarketOrders({ marketKey, ticker, strike }: { marketKey: string; ticker
 export function OpenOrdersTab() {
   const { data: markets = [], isLoading } = useMarkets();
   // Show all non-closed markets (including settled — user may need to cancel orders there)
-  const visibleMarkets = useMemo(
-    () => markets,
-    [markets],
-  );
+  const visibleMarkets = markets;
 
   if (isLoading) {
     return <div className="h-32 rounded-lg bg-white/5 border border-white/10 animate-pulse" />;

@@ -19,9 +19,10 @@ pub struct GlobalConfig {
     pub is_paused: bool,
     /// Oracle type: 0=Mock, 1=Pyth
     pub oracle_type: u8,
-    /// Supported tickers (7 MAG7, padded to 8 bytes each) — legacy, use TickerRegistry
+    // Legacy: superseded by TickerRegistry. Retained for backward compat with existing accounts.
+    /// Supported tickers (7 MAG7, padded to 8 bytes each)
     pub tickers: [[u8; 8]; 7],
-    /// Number of active tickers — legacy, use TickerRegistry
+    /// Number of active tickers
     pub ticker_count: u8,
     /// PDA bump
     pub bump: u8,

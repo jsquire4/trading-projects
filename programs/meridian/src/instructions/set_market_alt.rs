@@ -20,6 +20,12 @@ pub struct SetMarketAlt<'info> {
 }
 
 pub fn handle_set_market_alt(ctx: Context<SetMarketAlt>, alt_address: Pubkey) -> Result<()> {
+    // Prevent setting to default (zero) — that would permanently lock the market
+    // out of getting a real ALT since the constraint checks alt_address == default.
+    require!(
+        alt_address != Pubkey::default(),
+        MeridianError::InvalidVault,
+    );
     let market = &mut ctx.accounts.market;
     market.alt_address = alt_address;
 

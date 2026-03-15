@@ -69,10 +69,12 @@ export function useCancelOrder(marketKey: string) {
           })
           .transaction();
 
-        await sendTransaction(tx, { description: "Cancel Order" });
-        queryClient.invalidateQueries({ queryKey: ["orderbook"] });
-        queryClient.invalidateQueries({ queryKey: ["myOrders"] });
-        queryClient.invalidateQueries({ queryKey: ["positions"] });
+        const sig = await sendTransaction(tx, { description: "Cancel Order" });
+        if (sig) {
+          queryClient.invalidateQueries({ queryKey: ["orderbook"] });
+          queryClient.invalidateQueries({ queryKey: ["myOrders"] });
+          queryClient.invalidateQueries({ queryKey: ["positions"] });
+        }
       } catch {
         // Error handled by useTransaction toast
       } finally {

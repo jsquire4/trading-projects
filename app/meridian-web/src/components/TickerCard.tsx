@@ -90,8 +90,8 @@ export function TickerCard({
   const strikeDollars = atm ? (Number(atm.strikePrice) / 1_000_000).toFixed(0) : Math.round(price).toString();
   const implied = atm ? getImpliedProbability(atm, orderBooks) : null;
 
-  const yesPct = implied?.yesPct ?? 50;
-  const noPct = implied?.noPct ?? 50;
+  const yesPct = implied?.yesPct;
+  const noPct = implied?.noPct;
 
   const totalOpenInterest = markets.reduce((sum, m) => {
     const minted = Number(m.totalMinted);
@@ -160,20 +160,29 @@ export function TickerCard({
             Will {ticker} close above{" "}
             <span className="text-green-400">${strikeDollars}</span>?
           </p>
-          <div className="flex items-center gap-3">
+          {implied ? (
+            <div className="flex items-center gap-3">
+              <Link
+                href={yesUrl}
+                className="flex-1 text-center rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-2.5 text-sm font-semibold text-green-400 hover:bg-green-500/20 transition-colors"
+              >
+                Yes @ {yesPct}¢
+              </Link>
+              <Link
+                href={noUrl}
+                className="flex-1 text-center rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-400 hover:bg-red-500/20 transition-colors"
+              >
+                No @ {noPct}¢
+              </Link>
+            </div>
+          ) : (
             <Link
-              href={yesUrl}
-              className="flex-1 text-center rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-2.5 text-sm font-semibold text-green-400 hover:bg-green-500/20 transition-colors"
+              href={baseUrl}
+              className="block text-center rounded-lg border border-white/20 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white/80 hover:bg-white/10 transition-colors"
             >
-              Yes @ {yesPct}¢
+              Trade →
             </Link>
-            <Link
-              href={noUrl}
-              className="flex-1 text-center rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-400 hover:bg-red-500/20 transition-colors"
-            >
-              No @ {noPct}¢
-            </Link>
-          </div>
+          )}
         </div>
       </div>
     </div>

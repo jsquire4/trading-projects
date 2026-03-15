@@ -137,8 +137,15 @@ async function doubleConfirmPrices(
     log.info(`Double-confirm: waiting ${PRICE_CONFIRM_INTERVAL_MS / 1000}s before next poll (${remaining.size} remaining)`);
     await sleep(PRICE_CONFIRM_INTERVAL_MS);
 
-    // Next poll
-    const quotes = await marketData.getQuotes([...remaining]);
+    // Next poll (with retry on transient failure)
+    let quotes: Awaited<ReturnType<typeof marketData.getQuotes>>;
+    try {
+      quotes = await marketData.getQuotes([...remaining]);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`Double-confirm: getQuotes failed, will retry next cycle: ${msg}`);
+      continue; // Skip this poll, retry after next sleep
+    }
     const currentPrices = new Map<string, number>();
     for (const q of quotes) {
       const price = q.prevclose ?? q.last;
@@ -246,9 +253,9 @@ async function updateOracleFeeds(
     }
   }
 
-  // Remove failed tickers after iteration (don't mutate Map during iteration)
-  for (const ticker of failedTickers) {
-    prices.delete(ticker);
+  // Log failed tickers (don't mutate the caller's map — SH-4)
+  if (failedTickers.length > 0) {
+    log.error(`Failed to update oracle for ${failedTickers.length} tickers: ${failedTickers.join(", ")}`);
   }
 }
 
@@ -459,18 +466,39 @@ async function unpauseWithRetry(meridianProgram: Program, adminKeypair: Keypair)
 // Settlement cycle — orchestrates all phases
 // ---------------------------------------------------------------------------
 
-async function runSettlementCycle(): Promise<{ ok: boolean; error?: string; summary?: Record<string, unknown> }> {
+/**
+ * Run one full settlement cycle.
+ *
+ * Accepts pre-built `connection` and `adminKeypair` so that the polling loop
+ * (which already constructs these once at startup) can pass them in rather
+ * than recreating them on every cycle. When called from the HTTP trigger
+ * server (which has no pre-built connection), pass `null` to fall back to
+ * reading env vars.
+ */
+async function runSettlementCycle(
+  sharedConnection?: Connection | null,
+  sharedKeypair?: Keypair | null,
+): Promise<{ ok: boolean; error?: string; summary?: Record<string, unknown> }> {
   const startTime = Date.now();
 
-  const RPC_URL = process.env.RPC_URL ?? "http://127.0.0.1:8899";
-  const ADMIN_KEYPAIR_B58 = process.env.ADMIN_KEYPAIR;
+  let adminKeypair: Keypair;
+  let connection: Connection;
 
-  if (!ADMIN_KEYPAIR_B58) {
-    throw new Error("ADMIN_KEYPAIR env var is required (base58 secret key)");
+  if (sharedConnection && sharedKeypair) {
+    // Re-use pre-built instances from the polling loop to avoid recreating
+    // Connection (WebSocket) and decoding the keypair on every cycle.
+    connection = sharedConnection;
+    adminKeypair = sharedKeypair;
+  } else {
+    const RPC_URL = process.env.RPC_URL ?? "http://127.0.0.1:8899";
+    const ADMIN_KEYPAIR_B58 = process.env.ADMIN_KEYPAIR;
+    if (!ADMIN_KEYPAIR_B58) {
+      throw new Error("ADMIN_KEYPAIR env var is required (base58 secret key)");
+    }
+    adminKeypair = Keypair.fromSecretKey(bs58.decode(ADMIN_KEYPAIR_B58));
+    connection = new Connection(RPC_URL, "confirmed");
   }
 
-  const adminKeypair = Keypair.fromSecretKey(bs58.decode(ADMIN_KEYPAIR_B58));
-  const connection = new Connection(RPC_URL, "confirmed");
   const wallet = new Wallet(adminKeypair);
   const provider = new AnchorProvider(connection, wallet, {
     commitment: "confirmed",
@@ -596,6 +624,11 @@ async function startPollingLoop(): Promise<never> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const meridianProgram = new Program(meridianIdl as any, provider);
 
+  // `settling` guards the polling loop: prevents a second settlement cycle
+  // from starting while one is already running. Scoped to this loop only.
+  // (M-18: there is also a separate `running` flag in the HTTP trigger server —
+  //  that one guards the trigger endpoint independently. Both locks serve distinct
+  //  purposes and are intentionally not shared.)
   let settling = false;
 
   log.info(`Settlement poller started — checking every ${POLL_INTERVAL_MS / 1000}s`);
@@ -613,7 +646,10 @@ async function startPollingLoop(): Promise<never> {
 
           settling = true;
           try {
-            const result = await runSettlementCycle();
+            // Pass the pre-built connection and keypair so runSettlementCycle
+            // doesn't recreate them on every cycle (avoids redundant WebSocket
+            // connections and secret-key decoding).
+            const result = await runSettlementCycle(connection, adminKeypair);
             if (!result.ok) {
               log.error("Settlement cycle completed with errors", result);
             }
@@ -642,9 +678,14 @@ async function startPollingLoop(): Promise<never> {
 
 function startTriggerServer(): void {
   const port = parseInt(process.env.TRIGGER_PORT ?? "4002", 10);
+  // `running` guards the HTTP trigger endpoint: prevents concurrent settlement
+  // cycles triggered via POST /trigger. Intentionally separate from the polling
+  // loop's `settling` flag — the two code paths are independent and may both be
+  // active at once (e.g. a manual trigger during an autonomous poll cycle).
+  // (M-18: see also `settling` in startPollingLoop for the other lock.)
   let running = false;
 
-  const triggerToken = process.env.SETTLEMENT_TRIGGER_TOKEN ?? "";
+  const triggerToken = process.env.SETTLEMENT_TRIGGER_TOKEN ?? null;
 
   const server = http.createServer(async (req, res) => {
     if (req.url !== "/trigger") {

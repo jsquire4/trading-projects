@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 
 use crate::error::MeridianError;
 use crate::state::GlobalConfig;
+use crate::instructions::circuit_breaker::do_pause;
 
 #[derive(Accounts)]
 pub struct Pause<'info> {
@@ -15,8 +16,7 @@ pub struct Pause<'info> {
 }
 
 pub fn handle_pause(ctx: Context<Pause>) -> Result<()> {
-    require!(!ctx.accounts.config.is_paused, MeridianError::AlreadyPaused);
-    ctx.accounts.config.is_paused = true;
     msg!("Global pause activated by admin={}", ctx.accounts.admin.key());
-    Ok(())
+    // Delegate to shared core logic — also used by circuit_breaker.
+    do_pause(&mut ctx.accounts.config)
 }

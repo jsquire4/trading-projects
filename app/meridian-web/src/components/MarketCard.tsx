@@ -1,3 +1,4 @@
+// DEPRECATED: Replaced by TickerCard.tsx. Kept for test compatibility.
 "use client";
 
 import { useState } from "react";

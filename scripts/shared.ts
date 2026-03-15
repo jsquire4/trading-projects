@@ -108,6 +108,12 @@ export function todayMarketCloseUnix(): number {
 
 // ---------------------------------------------------------------------------
 // Place order instruction builder (for scripts)
+//
+// NOTE (M-20): Instruction builders here are intentionally duplicated from
+// tests/helpers/instructions.ts. The canonical source for test use is
+// tests/helpers/instructions.ts. Scripts may diverge (e.g. different account
+// ordering, extra fields) so a shared extraction is not done — keep both in
+// sync manually when the on-chain instruction layout changes.
 // ---------------------------------------------------------------------------
 
 export interface ScriptMarketAddresses {

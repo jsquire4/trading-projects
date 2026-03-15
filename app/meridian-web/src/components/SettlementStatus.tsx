@@ -51,11 +51,14 @@ export function SettlementStatus({
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
 
   useEffect(() => {
+    // Stop ticking once the market is fully settled and past the override window —
+    // the display no longer changes after that point.
+    if (isSettled && Math.floor(Date.now() / 1000) >= overrideDeadline) return;
     const interval = setInterval(() => {
       setNow(Math.floor(Date.now() / 1000));
     }, 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isSettled, overrideDeadline]);
 
   const state = useMemo(() => {
     if (!isSettled) {

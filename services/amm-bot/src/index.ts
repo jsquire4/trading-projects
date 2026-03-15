@@ -46,6 +46,18 @@ const POLL_INTERVAL_MS = 30_000; // 30 seconds
 const SECONDS_PER_YEAR = 365.25 * 86_400;
 
 // ---------------------------------------------------------------------------
+// Price history cache (M-15)
+// ---------------------------------------------------------------------------
+
+/** Per-ticker cache: last fetch timestamp (ms) and the retrieved bars. */
+interface PriceHistoryEntry {
+  fetchedAt: number;
+  bars: Awaited<ReturnType<IMarketDataClient["getHistory"]>>;
+}
+const priceHistoryCache = new Map<string, PriceHistoryEntry>();
+const PRICE_HISTORY_CACHE_TTL_MS = 5 * 60 * 1_000; // 5 minutes
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -225,13 +237,23 @@ async function main(): Promise<void> {
       : Number(market.strikePrice);
     const strikePrice = strikeLamports / 1_000_000;
 
-    // Per-ticker historical volatility lookup (falls back to env/default)
+    // Per-ticker historical volatility lookup (falls back to env/default).
+    // Results are cached per ticker for PRICE_HISTORY_CACHE_TTL_MS (5 min)
+    // to avoid hammering the market data API on every poll cycle.
     let tickerVol = vol; // fallback
     if (marketDataClient) {
       try {
-        const end = new Date().toISOString().slice(0, 10);
-        const start = new Date(Date.now() - 40 * 86_400_000).toISOString().slice(0, 10);
-        const bars = await marketDataClient.getHistory(ticker, "daily", start, end);
+        const cached = priceHistoryCache.get(ticker);
+        const now = Date.now();
+        let bars: PriceHistoryEntry["bars"];
+        if (cached && now - cached.fetchedAt < PRICE_HISTORY_CACHE_TTL_MS) {
+          bars = cached.bars;
+        } else {
+          const end = new Date(now).toISOString().slice(0, 10);
+          const start = new Date(now - 40 * 86_400_000).toISOString().slice(0, 10);
+          bars = await marketDataClient.getHistory(ticker, "daily", start, end);
+          priceHistoryCache.set(ticker, { fetchedAt: now, bars });
+        }
         const hv = historicalVolatility(bars, 30);
         if (hv > 0) tickerVol = hv;
       } catch (err) {
@@ -301,9 +323,16 @@ async function main(): Promise<void> {
     }
     isPolling = true;
     try {
+      // Check global pause before quoting
+      const freshConfig = await meridianProgram.account.globalConfig.fetch(configPda);
+      if (freshConfig.isPaused) {
+        log.info("Platform is paused — skipping quote cycle");
+        return;
+      }
+
       const allMarkets = await meridianProgram.account.strikeMarket.all();
       const activeMarkets = allMarkets.filter(
-        (m) => !m.account.isSettled && !m.account.isPaused,
+        (m) => !m.account.isSettled,
       );
 
       log.info(

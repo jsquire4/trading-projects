@@ -84,6 +84,11 @@ async function main(): Promise<void> {
   let totalMissing = 0;
   const missingDetails: string[] = [];
 
+  // Collect all expected market PDAs across all tickers, then batch-fetch
+  // with getMultipleAccountsInfo to reduce sequential RPC round-trips (M-19).
+  type PdaEntry = { pda: import("@solana/web3.js").PublicKey; label: string };
+  const allPdas: PdaEntry[] = [];
+
   for (const ticker of activeTickers) {
     const quote = quoteMap.get(ticker);
     if (!quote || !quote.prevclose || quote.prevclose <= 0) {
@@ -107,18 +112,24 @@ async function main(): Promise<void> {
     for (const strikeDollars of strikes) {
       totalExpected++;
       const strikeLamports = BigInt(strikeDollars) * BigInt(10 ** 6);
-      const [marketPda] = findStrikeMarket(
-        ticker,
-        strikeLamports,
-        marketCloseUnix,
-      );
+      const [marketPda] = findStrikeMarket(ticker, strikeLamports, marketCloseUnix);
+      allPdas.push({ pda: marketPda, label: `${ticker} @ $${strikeDollars}` });
+    }
+  }
 
-      const accountInfo = await connection.getAccountInfo(marketPda);
-      if (accountInfo !== null) {
+  // Batch fetch — getMultipleAccountsInfo accepts up to 100 keys per call.
+  const BATCH_SIZE = 100;
+  for (let i = 0; i < allPdas.length; i += BATCH_SIZE) {
+    const batch = allPdas.slice(i, i + BATCH_SIZE);
+    const accountInfos = await connection.getMultipleAccountsInfo(
+      batch.map((e) => e.pda),
+    );
+    for (let j = 0; j < batch.length; j++) {
+      if (accountInfos[j] !== null) {
         totalFound++;
       } else {
         totalMissing++;
-        missingDetails.push(`${ticker} @ $${strikeDollars}`);
+        missingDetails.push(batch[j].label);
       }
     }
   }

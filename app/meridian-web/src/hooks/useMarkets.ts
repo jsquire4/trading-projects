@@ -173,21 +173,22 @@ export function useOrderBooks(marketKeys: (PublicKey | string)[]) {
   const { connection } = useConnection();
 
   // Stabilize addresses — marketKeys array identity changes every render.
-  // Derive a stable string key from sorted pubkeys, then use it as the
-  // sole dependency so addresses only recomputes when markets actually change.
+  // Build sorted parallel arrays: sortedKeys[i] maps to addresses[i].
   const marketKeysStr = marketKeys.map((k) => (typeof k === "string" ? k : k.toBase58())).sort().join(",");
-  const addresses = useMemo(() => {
-    return marketKeysStr.split(",").filter(Boolean).map((k) => {
+  const { sortedKeys, addresses } = useMemo(() => {
+    const keys = marketKeysStr.split(",").filter(Boolean);
+    const addrs = keys.map((k) => {
       const [addr] = findOrderBook(new PublicKey(k));
       return addr;
     });
+    return { sortedKeys: keys, addresses: addrs };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [marketKeysStr]);
 
   return useQuery<Map<string, OrderBookData>>({
     queryKey: [
       "orderbooks-batch",
-      addresses.map((a) => a.toBase58()).sort().join(","),
+      marketKeysStr,
     ],
     queryFn: async () => {
       if (addresses.length === 0) return new Map();
@@ -198,15 +199,12 @@ export function useOrderBooks(marketKeys: (PublicKey | string)[]) {
       );
       const result = new Map<string, OrderBookData>();
 
-      for (let i = 0; i < marketKeys.length; i++) {
+      // sortedKeys[i] maps 1:1 with accounts[i] — both derived from the same sorted order
+      for (let i = 0; i < sortedKeys.length; i++) {
         const acct = accounts[i];
         if (!acct) continue;
-        const key =
-          typeof marketKeys[i] === "string"
-            ? (marketKeys[i] as string)
-            : (marketKeys[i] as PublicKey).toBase58();
         const raw = deserializeOrderBook(Buffer.from(acct.data));
-        result.set(key, {
+        result.set(sortedKeys[i], {
           raw,
           yesView: buildYesView(raw.orders),
           noView: buildNoView(raw.orders),

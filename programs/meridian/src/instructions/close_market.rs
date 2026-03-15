@@ -159,7 +159,7 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
     drain_lamports(&ctx.accounts.market.to_account_info(), &sol_treasury_ai)?;
 
     msg!(
-        "Market closed: market={}, 6 accounts closed (mints remain with 0 supply)",
+        "Market closed: market={}, 4 token accounts closed + 2 drained (orderbook + market) — mints remain with 0 supply",
         ctx.accounts.market.key(),
     );
 

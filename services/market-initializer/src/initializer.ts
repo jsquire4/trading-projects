@@ -37,6 +37,13 @@ const EARLY_CLOSE_DATES: Set<string> = new Set([
   "2028-07-03", "2028-11-24", "2028-12-22",
 ]);
 
+const maxEarlyCloseYear = 2028;
+if (new Date().getFullYear() > maxEarlyCloseYear) {
+  createLogger("market-initializer").warn(
+    `Early close dates may be stale — last updated for ${maxEarlyCloseYear}`,
+  );
+}
+
 /** Get the close hour (ET) for a given date — 13 for early close days, 16 for normal. */
 function getCloseHourET(dateStr: string): number {
   return EARLY_CLOSE_DATES.has(dateStr) ? 13 : 16;

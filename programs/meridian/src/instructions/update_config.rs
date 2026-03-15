@@ -52,6 +52,9 @@ pub fn handle_update_config(
     }
 
     if let Some(v) = slot_rent_markup {
+        // NOTE (M-7): slot_rent_markup is stored but not yet consumed by any
+        // instruction. Reserved for future use: intended to cover per-order
+        // lifecycle transaction fees charged at order placement.
         config.slot_rent_markup = v;
     }
 

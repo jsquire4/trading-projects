@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useId } from "react";
 import {
   ResponsiveContainer,
   AreaChart,
@@ -31,6 +31,12 @@ interface ChartPoint {
 }
 
 export function DepthChart({ bids, asks }: DepthChartProps) {
+  // useId() generates a stable, unique prefix per component instance,
+  // preventing SVG gradient ID collisions when multiple DepthCharts render.
+  const uid = useId();
+  const bidGradientId = `${uid}-depthBidGradient`;
+  const askGradientId = `${uid}-depthAskGradient`;
+
   const chartData = useMemo<ChartPoint[]>(() => {
     // Bids: sort low-to-high by price, then accumulate right-to-left
     // (highest price has its own qty, next lower has its qty + above, etc.)
@@ -88,11 +94,11 @@ export function DepthChart({ bids, asks }: DepthChartProps) {
       <ResponsiveContainer width="100%" height={200}>
         <AreaChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
           <defs>
-            <linearGradient id="depthBidGradient" x1="0" y1="0" x2="0" y2="1">
+            <linearGradient id={bidGradientId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%" stopColor={COLORS.yes} stopOpacity={0.3} />
               <stop offset="95%" stopColor={COLORS.yes} stopOpacity={0.02} />
             </linearGradient>
-            <linearGradient id="depthAskGradient" x1="0" y1="0" x2="0" y2="1">
+            <linearGradient id={askGradientId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%" stopColor={COLORS.no} stopOpacity={0.3} />
               <stop offset="95%" stopColor={COLORS.no} stopOpacity={0.02} />
             </linearGradient>
@@ -124,7 +130,7 @@ export function DepthChart({ bids, asks }: DepthChartProps) {
             dataKey="bidCum"
             stroke={COLORS.yes}
             strokeWidth={1.5}
-            fill="url(#depthBidGradient)"
+            fill={`url(#${bidGradientId})`}
             dot={false}
             connectNulls={false}
             isAnimationActive={false}
@@ -135,7 +141,7 @@ export function DepthChart({ bids, asks }: DepthChartProps) {
             dataKey="askCum"
             stroke={COLORS.no}
             strokeWidth={1.5}
-            fill="url(#depthAskGradient)"
+            fill={`url(#${askGradientId})`}
             dot={false}
             connectNulls={false}
             isAnimationActive={false}

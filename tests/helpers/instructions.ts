@@ -592,7 +592,7 @@ export function buildSettleMarketIx(
 
   const keys = [
     { pubkey: params.caller, isSigner: true, isWritable: true },
-    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.config, isSigner: false, isWritable: true },
     { pubkey: params.market, isSigner: false, isWritable: true },
     { pubkey: params.oracleFeed, isSigner: false, isWritable: false },
   ];
@@ -701,7 +701,7 @@ export function buildRedeemIx(
 
   const keys = [
     { pubkey: params.user, isSigner: true, isWritable: true },
-    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.config, isSigner: false, isWritable: true },
     { pubkey: params.market, isSigner: false, isWritable: true },
     { pubkey: params.yesMint, isSigner: false, isWritable: true },
     { pubkey: params.noMint, isSigner: false, isWritable: true },
@@ -909,7 +909,7 @@ export function buildCrankRedeemIx(
 
   const keys = [
     { pubkey: params.caller, isSigner: true, isWritable: true },
-    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.config, isSigner: false, isWritable: true },
     { pubkey: params.market, isSigner: false, isWritable: true },
     { pubkey: params.yesMint, isSigner: false, isWritable: true },
     { pubkey: params.noMint, isSigner: false, isWritable: true },

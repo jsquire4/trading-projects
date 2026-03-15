@@ -103,6 +103,11 @@ export function useWalletState(): UseWalletStateReturn {
         if (mint.equals(USDC_MINT)) {
           usdc = Number(amount) / 1e6;
         } else if (amount > BigInt(0)) {
+          // NOTE (M-13): This counts ALL non-USDC token accounts with a balance,
+          // not just Meridian Yes/No tokens. A more precise check would filter to
+          // only mints that match a known market's yesMint or noMint. For now this
+          // is a reasonable proxy — false positives (unrelated tokens) are unlikely
+          // in the test/devnet environment this targets.
           nonUsdcTokensWithBalance++;
         }
       }

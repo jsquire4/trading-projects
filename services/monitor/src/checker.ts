@@ -18,6 +18,10 @@ import {
 
 const log = createLogger("monitor");
 
+// Read-only provider — keypair is only used to satisfy AnchorProvider's wallet
+// requirement; it never signs any transactions.
+const _readOnlyKeypair = Keypair.generate();
+
 const MIN_ADMIN_SOL = 0.1;
 const ORACLE_STALE_THRESHOLD_S = 10 * 60; // 10 minutes
 const CLOSE_ELIGIBILITY_DAYS = 90;
@@ -46,8 +50,7 @@ export async function runChecks(): Promise<void> {
   const connection = new Connection(RPC_URL, "confirmed");
 
   // Minimal wallet — monitor is read-only, no signing needed
-  const dummyKeypair = Keypair.generate();
-  const wallet = new Wallet(dummyKeypair);
+  const wallet = new Wallet(_readOnlyKeypair);
   const provider = new AnchorProvider(connection, wallet, {
     commitment: "confirmed",
   });
@@ -154,15 +157,15 @@ export async function runChecks(): Promise<void> {
   // ------------------------------------------------------------------
   const closeable = allMarkets.filter((m) => {
     const isSettled = m.account.isSettled as boolean;
-    const isClosed = m.account.isClosed as boolean;
-    const settledAt = (m.account.settledAt as BN).toNumber();
-    return isSettled && !isClosed && settledAt > 0 && (settledAt + CLOSE_ELIGIBILITY_S) < now;
+    // isClosed was removed — use settledAt > 0 as proxy for "settled but not yet closed"
+    const settledAt = (m.account.settledAt as BN | undefined)?.toNumber?.() ?? 0;
+    return isSettled && settledAt > 0 && (settledAt + CLOSE_ELIGIBILITY_S) < now;
   });
 
   if (closeable.length > 0) {
     for (const m of closeable) {
       const ticker = tickerFromBytes(m.account.ticker as number[]);
-      const settledAt = (m.account.settledAt as BN).toNumber();
+      const settledAt = (m.account.settledAt as BN | undefined)?.toNumber?.() ?? 0;
       const daysSinceSettlement = Math.floor((now - settledAt) / 86400);
       log.info(`Market eligible for close: ${ticker} (settled ${daysSinceSettlement} days ago)`, {
         market: m.publicKey.toBase58(),

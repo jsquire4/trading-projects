@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useMarkets, useOrderBooks, type ParsedMarket } from "@/hooks/useMarkets";
 import { useQuotes } from "@/hooks/useAnalyticsData";
 import { TickerCard } from "@/components/TickerCard";
@@ -20,13 +20,25 @@ function useCountdown(markets: ParsedMarket[]) {
     return Math.min(...active.map((m) => Number(m.marketCloseUnix)));
   }, [markets]);
 
-  if (!earliestClose) return "";
-  const now = Math.floor(Date.now() / 1000);
-  const diff = earliestClose - now;
-  if (diff <= 0) return "Closed";
-  const h = Math.floor(diff / 3600);
-  const m = Math.floor((diff % 3600) / 60);
-  return `${h}h ${m}m`;
+  const [timeLeft, setTimeLeft] = useState("");
+
+  useEffect(() => {
+    if (!earliestClose) { setTimeLeft(""); return; }
+    function calc() {
+      const now = Math.floor(Date.now() / 1000);
+      const diff = earliestClose! - now;
+      if (diff <= 0) { setTimeLeft("Closed"); return; }
+      const h = Math.floor(diff / 3600);
+      const m = Math.floor((diff % 3600) / 60);
+      const s = diff % 60;
+      setTimeLeft(`${h}h ${m}m ${s}s`);
+    }
+    calc();
+    const id = setInterval(calc, 1000);
+    return () => clearInterval(id);
+  }, [earliestClose]);
+
+  return timeLeft;
 }
 
 // ---------------------------------------------------------------------------

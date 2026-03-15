@@ -1,3 +1,4 @@
+// DEPRECATED: OrderForm has been replaced by OrderModal. This file is no longer used in production.
 "use client";
 
 import { useState, useMemo, useCallback, useEffect } from "react";

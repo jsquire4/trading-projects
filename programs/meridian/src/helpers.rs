@@ -2,6 +2,9 @@ use anchor_lang::prelude::Pubkey;
 
 /// Compute the expiry day from a market_close_unix timestamp.
 /// Used in PDA seed derivation to normalize timestamps to day boundaries.
+///
+/// The `as u32` cast is safe for all valid market timestamps: u32::MAX / 86400
+/// = 49710 days = year 2106, well beyond any realistic market close date.
 pub const fn expiry_day(market_close_unix: i64) -> u32 {
     (market_close_unix / 86400) as u32
 }

@@ -217,3 +217,54 @@ export async function verifyCrossDay(
     warnings,
   };
 }
+
+// ─── Rent accounting verification ────────────────────────────────────────────
+
+/**
+ * Verify rent accounting invariants across all agents.
+ *
+ * For the sparse order book, users deposit SOL rent when placing orders
+ * at new price levels, and get it returned on cancel/fill/settlement.
+ * This check verifies the accounting is balanced.
+ *
+ * Note: This is a soft check — rent tracking in the stress test is
+ * best-effort since we don't intercept every lamport transfer.
+ */
+export async function verifyRentAccounting(
+  ctx: SharedContext,
+): Promise<VerificationResult> {
+  const violations: string[] = [];
+  const warnings: string[] = [];
+
+  let totalDeposited = 0n;
+  let totalReturned = 0n;
+
+  for (const agent of ctx.agents) {
+    totalDeposited += agent.rentDeposited;
+    totalReturned += agent.rentReturned;
+  }
+
+  // If rent tracking was active, check balance
+  if (totalDeposited > 0n || totalReturned > 0n) {
+    if (totalReturned > totalDeposited) {
+      violations.push(
+        `Rent accounting imbalance: returned (${totalReturned}) > deposited (${totalDeposited})`,
+      );
+    } else {
+      const unreturned = totalDeposited - totalReturned;
+      if (unreturned > 0n) {
+        warnings.push(
+          `${unreturned} lamports of rent not yet returned ` +
+            `(deposited=${totalDeposited}, returned=${totalReturned}) — ` +
+            `may be in still-open order book accounts`,
+        );
+      }
+    }
+  }
+
+  return {
+    passed: violations.length === 0,
+    violations,
+    warnings,
+  };
+}

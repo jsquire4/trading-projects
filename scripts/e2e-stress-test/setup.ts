@@ -46,8 +46,10 @@ import {
   findFeeVault,
   findTreasury,
   findPriceFeed,
+  findTickerRegistry,
+  padTicker,
 } from "../../services/shared/src/pda";
-import { buildInitializeFeedIx, buildInitializeConfigIx, MOCK_ORACLE_PROGRAM_ID } from "../../tests/helpers/instructions";
+import { buildInitializeFeedIx, buildInitializeConfigIx, buildInitializeTickerRegistryIx, buildAddTickerIx, buildExpandConfigIx, MOCK_ORACLE_PROGRAM_ID } from "../../tests/helpers/instructions";
 import { sendTx } from "./helpers";
 import { SeededRng, hashSeed } from "../../services/shared/src/synthetic-config";
 
@@ -149,6 +151,41 @@ export async function setupTestEnvironment(config: RunConfig): Promise<SharedCon
     console.log(`  GlobalConfig initialized at ${configPda.toBase58()}`);
   }
 
+  // 4b. Expand GlobalConfig if needed (192→248 bytes for new fields)
+  try {
+    const expandIx = buildExpandConfigIx({ admin: admin.publicKey, config: configPda });
+    await sendTx(connection, new Transaction().add(expandIx), [admin]);
+    console.log("  GlobalConfig expanded (192→248 bytes)");
+  } catch {
+    // Already expanded or not needed — idempotent
+  }
+
+  // 4c. Initialize TickerRegistry PDA if needed
+  const [tickerRegistry] = findTickerRegistry();
+  const trAcct = await connection.getAccountInfo(tickerRegistry);
+  if (!trAcct) {
+    console.log("  TickerRegistry PDA not found — initializing...");
+    const initTrIx = buildInitializeTickerRegistryIx({
+      admin: admin.publicKey,
+      config: configPda,
+      tickerRegistry,
+    });
+    await sendTx(connection, new Transaction().add(initTrIx), [admin]);
+    console.log(`  TickerRegistry initialized at ${tickerRegistry.toBase58()}`);
+
+    // Add all tickers
+    for (const ticker of config.tickers) {
+      const addIx = buildAddTickerIx({
+        payer: admin.publicKey,
+        config: configPda,
+        tickerRegistry,
+        ticker: padTicker(ticker),
+      });
+      await sendTx(connection, new Transaction().add(addIx), [admin]);
+    }
+    console.log(`  Added ${config.tickers.length} tickers to registry`);
+  }
+
   // 5. Initialize oracle feeds for each ticker (idempotent)
   for (const ticker of config.tickers) {
     const [oracleFeed] = findPriceFeed(ticker);
@@ -200,6 +237,8 @@ export async function setupTestEnvironment(config: RunConfig): Promise<SharedCon
     ordersFilled: 0,
     positionsOpened: 0,
     positionsClosed: 0,
+    rentDeposited: 0n,
+    rentReturned: 0n,
     errors: [],
   }));
 
@@ -214,7 +253,7 @@ export async function setupTestEnvironment(config: RunConfig): Promise<SharedCon
     },
     fillRate: 0,
     mergeCount: 0,
-    instructionTypes: new Set(["initialize_config", "initialize_feed"]),
+    instructionTypes: new Set(["initialize_config", "initialize_feed", "expand_config", "initialize_ticker_registry", "add_ticker"]),
   };
 
   // 10. Assemble SharedContext
@@ -230,6 +269,7 @@ export async function setupTestEnvironment(config: RunConfig): Promise<SharedCon
     agents,
     config,
     metrics,
+    tickerRegistry,
   };
 }
 

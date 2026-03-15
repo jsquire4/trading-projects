@@ -71,6 +71,17 @@ const KNOWN_INSTRUCTIONS = [
   "unpause",
   "update_fee_bps",
   "update_strike_creation_fee",
+  // Admin V2
+  "transfer_admin",
+  "accept_admin",
+  "withdraw_fees",
+  "withdraw_treasury",
+  "update_config",
+  "add_ticker",
+  "deactivate_ticker",
+  "circuit_breaker",
+  "expand_config",
+  "initialize_ticker_registry",
   // Settlement
   "settle_market",
   "admin_settle",

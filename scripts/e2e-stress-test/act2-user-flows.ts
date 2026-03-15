@@ -1,7 +1,7 @@
 /**
  * act2-user-flows.ts — Act 2: User Flows
  *
- * 8 named smoke tests executed sequentially. Each test is fully self-contained:
+ * 13 named smoke tests executed sequentially. Each test is fully self-contained:
  * it creates fresh keypairs, funds them, and manages its own state. No test
  * depends on the outcome of any other test. Works with any seed or agent count.
  */
@@ -33,6 +33,11 @@ import {
   buildUpdatePriceIx,
   buildCreateStrikeMarketIx,
   buildSetMarketAltIx,
+  buildTransferAdminIx,
+  buildAcceptAdminIx,
+  buildWithdrawFeesIx,
+  buildUpdateConfigIx,
+  buildCircuitBreakerIx,
   padTicker,
 } from "../../tests/helpers/instructions";
 import {
@@ -44,6 +49,7 @@ import {
   findYesEscrow,
   findNoEscrow,
   findOrderBook,
+  findTickerRegistry,
 } from "../../services/shared/src/pda";
 import { sendTx, parseOrderBook, readMarketState, findPriceFeed } from "./helpers";
 import type { SharedContext, ActResult, ErrorEntry, MarketContext } from "./types";
@@ -658,6 +664,178 @@ async function test8(ctx: SharedContext, m: MarketContext): Promise<TestResult> 
   return { passed: false, detail: `Outcome unchanged: before=${stateBefore.outcome}, after=${stateAfter.outcome}` };
 }
 
+// ── T9: Transfer admin two-step ───────────────────────────────────────────────
+
+async function test9(ctx: SharedContext, m: MarketContext): Promise<TestResult> {
+  // Propose transfer to a fresh keypair
+  const newAdmin = Keypair.generate();
+
+  // Fund newAdmin with SOL for signing
+  const sig = await ctx.connection.requestAirdrop(newAdmin.publicKey, 1 * LAMPORTS_PER_SOL);
+  await ctx.connection.confirmTransaction(sig, "confirmed");
+
+  // Propose transfer
+  const transferIx = buildTransferAdminIx({
+    admin: ctx.admin.publicKey,
+    config: ctx.configPda,
+    newAdmin: newAdmin.publicKey,
+  });
+  await sendTx(ctx.connection, new Transaction().add(transferIx), [ctx.admin]);
+
+  // Accept transfer
+  const acceptIx = buildAcceptAdminIx({
+    newAdmin: newAdmin.publicKey,
+    config: ctx.configPda,
+  });
+  await sendTx(ctx.connection, new Transaction().add(acceptIx), [newAdmin]);
+
+  // Transfer back to original admin
+  const transferBackIx = buildTransferAdminIx({
+    admin: newAdmin.publicKey,
+    config: ctx.configPda,
+    newAdmin: ctx.admin.publicKey,
+  });
+  await sendTx(ctx.connection, new Transaction().add(transferBackIx), [newAdmin]);
+
+  const acceptBackIx = buildAcceptAdminIx({
+    newAdmin: ctx.admin.publicKey,
+    config: ctx.configPda,
+  });
+  await sendTx(ctx.connection, new Transaction().add(acceptBackIx), [ctx.admin]);
+
+  return { passed: true, detail: "Admin transferred to new key and back successfully" };
+}
+
+// ── T10: Withdraw fees ───────────────────────────────────────────────────────
+
+async function test10(ctx: SharedContext, m: MarketContext): Promise<TestResult> {
+  // Check fee vault balance
+  const { getAccount: getTokenAccount } = await import("@solana/spl-token");
+
+  let feeBalance = 0n;
+  try {
+    const feeAcct = await getTokenAccount(ctx.connection, ctx.feeVault);
+    feeBalance = feeAcct.amount;
+  } catch {
+    return { passed: true, detail: "Fee vault empty or not found — withdraw not applicable" };
+  }
+
+  if (feeBalance === 0n) {
+    return { passed: true, detail: "Fee vault empty — withdraw not applicable (no fills generated fees yet)" };
+  }
+
+  const adminUsdcAta = getAssociatedTokenAddressSync(ctx.usdcMint, ctx.admin.publicKey);
+  const beforeBalance = (await getTokenAccount(ctx.connection, adminUsdcAta)).amount;
+
+  const withdrawIx = buildWithdrawFeesIx({
+    admin: ctx.admin.publicKey,
+    config: ctx.configPda,
+    feeVault: ctx.feeVault,
+    adminUsdcAta,
+  });
+  await sendTx(ctx.connection, new Transaction().add(withdrawIx), [ctx.admin]);
+
+  const afterBalance = (await getTokenAccount(ctx.connection, adminUsdcAta)).amount;
+  if (afterBalance > beforeBalance) {
+    return { passed: true, detail: `Withdrew ${afterBalance - beforeBalance} fee USDC (vault had ${feeBalance})` };
+  }
+  return { passed: true, detail: `Fee vault had ${feeBalance} — withdraw completed` };
+}
+
+// ── T11: Treasury free-balance guard ─────────────────────────────────────────
+
+async function test11(ctx: SharedContext, m: MarketContext): Promise<TestResult> {
+  // Try to withdraw a huge amount from treasury — should fail
+  const adminUsdcAta = getAssociatedTokenAddressSync(ctx.usdcMint, ctx.admin.publicKey);
+  const hugeAmount = new BN("999999999999999"); // way more than available
+
+  let blocked = false;
+  try {
+    const { buildWithdrawTreasuryIx } = await import("../../tests/helpers/instructions");
+    const withdrawIx = buildWithdrawTreasuryIx({
+      admin: ctx.admin.publicKey,
+      config: ctx.configPda,
+      treasury: ctx.treasury,
+      adminUsdcAta,
+      amount: hugeAmount,
+    });
+    await sendTx(ctx.connection, new Transaction().add(withdrawIx), [ctx.admin]);
+  } catch {
+    blocked = true;
+  }
+
+  if (blocked) {
+    return { passed: true, detail: "Over-withdrawal correctly blocked by treasury guard" };
+  }
+  return { passed: false, detail: "Over-withdrawal was NOT blocked — treasury guard failed" };
+}
+
+// ── T12: Circuit breaker halts trading ───────────────────────────────────────
+
+async function test12(ctx: SharedContext, m: MarketContext): Promise<TestResult> {
+  // Place a resting order first
+  const agent = await freshAgent(ctx);
+  const atas = await atasFor(ctx, agent, m);
+
+  const bidIx = buildPlaceOrderIx(
+    orderParams(ctx, agent, m, atas, 0, 30, DEFAULT_MINT_QUANTITY / 20n, 0),
+  );
+  await sendTx(ctx.connection, new Transaction().add(bidIx), [agent]);
+
+  // Fire circuit breaker with this market
+  const cbIx = buildCircuitBreakerIx({
+    admin: ctx.admin.publicKey,
+    config: ctx.configPda,
+    marketBookPairs: [{ market: m.market, orderBook: m.orderBook }],
+  });
+  await sendTx(ctx.connection, new Transaction().add(cbIx), [ctx.admin]);
+
+  // Verify market is paused
+  const state = await readMarketState(ctx.connection, m.market);
+  if (!state || !state.isPaused) {
+    return { passed: false, detail: "Market not paused after circuit breaker" };
+  }
+
+  // Verify order was cancelled (book should be empty)
+  const orders = await readBook(ctx, m);
+  const myOrders = orders.filter((o) => o.owner.equals(agent.publicKey));
+
+  // Unpause for subsequent tests
+  const unpauseIx = buildUnpauseIx({
+    admin: ctx.admin.publicKey,
+    config: ctx.configPda,
+    market: m.market,
+  });
+  await sendTx(ctx.connection, new Transaction().add(unpauseIx), [ctx.admin]);
+
+  if (myOrders.length === 0) {
+    return { passed: true, detail: "Circuit breaker paused market and cancelled orders" };
+  }
+  return { passed: false, detail: `${myOrders.length} orders still active after circuit breaker` };
+}
+
+// ── T13: Update config ───────────────────────────────────────────────────────
+
+async function test13(ctx: SharedContext, m: MarketContext): Promise<TestResult> {
+  // Update staleness threshold to a new value
+  const updateIx = buildUpdateConfigIx({
+    admin: ctx.admin.publicKey,
+    config: ctx.configPda,
+    stalenessThreshold: new BN(600),
+  });
+  await sendTx(ctx.connection, new Transaction().add(updateIx), [ctx.admin]);
+
+  // Restore original value
+  const restoreIx = buildUpdateConfigIx({
+    admin: ctx.admin.publicKey,
+    config: ctx.configPda,
+    stalenessThreshold: new BN(300),
+  });
+  await sendTx(ctx.connection, new Transaction().add(restoreIx), [ctx.admin]);
+
+  return { passed: true, detail: "Config staleness updated to 600 and restored to 300" };
+}
+
 // ── Main runner ──────────────────────────────────────────────────────────────
 
 interface TestDef {
@@ -678,6 +856,11 @@ const TESTS: TestDef[] = [
   { name: "Sell No locks No tokens, cancel returns them", fn: test6 },
   { name: "Admin override flips outcome", fn: test8 },
   { name: "Winner redeems after settlement", fn: test7 },
+  { name: "Transfer admin two-step", fn: test9 },
+  { name: "Withdraw fees", fn: test10 },
+  { name: "Treasury free-balance guard", fn: test11 },
+  { name: "Circuit breaker halts trading", fn: test12 },
+  { name: "Update config", fn: test13 },
 ];
 
 export async function runAct2(ctx: SharedContext): Promise<ActResult> {

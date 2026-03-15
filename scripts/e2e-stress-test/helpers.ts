@@ -168,43 +168,61 @@ export interface ParsedOrder {
 }
 
 /**
- * Parse the on-chain OrderBook binary data to find active orders.
+ * Parse the on-chain OrderBook sparse binary data to find active orders.
  *
- * Layout (after 8-byte Anchor discriminator):
- *   market:        32 bytes
- *   next_order_id: 8 bytes
- *   levels[99]:    each = 32 × OrderSlot(80 bytes) + count(1) + padding(7) = 2568 bytes
- *   bump:          1 byte
- *   padding:       7 bytes
+ * Sparse layout — Header (168 bytes):
+ *   [0..8]     discriminator
+ *   [8..40]    market: Pubkey
+ *   [40..48]   next_order_id: u64
+ *   [48..147]  price_map: [u8; 99]   — price → level_index (0xFF = unallocated)
+ *   [147]      level_count: u8
+ *   [148]      max_levels: u8
+ *   [149]      orders_per_level: u8
+ *   [150]      bump: u8
+ *   [151..168] _reserved
  *
- * OrderSlot (80 bytes):
+ * Level entry (8 + orders_per_level × 112 bytes):
+ *   [0]   price: u8
+ *   [1]   count: u8       — active orders in this level
+ *   [2..8] _padding
+ *   [8..] orders: [OrderSlot; orders_per_level]
+ *
+ * OrderSlot (112 bytes):
  *   owner(32) + order_id(8) + quantity(8) + original_quantity(8)
  *   + side(1) + _side_padding(7) + timestamp(8) + is_active(1) + _padding(7)
+ *   + rent_depositor(32)
  */
 export function parseOrderBook(data: Buffer): ParsedOrder[] {
   const orders: ParsedOrder[] = [];
-  const HEADER = 8 + 32 + 8; // disc + market + next_order_id = 48
-  const SLOT_SIZE = 80;
-  const SLOTS_PER_LEVEL = 32;
-  const LEVEL_SIZE = SLOTS_PER_LEVEL * SLOT_SIZE + 1 + 7; // 2568
+  const HEADER_SIZE = 168;
+  const SLOT_SIZE = 112;
+  const PRICE_MAP_OFFSET = 48;
+  const PRICE_MAP_LEN = 99;
+  const UNALLOCATED = 0xff;
 
-  for (let lvl = 0; lvl < 99; lvl++) {
-    const levelOffset = HEADER + lvl * LEVEL_SIZE;
-    const count = data[levelOffset + SLOTS_PER_LEVEL * SLOT_SIZE];
+  const ordersPerLevel = data[149];
+  const entrySize = 8 + ordersPerLevel * SLOT_SIZE; // level header + slots
+
+  for (let priceIdx = 0; priceIdx < PRICE_MAP_LEN; priceIdx++) {
+    const levelIdx = data[PRICE_MAP_OFFSET + priceIdx];
+    if (levelIdx === UNALLOCATED) continue;
+
+    const levelOffset = HEADER_SIZE + levelIdx * entrySize;
+    const count = data[levelOffset + 1];
     if (count === 0) continue;
 
-    for (let s = 0; s < SLOTS_PER_LEVEL; s++) {
-      const slotOffset = levelOffset + s * SLOT_SIZE;
-      const isActive = data[slotOffset + 32 + 8 + 8 + 8 + 1 + 7 + 8] !== 0; // offset 72
+    for (let s = 0; s < ordersPerLevel; s++) {
+      const slotOffset = levelOffset + 8 + s * SLOT_SIZE;
+      const isActive = data[slotOffset + 72] !== 0;
       if (!isActive) continue;
 
       const owner = new PublicKey(data.subarray(slotOffset, slotOffset + 32));
       const orderId = data.readBigUInt64LE(slotOffset + 32);
       const quantity = data.readBigUInt64LE(slotOffset + 40);
-      const side = data[slotOffset + 56]; // offset 32+8+8+8 = 56
+      const side = data[slotOffset + 56];
 
       orders.push({
-        priceLevel: lvl + 1,
+        priceLevel: priceIdx + 1,
         slotIndex: s,
         owner,
         orderId,

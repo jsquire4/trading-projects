@@ -45,6 +45,8 @@ export interface AgentState {
   positionsOpened: number;
   positionsClosed: number;
   errors: ErrorEntry[];
+  rentDeposited: bigint;
+  rentReturned: bigint;
 }
 
 // ── MarketContext ───────────────────────────────────────────────────────────
@@ -149,6 +151,7 @@ export interface SharedContext {
   configPda: PublicKey;
   feeVault: PublicKey;
   treasury: PublicKey;
+  tickerRegistry: PublicKey;
   markets: MarketContext[];
   agents: AgentState[];
   config: RunConfig;

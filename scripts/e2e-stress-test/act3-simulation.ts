@@ -56,6 +56,8 @@ import {
   buildCleanupMarketIx,
   buildRedeemIx,
   buildUpdatePriceIx,
+  buildCircuitBreakerIx,
+  buildUnpauseIx,
   padTicker,
 } from "../../tests/helpers/instructions";
 import {
@@ -563,6 +565,61 @@ async function closeDay(
   return closed;
 }
 
+// ── Circuit breaker injection ─────────────────────────────────────────────
+
+async function injectCircuitBreaker(
+  ctx: SharedContext,
+  dayMarkets: MarketContext[],
+  errors: ErrorEntry[],
+): Promise<boolean> {
+  if (dayMarkets.length === 0) return false;
+
+  console.log("    ⚡ Injecting circuit breaker...");
+
+  // Build market+orderBook pairs for remaining_accounts
+  const marketBookPairs = dayMarkets.map((m) => ({
+    market: m.market,
+    orderBook: m.orderBook,
+  }));
+
+  try {
+    const cbIx = buildCircuitBreakerIx({
+      admin: ctx.admin.publicKey,
+      config: ctx.configPda,
+      marketBookPairs,
+    });
+    const tx = new Transaction().add(cbIx);
+    await sendTx(ctx.connection, tx, [ctx.admin]);
+    ctx.metrics.instructionTypes.add("circuit_breaker");
+
+    // Unpause all markets to resume trading
+    for (const m of dayMarkets) {
+      try {
+        const unpauseIx = buildUnpauseIx({
+          admin: ctx.admin.publicKey,
+          config: ctx.configPda,
+          market: m.market,
+        });
+        await sendTx(ctx.connection, new Transaction().add(unpauseIx), [ctx.admin]);
+      } catch {
+        // May already be unpaused
+      }
+    }
+
+    console.log(`    ⚡ Circuit breaker fired on ${dayMarkets.length} markets, all unpaused`);
+    return true;
+  } catch (e: any) {
+    errors.push({
+      timestamp: Date.now(),
+      agentId: -1,
+      instruction: "circuit_breaker",
+      message: e.message,
+    });
+    console.log(`    ⚡ Circuit breaker failed: ${e.message?.slice(0, 100)}`);
+    return false;
+  }
+}
+
 // ── Main simulation ────────────────────────────────────────────────────────
 
 export async function runAct3(ctx: SharedContext): Promise<ActResult> {
@@ -664,6 +721,14 @@ export async function runAct3(ctx: SharedContext): Promise<ActResult> {
     const dayOrdersPlaced = ordersAfterTrading - ordersBeforeTrading;
     console.log(`    Trading complete: ${dayOrdersPlaced} orders in ${loopIterations} agent actions`);
     details.push(`Day ${day + 1}: ${dayOrdersPlaced} orders placed during trading`);
+
+    // 5b. Circuit breaker injection on day 1 (mid-simulation stress test)
+    if (day === 1) {
+      const cbFired = await injectCircuitBreaker(ctx, dayMarkets, errors);
+      if (cbFired) {
+        details.push(`Day ${day + 1}: Circuit breaker injected and recovered`);
+      }
+    }
 
     // Collect ALL markets for this day (includes strike-creator markets added during trading)
     const allDayMarkets = ctx.markets.filter((m) => m.day === day);

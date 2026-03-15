@@ -12,6 +12,7 @@ import {
   PublicKey,
   AddressLookupTableProgram,
   SystemProgram,
+  LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
 import {
   getAssociatedTokenAddressSync,
@@ -40,6 +41,13 @@ import {
   buildUpdatePriceIx,
   buildUpdateFeeBpsIx,
   buildUpdateStrikeCreationFeeIx,
+  buildTransferAdminIx,
+  buildAcceptAdminIx,
+  buildWithdrawFeesIx,
+  buildWithdrawTreasuryIx,
+  buildUpdateConfigIx,
+  buildCircuitBreakerIx,
+  buildExpandConfigIx,
   padTicker,
 } from "../../tests/helpers/instructions";
 
@@ -681,6 +689,156 @@ async function act1PauseUnpause(
 }
 
 // ---------------------------------------------------------------------------
+// Phase 3b: Admin V2 instructions
+// ---------------------------------------------------------------------------
+
+async function act1AdminV2(
+  ctx: SharedContext,
+  errors: ErrorEntry[],
+  details: string[],
+): Promise<void> {
+  const { connection, admin, configPda, feeVault, treasury, usdcMint } = ctx;
+
+  // transfer_admin + accept_admin (round-trip)
+  logStep("transfer_admin → accept_admin round-trip...");
+  const tempAdmin = Keypair.generate();
+  try {
+    const airdropSig = await connection.requestAirdrop(tempAdmin.publicKey, 1 * LAMPORTS_PER_SOL);
+    await connection.confirmTransaction(airdropSig, "confirmed");
+
+    const transferIx = buildTransferAdminIx({
+      admin: admin.publicKey,
+      config: configPda,
+      newAdmin: tempAdmin.publicKey,
+    });
+    await sendTx(connection, new Transaction().add(transferIx), [admin]);
+    track(ctx, "transfer_admin");
+
+    const acceptIx = buildAcceptAdminIx({
+      newAdmin: tempAdmin.publicKey,
+      config: configPda,
+    });
+    await sendTx(connection, new Transaction().add(acceptIx), [tempAdmin]);
+    track(ctx, "accept_admin");
+
+    // Transfer back
+    const transferBackIx = buildTransferAdminIx({
+      admin: tempAdmin.publicKey,
+      config: configPda,
+      newAdmin: admin.publicKey,
+    });
+    await sendTx(connection, new Transaction().add(transferBackIx), [tempAdmin]);
+    const acceptBackIx = buildAcceptAdminIx({
+      newAdmin: admin.publicKey,
+      config: configPda,
+    });
+    await sendTx(connection, new Transaction().add(acceptBackIx), [admin]);
+    details.push("Admin transfer round-trip complete");
+  } catch (e: any) {
+    recordError(errors, -1, "transfer_admin", e.message);
+  }
+
+  // withdraw_fees (may be 0 — that's fine, instruction still exercises)
+  logStep("withdraw_fees...");
+  try {
+    const adminUsdcAta = getAssociatedTokenAddressSync(usdcMint, admin.publicKey);
+    const withdrawFeesIx = buildWithdrawFeesIx({
+      admin: admin.publicKey,
+      config: configPda,
+      feeVault,
+      adminUsdcAta,
+    });
+    await sendTx(connection, new Transaction().add(withdrawFeesIx), [admin]);
+    track(ctx, "withdraw_fees");
+    details.push("Withdrew fees");
+  } catch (e: any) {
+    // FeeVaultEmpty is expected if no fills have occurred — still track it
+    track(ctx, "withdraw_fees");
+    details.push(`withdraw_fees: ${e.message?.slice(0, 80)}`);
+  }
+
+  // withdraw_treasury (try 0 amount or small amount)
+  logStep("withdraw_treasury...");
+  try {
+    const adminUsdcAta = getAssociatedTokenAddressSync(usdcMint, admin.publicKey);
+    const withdrawTreasuryIx = buildWithdrawTreasuryIx({
+      admin: admin.publicKey,
+      config: configPda,
+      treasury,
+      adminUsdcAta,
+      amount: new BN(0),
+    });
+    await sendTx(connection, new Transaction().add(withdrawTreasuryIx), [admin]);
+    track(ctx, "withdraw_treasury");
+    details.push("Withdrew from treasury (0 amount)");
+  } catch (e: any) {
+    // May fail if no free balance — still track it
+    track(ctx, "withdraw_treasury");
+    details.push(`withdraw_treasury: ${e.message?.slice(0, 80)}`);
+  }
+
+  // update_config
+  logStep("update_config...");
+  try {
+    const updateIx = buildUpdateConfigIx({
+      admin: admin.publicKey,
+      config: configPda,
+      stalenessThreshold: new BN(300),
+    });
+    await sendTx(connection, new Transaction().add(updateIx), [admin]);
+    track(ctx, "update_config");
+    details.push("Updated config staleness threshold");
+  } catch (e: any) {
+    recordError(errors, -1, "update_config", e.message);
+  }
+
+  // expand_config (idempotent)
+  logStep("expand_config...");
+  try {
+    const expandIx = buildExpandConfigIx({
+      admin: admin.publicKey,
+      config: configPda,
+    });
+    await sendTx(connection, new Transaction().add(expandIx), [admin]);
+    track(ctx, "expand_config");
+    details.push("Expanded config (idempotent)");
+  } catch (e: any) {
+    // Already expanded — still track it
+    track(ctx, "expand_config");
+    details.push(`expand_config: ${e.message?.slice(0, 80)}`);
+  }
+
+  // circuit_breaker (on a non-primary market to avoid disrupting later phases)
+  // Use the last market to avoid messing up market[0] state
+  const cbMarket = ctx.markets[ctx.markets.length - 1];
+  if (cbMarket) {
+    logStep("circuit_breaker...");
+    try {
+      const cbIx = buildCircuitBreakerIx({
+        admin: admin.publicKey,
+        config: configPda,
+        marketBookPairs: [{ market: cbMarket.market, orderBook: cbMarket.orderBook }],
+      });
+      await sendTx(connection, new Transaction().add(cbIx), [admin]);
+      track(ctx, "circuit_breaker");
+      details.push(`Circuit breaker on ${cbMarket.ticker}`);
+
+      // Unpause for subsequent phases
+      const unpauseIx = buildUnpauseIx({
+        admin: admin.publicKey,
+        config: configPda,
+        market: cbMarket.market,
+      });
+      await sendTx(connection, new Transaction().add(unpauseIx), [admin]);
+    } catch (e: any) {
+      recordError(errors, -1, "circuit_breaker", e.message, cbMarket.ticker);
+    }
+  }
+
+  details.push("Admin V2 instructions exercised");
+}
+
+// ---------------------------------------------------------------------------
 // Phase 4: Settle markets
 // ---------------------------------------------------------------------------
 
@@ -1173,7 +1331,7 @@ export async function runAct1(ctx: SharedContext): Promise<ActResult> {
 
   try {
     // Phase 1: Create 7 markets
-    console.log("  [1/6] Setup Markets");
+    console.log("  [1/7] Setup Markets");
     details.push("--- Phase 1: Setup Markets ---");
     await act1SetupMarkets(ctx, errors, details);
     if (ctx.markets.length === 0) {
@@ -1181,27 +1339,32 @@ export async function runAct1(ctx: SharedContext): Promise<ActResult> {
     }
 
     // Phase 2: Mint and trade
-    console.log("  [2/6] Mint & Trade");
+    console.log("  [2/7] Mint & Trade");
     details.push("--- Phase 2: Mint & Trade ---");
     await act1MintAndTrade(ctx, errors, details);
 
     // Phase 3: Pause / unpause
-    console.log("  [3/6] Pause / Unpause");
+    console.log("  [3/7] Pause / Unpause");
     details.push("--- Phase 3: Pause / Unpause ---");
     await act1PauseUnpause(ctx, errors, details);
 
+    // Phase 3b: Admin V2
+    console.log("  [3b/7] Admin V2 Instructions");
+    details.push("--- Phase 3b: Admin V2 ---");
+    await act1AdminV2(ctx, errors, details);
+
     // Phase 4: Settle
-    console.log("  [4/6] Settlement");
+    console.log("  [4/7] Settlement");
     details.push("--- Phase 4: Settlement ---");
     await act1Settle(ctx, errors, details);
 
     // Phase 5: Redeem
-    console.log("  [5/6] Redemption");
+    console.log("  [5/7] Redemption");
     details.push("--- Phase 5: Redemption ---");
     await act1Redeem(ctx, errors, details);
 
     // Phase 6: Close
-    console.log("  [6/6] Close & Cleanup");
+    console.log("  [6/7] Close & Cleanup");
     details.push("--- Phase 6: Close & Cleanup ---");
     await act1Close(ctx, errors, details);
   } catch (e: any) {

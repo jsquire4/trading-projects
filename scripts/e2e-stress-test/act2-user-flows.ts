@@ -31,7 +31,6 @@ import {
   buildAdminOverrideIx,
   buildRedeemIx,
   buildUpdatePriceIx,
-  buildAllocateOrderBookIx,
   buildCreateStrikeMarketIx,
   buildSetMarketAltIx,
   padTicker,
@@ -46,15 +45,13 @@ import {
   findNoEscrow,
   findOrderBook,
 } from "../../services/shared/src/pda";
-import { sendTx, parseOrderBook, readMarketState, findPriceFeed, batch } from "./helpers";
+import { sendTx, parseOrderBook, readMarketState, findPriceFeed } from "./helpers";
 import type { SharedContext, ActResult, ErrorEntry, MarketContext } from "./types";
 import { BASE_PRICES } from "../../services/shared/src/synthetic-config";
 import {
   MAX_FILLS,
   CONFIDENCE_BPS_OF_PRICE,
   DEFAULT_MINT_QUANTITY,
-  ALLOC_CALLS_REQUIRED,
-  ALLOC_BATCH_SIZE,
   ALT_WARMUP_SLEEP_MS,
   USDC_PER_AGENT,
 } from "./config";
@@ -191,22 +188,6 @@ async function createAct2Market(
   const [noEscrow] = findNoEscrow(market);
   const [orderBook] = findOrderBook(market);
   const [oracleFeed] = findPriceFeed(ticker);
-
-  // Allocate order book
-  const allocIxs = [];
-  for (let i = 0; i < ALLOC_CALLS_REQUIRED; i++) {
-    allocIxs.push(buildAllocateOrderBookIx({
-      payer: admin.publicKey, orderBook, marketKey: market,
-    }));
-  }
-  const allocBatches = batch(allocIxs, ALLOC_BATCH_SIZE);
-  for (let bi = 0; bi < allocBatches.length; bi++) {
-    const tx = new Transaction();
-    allocBatches[bi].forEach((ix) => tx.add(ix));
-    await sendTx(connection, tx, [admin]);
-    process.stdout.write(`\r      alloc ${bi + 1}/${allocBatches.length}`);
-  }
-  process.stdout.write("\n");
 
   // Create strike market
   const createIx = buildCreateStrikeMarketIx({

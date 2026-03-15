@@ -13,12 +13,21 @@ import {
   findGlobalConfig,
   MOCK_ORACLE_PROGRAM_ID,
   OB_DISCRIMINATOR_SIZE,
-  OB_TOTAL_LEN,
-  OB_PRICE_LEVEL_SIZE,
-  OB_LEVELS_OFFSET,
+  HEADER_SIZE,
+  HDR_MARKET,
+  HDR_NEXT_ORDER_ID,
+  HDR_PRICE_MAP,
+  HDR_LEVEL_COUNT,
+  HDR_MAX_LEVELS,
+  HDR_ORDERS_PER_LEVEL,
+  HDR_BUMP,
+  MAX_PRICE_LEVELS,
+  PRICE_UNALLOCATED,
+  INITIAL_ORDERS_PER_LEVEL,
+  sparseBookDiscriminator,
 } from "../helpers";
 
-describe("OrderBook Initialization", () => {
+describe("OrderBook Initialization (Sparse)", () => {
   let ctx: BankrunContext;
   let usdcMint: PublicKey;
   let config: PublicKey;
@@ -32,7 +41,6 @@ describe("OrderBook Initialization", () => {
 
   before(async () => {
     ctx = await setupBankrun();
-    // Use bankrun clock instead of host wall clock for consistency
     const clock = await ctx.context.banksClient.getClock();
     MARKET_CLOSE_UNIX = Number(clock.unixTimestamp) + 86400 * 30;
     usdcMint = await createMockUsdc(ctx.context, ctx.admin);
@@ -54,46 +62,62 @@ describe("OrderBook Initialization", () => {
     );
   });
 
-  it("creates order book with correct size", async () => {
+  it("creates sparse order book with header-only size (168 bytes)", async () => {
     const acctInfo = await ctx.context.banksClient.getAccount(marketAccounts.orderBook);
     expect(acctInfo).to.not.be.null;
     const data = Buffer.from(acctInfo!.data);
-    expect(data.length).to.equal(OB_DISCRIMINATOR_SIZE + OB_TOTAL_LEN);
+    expect(data.length).to.equal(HEADER_SIZE);
+  });
+
+  it("has correct discriminator", async () => {
+    const acctInfo = await ctx.context.banksClient.getAccount(marketAccounts.orderBook);
+    const data = Buffer.from(acctInfo!.data);
+    const disc = sparseBookDiscriminator();
+    expect(data.subarray(0, OB_DISCRIMINATOR_SIZE).equals(disc)).to.be.true;
   });
 
   it("initializes next_order_id to 0", async () => {
     const acctInfo = await ctx.context.banksClient.getAccount(marketAccounts.orderBook);
-    expect(acctInfo).to.not.be.null;
     const data = Buffer.from(acctInfo!.data);
-
-    // next_order_id is at offset 8 (disc) + 32 (market) = 40
-    const nextOrderId = new BN(data.subarray(40, 48), "le");
+    const nextOrderId = new BN(data.subarray(HDR_NEXT_ORDER_ID, HDR_NEXT_ORDER_ID + 8), "le");
     expect(nextOrderId.toNumber()).to.equal(0);
   });
 
-  it("initializes all 99 price levels as empty", async () => {
+  it("initializes all 99 price_map entries as unallocated (0xFF)", async () => {
     const acctInfo = await ctx.context.banksClient.getAccount(marketAccounts.orderBook);
-    expect(acctInfo).to.not.be.null;
     const data = Buffer.from(acctInfo!.data);
-
-    // Spot-check levels 0, 49 (middle), and 98 (last)
-    const levelsToCheck = [0, 49, 98];
-    for (const levelIdx of levelsToCheck) {
-      // count byte is at the end of the OrderSlot array within each PriceLevel
-      // offset = OB_LEVELS_OFFSET + levelIdx * OB_PRICE_LEVEL_SIZE + 32*80
-      const countOffset = OB_LEVELS_OFFSET + levelIdx * OB_PRICE_LEVEL_SIZE + 32 * 80;
-      const count = data[countOffset];
-      expect(count, `level ${levelIdx} count should be 0`).to.equal(0);
+    for (let i = 0; i < MAX_PRICE_LEVELS; i++) {
+      expect(data[HDR_PRICE_MAP + i], `price_map[${i}] should be 0xFF`).to.equal(PRICE_UNALLOCATED);
     }
   });
 
-  it("stores market pubkey in order book", async () => {
+  it("initializes level_count and max_levels to 0", async () => {
     const acctInfo = await ctx.context.banksClient.getAccount(marketAccounts.orderBook);
-    expect(acctInfo).to.not.be.null;
     const data = Buffer.from(acctInfo!.data);
+    expect(data[HDR_LEVEL_COUNT]).to.equal(0);
+    expect(data[HDR_MAX_LEVELS]).to.equal(0);
+  });
 
-    // market pubkey: bytes [8..40] (after discriminator)
-    const storedMarket = new PublicKey(data.subarray(8, 40));
+  it("sets orders_per_level to INITIAL_ORDERS_PER_LEVEL (4)", async () => {
+    const acctInfo = await ctx.context.banksClient.getAccount(marketAccounts.orderBook);
+    const data = Buffer.from(acctInfo!.data);
+    expect(data[HDR_ORDERS_PER_LEVEL]).to.equal(INITIAL_ORDERS_PER_LEVEL);
+  });
+
+  it("stores market pubkey in order book header", async () => {
+    const acctInfo = await ctx.context.banksClient.getAccount(marketAccounts.orderBook);
+    const data = Buffer.from(acctInfo!.data);
+    const storedMarket = new PublicKey(data.subarray(HDR_MARKET, HDR_MARKET + 32));
     expect(storedMarket.toBase58()).to.equal(marketAccounts.market.toBase58());
+  });
+
+  it("stores correct bump in header", async () => {
+    const acctInfo = await ctx.context.banksClient.getAccount(marketAccounts.orderBook);
+    const data = Buffer.from(acctInfo!.data);
+    const [, expectedBump] = PublicKey.findProgramAddressSync(
+      [Buffer.from("order_book"), marketAccounts.market.toBuffer()],
+      new PublicKey("7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth"),
+    );
+    expect(data[HDR_BUMP]).to.equal(expectedBump);
   });
 });

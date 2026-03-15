@@ -14,6 +14,103 @@ export type Meridian = {
   },
   "instructions": [
     {
+      "name": "acceptAdmin",
+      "discriminator": [
+        112,
+        42,
+        45,
+        90,
+        116,
+        181,
+        13,
+        170
+      ],
+      "accounts": [
+        {
+          "name": "newAdmin",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "addTicker",
+      "discriminator": [
+        142,
+        86,
+        252,
+        18,
+        144,
+        244,
+        58,
+        127
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config"
+        },
+        {
+          "name": "tickerRegistry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  99,
+                  107,
+                  101,
+                  114,
+                  115
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "ticker",
+          "type": {
+            "array": [
+              "u8",
+              8
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "adminOverrideSettlement",
       "discriminator": [
         250,
@@ -88,43 +185,6 @@ export type Meridian = {
         {
           "name": "settlementPrice",
           "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "allocateOrderBook",
-      "discriminator": [
-        47,
-        22,
-        106,
-        153,
-        238,
-        112,
-        183,
-        107
-      ],
-      "accounts": [
-        {
-          "name": "payer",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "orderBook",
-          "docs": [
-            "Address verified in handler against derived PDA seeds."
-          ],
-          "writable": true
-        },
-        {
-          "name": "systemProgram",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "marketKey",
-          "type": "pubkey"
         }
       ]
     },
@@ -231,6 +291,33 @@ export type Meridian = {
       ]
     },
     {
+      "name": "circuitBreaker",
+      "discriminator": [
+        213,
+        108,
+        166,
+        94,
+        23,
+        191,
+        49,
+        204
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "cleanupMarket",
       "discriminator": [
         124,
@@ -305,6 +392,7 @@ export type Meridian = {
         },
         {
           "name": "config",
+          "writable": true,
           "relations": [
             "market"
           ]
@@ -474,6 +562,67 @@ export type Meridian = {
       ]
     },
     {
+      "name": "crankRedeem",
+      "discriminator": [
+        140,
+        55,
+        201,
+        8,
+        210,
+        41,
+        220,
+        213
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "yesMint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "noMint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "usdcVault",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "batchSize",
+          "type": "u8"
+        }
+      ]
+    },
+    {
       "name": "createStrikeMarket",
       "discriminator": [
         21,
@@ -487,12 +636,13 @@ export type Meridian = {
       ],
       "accounts": [
         {
-          "name": "admin",
+          "name": "creator",
+          "docs": [
+            "Market creator — can be anyone (admin or regular user).",
+            "Non-admin creators pay a strike_creation_fee if configured."
+          ],
           "writable": true,
-          "signer": true,
-          "relations": [
-            "config"
-          ]
+          "signer": true
         },
         {
           "name": "config"
@@ -690,40 +840,40 @@ export type Meridian = {
         {
           "name": "orderBook",
           "docs": [
-            "OrderBook — ZeroCopy, pre-allocated by client due to 10KB CPI size limit.",
-            "Client must create this PDA (owned by program, zeroed, correct space)",
-            "before calling create_strike_market."
+            "Address verified via PDA derivation in handler."
           ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  111,
-                  114,
-                  100,
-                  101,
-                  114,
-                  95,
-                  98,
-                  111,
-                  111,
-                  107
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "market"
-              }
-            ]
-          }
+          "writable": true
         },
         {
           "name": "oracleFeed"
         },
         {
           "name": "usdcMint"
+        },
+        {
+          "name": "creatorUsdcAta",
+          "docs": [
+            "Creator's USDC ATA — fee is deducted from here for non-admin creators.",
+            "Optional: only required when creator != admin && strike_creation_fee > 0."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "feeVault",
+          "docs": [
+            "Fee vault — receives strike creation fees."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "tickerRegistry",
+          "docs": [
+            "TickerRegistry — validates ticker is active.",
+            "Optional for backward compat: if not provided, falls back to GlobalConfig.tickers."
+          ],
+          "optional": true
         },
         {
           "name": "tokenProgram",
@@ -765,6 +915,109 @@ export type Meridian = {
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "deactivateTicker",
+      "discriminator": [
+        219,
+        89,
+        221,
+        0,
+        201,
+        211,
+        3,
+        98
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config"
+        },
+        {
+          "name": "tickerRegistry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  99,
+                  107,
+                  101,
+                  114,
+                  115
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "ticker",
+          "type": {
+            "array": [
+              "u8",
+              8
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "expandConfig",
+      "discriminator": [
+        120,
+        201,
+        195,
+        128,
+        35,
+        202,
+        73,
+        161
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "docs": [
+            "is larger than the v1 account data. Validated manually: owner, seeds, admin field."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
     },
     {
       "name": "initializeConfig",
@@ -834,6 +1087,31 @@ export type Meridian = {
           }
         },
         {
+          "name": "feeVault",
+          "docs": [
+            "Fee vault USDC account owned by config PDA — receives protocol fees from fills"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  101,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "oracleProgram"
         },
         {
@@ -885,6 +1163,57 @@ export type Meridian = {
           "type": "u8"
         }
       ]
+    },
+    {
+      "name": "initializeTickerRegistry",
+      "discriminator": [
+        68,
+        157,
+        35,
+        239,
+        207,
+        29,
+        47,
+        22
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config"
+        },
+        {
+          "name": "tickerRegistry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  99,
+                  107,
+                  101,
+                  114,
+                  115
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
     },
     {
       "name": "mintPair",
@@ -1304,6 +1633,31 @@ export type Meridian = {
           "writable": true
         },
         {
+          "name": "feeVault",
+          "docs": [
+            "Fee vault — collects protocol fees from fills"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  101,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "tokenProgram",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -1497,6 +1851,38 @@ export type Meridian = {
       "args": []
     },
     {
+      "name": "transferAdmin",
+      "discriminator": [
+        42,
+        242,
+        66,
+        106,
+        228,
+        10,
+        111,
+        156
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "newAdmin",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
       "name": "treasuryRedeem",
       "discriminator": [
         154,
@@ -1516,6 +1902,7 @@ export type Meridian = {
         },
         {
           "name": "config",
+          "writable": true,
           "relations": [
             "market"
           ]
@@ -1631,6 +2018,280 @@ export type Meridian = {
           }
         }
       ]
+    },
+    {
+      "name": "updateConfig",
+      "discriminator": [
+        29,
+        158,
+        252,
+        191,
+        10,
+        83,
+        219,
+        99
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "stalenessThreshold",
+          "type": {
+            "option": "u64"
+          }
+        },
+        {
+          "name": "settlementStaleness",
+          "type": {
+            "option": "u64"
+          }
+        },
+        {
+          "name": "confidenceBps",
+          "type": {
+            "option": "u64"
+          }
+        },
+        {
+          "name": "operatingReserve",
+          "type": {
+            "option": "u64"
+          }
+        },
+        {
+          "name": "settlementBlackoutMinutes",
+          "type": {
+            "option": "u16"
+          }
+        }
+      ]
+    },
+    {
+      "name": "updateFeeBps",
+      "discriminator": [
+        43,
+        158,
+        104,
+        51,
+        236,
+        96,
+        178,
+        195
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "newFeeBps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "updateStrikeCreationFee",
+      "discriminator": [
+        206,
+        218,
+        90,
+        67,
+        214,
+        245,
+        93,
+        181
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "newFee",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "withdrawFees",
+      "discriminator": [
+        198,
+        212,
+        171,
+        109,
+        144,
+        215,
+        174,
+        89
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config"
+        },
+        {
+          "name": "feeVault",
+          "docs": [
+            "Fee vault USDC account (PDA-owned)"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  101,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "adminUsdcAta",
+          "docs": [
+            "Admin's USDC ATA to receive fees"
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "withdrawTreasury",
+      "discriminator": [
+        40,
+        63,
+        122,
+        158,
+        144,
+        216,
+        83,
+        96
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config"
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Treasury USDC account (config PDA authority)"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "adminUsdcAta",
+          "docs": [
+            "Admin's USDC ATA to receive surplus"
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
     }
   ],
   "accounts": [
@@ -1648,19 +2309,6 @@ export type Meridian = {
       ]
     },
     {
-      "name": "orderBook",
-      "discriminator": [
-        55,
-        230,
-        125,
-        218,
-        149,
-        39,
-        65,
-        248
-      ]
-    },
-    {
       "name": "strikeMarket",
       "discriminator": [
         109,
@@ -1671,6 +2319,19 @@ export type Meridian = {
         219,
         99,
         7
+      ]
+    },
+    {
+      "name": "tickerRegistry",
+      "discriminator": [
+        179,
+        120,
+        101,
+        250,
+        243,
+        117,
+        178,
+        237
       ]
     }
   ],
@@ -1686,6 +2347,19 @@ export type Meridian = {
         69,
         0,
         178
+      ]
+    },
+    {
+      "name": "crankRedeemEvent",
+      "discriminator": [
+        177,
+        221,
+        43,
+        194,
+        105,
+        216,
+        144,
+        194
       ]
     },
     {
@@ -2060,6 +2734,126 @@ export type Meridian = {
       "code": 6120,
       "name": "altAlreadySet",
       "msg": "Market ALT address has already been set"
+    },
+    {
+      "code": 6130,
+      "name": "feeBpsOutOfRange",
+      "msg": "Fee basis points exceeds maximum (1000 = 10%)"
+    },
+    {
+      "code": 6131,
+      "name": "feeTransferFailed",
+      "msg": "Fee vault CPI transfer failed"
+    },
+    {
+      "code": 6140,
+      "name": "crankRedeemOverrideActive",
+      "msg": "Redemption blocked — override window still active"
+    },
+    {
+      "code": 6141,
+      "name": "crankRedeemEmpty",
+      "msg": "No tokens were redeemed in this batch"
+    },
+    {
+      "code": 6150,
+      "name": "noPendingAdmin",
+      "msg": "No pending admin transfer to accept"
+    },
+    {
+      "code": 6151,
+      "name": "notPendingAdmin",
+      "msg": "Signer does not match pending admin"
+    },
+    {
+      "code": 6152,
+      "name": "withdrawalExceedsAvailable",
+      "msg": "Withdrawal exceeds available balance (balance - obligations - reserve)"
+    },
+    {
+      "code": 6153,
+      "name": "tickerAlreadyExists",
+      "msg": "Ticker already exists in the registry"
+    },
+    {
+      "code": 6154,
+      "name": "tickerNotFound",
+      "msg": "Ticker not found in the registry"
+    },
+    {
+      "code": 6155,
+      "name": "tickerDeactivated",
+      "msg": "Ticker has been deactivated"
+    },
+    {
+      "code": 6156,
+      "name": "configAlreadyExpanded",
+      "msg": "GlobalConfig already expanded to v2"
+    },
+    {
+      "code": 6157,
+      "name": "pythValidationRequired",
+      "msg": "Invalid oracle type for Pyth feed validation"
+    },
+    {
+      "code": 6158,
+      "name": "invalidPythFeed",
+      "msg": "Pyth price account is not valid or has no recent data"
+    },
+    {
+      "code": 6159,
+      "name": "unsettledMarketsExist",
+      "msg": "Cannot switch to Mock oracle while unsettled markets exist"
+    },
+    {
+      "code": 6160,
+      "name": "invalidOperatingReserve",
+      "msg": "Invalid operating reserve value"
+    },
+    {
+      "code": 6161,
+      "name": "invalidBlackoutMinutes",
+      "msg": "Settlement blackout must be 0-60 minutes"
+    },
+    {
+      "code": 6162,
+      "name": "insufficientTreasuryRent",
+      "msg": "Treasury has insufficient SOL for rent"
+    },
+    {
+      "code": 6163,
+      "name": "mockOracleAdminRequired",
+      "msg": "Admin signer required when oracle_type is Mock"
+    },
+    {
+      "code": 6170,
+      "name": "orderBookTooSmall",
+      "msg": "Order book account data is too small for header"
+    },
+    {
+      "code": 6171,
+      "name": "orderBookDiscriminatorMismatch",
+      "msg": "Order book discriminator mismatch"
+    },
+    {
+      "code": 6172,
+      "name": "insufficientRentDeposit",
+      "msg": "Insufficient SOL for order book rent deposit"
+    },
+    {
+      "code": 6173,
+      "name": "maxLevelsReached",
+      "msg": "Order book has reached maximum level capacity"
+    },
+    {
+      "code": 6174,
+      "name": "maxSlotsReached",
+      "msg": "Cannot grow orders_per_level beyond 32"
+    },
+    {
+      "code": 6175,
+      "name": "orderBookAlreadyInitialized",
+      "msg": "Order book already initialized"
     }
   ],
   "types": [
@@ -2075,6 +2869,26 @@ export type Meridian = {
           {
             "name": "cancelledCount",
             "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "crankRedeemEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "redeemedCount",
+            "type": "u32"
+          },
+          {
+            "name": "totalUsdcRedeemed",
+            "type": "u64"
           }
         ]
       }
@@ -2132,6 +2946,13 @@ export type Meridian = {
           {
             "name": "timestamp",
             "type": "i64"
+          },
+          {
+            "name": "fee",
+            "docs": [
+              "Protocol fee deducted from USDC flow on this fill"
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -2200,7 +3021,7 @@ export type Meridian = {
           {
             "name": "tickers",
             "docs": [
-              "Supported tickers (7 MAG7, padded to 8 bytes each)"
+              "Supported tickers (7 MAG7, padded to 8 bytes each) — legacy, use TickerRegistry"
             ],
             "type": {
               "array": [
@@ -2217,7 +3038,7 @@ export type Meridian = {
           {
             "name": "tickerCount",
             "docs": [
-              "Number of active tickers"
+              "Number of active tickers — legacy, use TickerRegistry"
             ],
             "type": "u8"
           },
@@ -2227,6 +3048,13 @@ export type Meridian = {
               "PDA bump"
             ],
             "type": "u8"
+          },
+          {
+            "name": "feeBps",
+            "docs": [
+              "Protocol fee in basis points (max 1000 = 10%), applied to both sides of every fill"
+            ],
+            "type": "u16"
           },
           {
             "name": "padding",
@@ -2236,211 +3064,54 @@ export type Meridian = {
             "type": {
               "array": [
                 "u8",
-                4
+                2
               ]
             }
-          }
-        ]
-      }
-    },
-    {
-      "name": "orderBook",
-      "docs": [
-        "The full order book — one per market. ZeroCopy for efficient on-chain access.",
-        "",
-        "bytemuck requires manual Pod/Zeroable impls for arrays > 64 elements."
-      ],
-      "serialization": "bytemuckunsafe",
-      "repr": {
-        "kind": "c"
-      },
-      "type": {
-        "kind": "struct",
-        "fields": [
+          },
           {
-            "name": "market",
+            "name": "strikeCreationFee",
             "docs": [
-              "Parent market"
+              "Fee in USDC lamports charged to non-admin users creating strike markets"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "pendingAdmin",
+            "docs": [
+              "Proposed new admin (two-step transfer). Pubkey::default() = no pending transfer."
             ],
             "type": "pubkey"
           },
           {
-            "name": "nextOrderId",
+            "name": "operatingReserve",
             "docs": [
-              "Monotonically incrementing order ID counter"
+              "Admin-configurable SOL reserve for next-day market creation float"
             ],
             "type": "u64"
           },
           {
-            "name": "levels",
+            "name": "obligations",
             "docs": [
-              "99 price levels (index 0 = price 1, index 98 = price 99)"
-            ],
-            "type": {
-              "array": [
-                {
-                  "defined": {
-                    "name": "priceLevel"
-                  }
-                },
-                99
-              ]
-            }
-          },
-          {
-            "name": "bump",
-            "docs": [
-              "PDA bump"
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "padding",
-            "docs": [
-              "Trailing alignment padding"
-            ],
-            "type": {
-              "array": [
-                "u8",
-                7
-              ]
-            }
-          }
-        ]
-      }
-    },
-    {
-      "name": "orderSlot",
-      "docs": [
-        "A single order slot in the order book"
-      ],
-      "serialization": "bytemuck",
-      "repr": {
-        "kind": "c"
-      },
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "owner",
-            "docs": [
-              "Order placer"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "orderId",
-            "docs": [
-              "Unique ID from next_order_id"
+              "Total USDC obligations owed to users from settled markets"
             ],
             "type": "u64"
           },
           {
-            "name": "quantity",
+            "name": "settlementBlackoutMinutes",
             "docs": [
-              "Remaining quantity (token lamports)"
+              "Settlement blackout window in minutes (0 = no blackout)"
             ],
-            "type": "u64"
+            "type": "u16"
           },
           {
-            "name": "originalQuantity",
+            "name": "padding2",
             "docs": [
-              "Original quantity (for fill tracking)"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "side",
-            "docs": [
-              "0=USDC bid (Buy Yes), 1=Yes ask (Sell Yes), 2=No-backed bid (Sell No)"
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "sidePadding",
-            "docs": [
-              "Padding for alignment before i64 timestamp"
+              "Padding for 8-byte alignment"
             ],
             "type": {
               "array": [
                 "u8",
-                7
-              ]
-            }
-          },
-          {
-            "name": "timestamp",
-            "docs": [
-              "Clock::get() at placement"
-            ],
-            "type": "i64"
-          },
-          {
-            "name": "isActive",
-            "docs": [
-              "0 = slot is empty/cancelled, 1 = active"
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "padding",
-            "docs": [
-              "Trailing alignment padding"
-            ],
-            "type": {
-              "array": [
-                "u8",
-                7
-              ]
-            }
-          }
-        ]
-      }
-    },
-    {
-      "name": "priceLevel",
-      "docs": [
-        "A price level containing up to MAX_ORDERS_PER_LEVEL orders"
-      ],
-      "serialization": "bytemuck",
-      "repr": {
-        "kind": "c"
-      },
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "orders",
-            "docs": [
-              "Order slots at this price"
-            ],
-            "type": {
-              "array": [
-                {
-                  "defined": {
-                    "name": "orderSlot"
-                  }
-                },
-                16
-              ]
-            }
-          },
-          {
-            "name": "count",
-            "docs": [
-              "Number of active orders at this level"
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "padding",
-            "docs": [
-              "Trailing alignment padding"
-            ],
-            "type": {
-              "array": [
-                "u8",
-                7
+                6
               ]
             }
           }
@@ -2682,6 +3353,104 @@ export type Meridian = {
                 "u8",
                 2
               ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "tickerEntry",
+      "docs": [
+        "A single entry in the TickerRegistry.",
+        "48 bytes per entry (8 ticker + 1 is_active + 32 pyth_feed + 7 padding)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "ticker",
+            "docs": [
+              "Ticker symbol, null-padded to 8 bytes (e.g., b\"AAPL\\0\\0\\0\\0\")"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                8
+              ]
+            }
+          },
+          {
+            "name": "isActive",
+            "docs": [
+              "Whether this ticker is active (admin can deactivate for moderation)"
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "pythFeed",
+            "docs": [
+              "Pyth price feed account address (Pubkey::default() when oracle_type == Mock)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "padding",
+            "docs": [
+              "Reserved padding for alignment"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                7
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "tickerRegistry",
+      "docs": [
+        "Dynamic ticker registry PDA. Grows via realloc as tickers are added.",
+        "",
+        "Account layout:",
+        "8 (discriminator) + 1 (bump) + 7 (padding) + N * 48 (entries)",
+        "",
+        "Seeds: [\"tickers\"]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "padding",
+            "docs": [
+              "Reserved padding"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                7
+              ]
+            }
+          },
+          {
+            "name": "entries",
+            "docs": [
+              "Dynamic list of ticker entries"
+            ],
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "tickerEntry"
+                }
+              }
             }
           }
         ]

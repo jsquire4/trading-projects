@@ -338,22 +338,8 @@ export async function createTestMarket(
   const [noEscrow] = findNoEscrow(market);
   const [orderBook] = findOrderBook(market);
 
-  // The OrderBook is ~254KB which exceeds the 10,240 byte CPI allocation limit.
-  // Pre-allocate the PDA with correct space, lamports, and program ownership.
-  // The Rust side uses `#[account(zero)]` which expects:
-  //   - Account owned by the meridian program
-  //   - All data zeroed (Anchor sets discriminator)
-  //   - Correct space already allocated
-  const ORDER_BOOK_SPACE = 8 + 254_280; // discriminator + data
-  const orderBookRent = await context.banksClient.getRent();
-  const orderBookLamports = Number(orderBookRent.minimumBalance(BigInt(ORDER_BOOK_SPACE)));
-
-  context.setAccount(orderBook, {
-    lamports: orderBookLamports,
-    data: Buffer.alloc(ORDER_BOOK_SPACE, 0),
-    owner: MERIDIAN_PROGRAM_ID,
-    executable: false,
-  });
+  // Order book is created inline by create_strike_market (sparse layout, 168 bytes).
+  // No pre-allocation needed.
 
   const ix = buildCreateStrikeMarketIx({
     admin: admin.publicKey,

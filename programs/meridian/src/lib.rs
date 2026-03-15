@@ -10,7 +10,6 @@ pub mod instructions;
 
 // Re-export all instruction Accounts structs and their generated __client_accounts_*
 // modules at crate root — required by the Anchor #[program] macro.
-pub use instructions::allocate_order_book::*;
 pub use instructions::initialize_config::*;
 pub use instructions::create_strike_market::*;
 pub use instructions::set_market_alt::*;
@@ -92,10 +91,6 @@ pub mod meridian {
 
     pub fn mint_pair(ctx: Context<MintPair>, quantity: u64) -> Result<()> {
         instructions::mint_pair::handle_mint_pair(ctx, quantity)
-    }
-
-    pub fn allocate_order_book(ctx: Context<AllocateOrderBook>, market_key: Pubkey) -> Result<()> {
-        instructions::allocate_order_book::handle_allocate_order_book(ctx, market_key)
     }
 
     pub fn place_order<'info>(

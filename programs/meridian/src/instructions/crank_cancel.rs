@@ -24,11 +24,9 @@ pub struct CrankCancel<'info> {
     )]
     pub market: Box<Account<'info, StrikeMarket>>,
 
-    #[account(
-        mut,
-        constraint = order_book.load()?.market == market.key() @ MeridianError::InvalidMarket,
-    )]
-    pub order_book: AccountLoader<'info, OrderBook>,
+    /// CHECK: Sparse order book PDA — validated via market.order_book.
+    #[account(mut)]
+    pub order_book: UncheckedAccount<'info>,
 
     /// USDC escrow vault — refund source for USDC bids (side=0)
     #[account(mut)]
@@ -50,17 +48,27 @@ pub fn handle_crank_cancel<'info>(
     ctx: Context<'_, '_, '_, 'info, CrankCancel<'info>>,
     batch_size: u8,
 ) -> Result<()> {
-    // 1. Load order book and cancel up to batch_size (max 32) resting orders
-    let cancelled = {
-        let mut ob = ctx.accounts.order_book.load_mut()?;
-        let result = crank_cancel_batch(&mut ob, batch_size.min(32) as usize);
-        result
-    };
+    let ob_info = ctx.accounts.order_book.to_account_info();
+    require!(
+        ob_info.owner == ctx.program_id,
+        MeridianError::InvalidOrderBook
+    );
+
+    // 1. Cancel up to batch_size resting orders
+    let cancelled;
+    {
+        let mut ob_data = ob_info.try_borrow_mut_data()?;
+        require!(
+            verify_discriminator(&ob_data),
+            MeridianError::OrderBookDiscriminatorMismatch
+        );
+        cancelled = crank_cancel_batch(&mut ob_data, batch_size.min(32) as usize);
+    }
 
     // 2. If nothing to cancel, error out
     require!(!cancelled.is_empty(), MeridianError::CrankNotNeeded);
 
-    // 3. Validate we have enough remaining_accounts (one per cancelled order)
+    // 3. Validate we have enough remaining_accounts
     require!(
         ctx.remaining_accounts.len() >= cancelled.len(),
         MeridianError::InsufficientAccounts
@@ -73,18 +81,15 @@ pub fn handle_crank_cancel<'info>(
     let tp = ctx.accounts.token_program.to_account_info();
     let market_ai = ctx.accounts.market.to_account_info();
 
-    // Get the expected mints for validation
     let usdc_mint = ctx.accounts.escrow_vault.mint;
     let yes_mint = ctx.accounts.yes_escrow.mint;
     let no_mint = ctx.accounts.no_escrow.mint;
 
-    // 5. For each cancelled order, transfer escrowed assets to the corresponding remaining_account
+    // 5. Process refunds
     for (i, order) in cancelled.iter().enumerate() {
         let dest = &ctx.remaining_accounts[i];
 
-        // Validate destination is a token account owned by the original order placer
-        // with the correct mint for the order side
-        // SPL Token Account layout: mint(32) + owner(32) + amount(8) + ...
+        // Validate destination
         require!(
             dest.owner == &spl_token::ID,
             MeridianError::InvalidProgramId
@@ -95,29 +100,22 @@ pub fn handle_crank_cancel<'info>(
         let dest_owner = Pubkey::new_from_array(dest_data[32..64].try_into().unwrap());
         drop(dest_data);
 
-        require!(
-            dest_owner == order.owner,
-            MeridianError::SignerMismatch
-        );
+        require!(dest_owner == order.owner, MeridianError::SignerMismatch);
         let expected_mint = match order.side {
             SIDE_USDC_BID => usdc_mint,
             SIDE_YES_ASK => yes_mint,
             SIDE_NO_BID => no_mint,
             _ => return Err(MeridianError::InvalidSide.into()),
         };
-        require!(
-            dest_mint == expected_mint,
-            MeridianError::InvalidMint
-        );
+        require!(dest_mint == expected_mint, MeridianError::InvalidMint);
 
         match order.side {
             SIDE_USDC_BID => {
-                // USDC bid: escrowed amount = quantity * price / 100
                 let refund = order
                     .quantity
                     .checked_mul(order.price as u64)
                     .ok_or(MeridianError::ArithmeticOverflow)?
-                    / 100; // Safe: literal divisor, never zero
+                    / 100;
 
                 token::transfer(
                     CpiContext::new_with_signer(
@@ -133,7 +131,6 @@ pub fn handle_crank_cancel<'info>(
                 )?;
             }
             SIDE_YES_ASK => {
-                // Yes ask: return Yes tokens
                 token::transfer(
                     CpiContext::new_with_signer(
                         tp.clone(),
@@ -148,7 +145,6 @@ pub fn handle_crank_cancel<'info>(
                 )?;
             }
             SIDE_NO_BID => {
-                // No-backed bid: return No tokens
                 token::transfer(
                     CpiContext::new_with_signer(
                         tp.clone(),

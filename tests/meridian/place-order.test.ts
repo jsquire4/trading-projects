@@ -24,6 +24,7 @@ import {
   MERIDIAN_PROGRAM_ID,
   readOrderSlot,
   readLevelCount,
+  priceLevelIdx,
   SIDE_USDC_BID,
   SIDE_YES_ASK,
   SIDE_NO_BID,
@@ -175,17 +176,17 @@ describe("Place Order", () => {
 
     await provider.sendAndConfirm!(new Transaction().add(ix), [buyer]);
 
-    // Verify order is on the book at price level 49 (price 50 → index 49)
+    // Verify order is on the book at the sparse level for price 50
     const obAcct = await ctx.context.banksClient.getAccount(ma.orderBook);
     const obData = Buffer.from(obAcct!.data);
-    const slot = readOrderSlot(obData, 49, 0);
+    const slot = readOrderSlot(obData, priceLevelIdx(obData, 50), 0);
 
     expect(slot.isActive).to.be.true;
     expect(slot.owner.toBase58()).to.equal(buyer.publicKey.toBase58());
     expect(slot.quantity).to.equal(TEN_TOKENS);
     expect(slot.side).to.equal(SIDE_USDC_BID);
 
-    const count = readLevelCount(obData, 49);
+    const count = readLevelCount(obData, priceLevelIdx(obData, 50));
     expect(count).to.equal(1);
 
     // Verify USDC was escrowed: 10 tokens * price 50 / 100 = 5 USDC = 5_000_000 lamports
@@ -201,10 +202,10 @@ describe("Place Order", () => {
     const ix = placeOrderIx(SIDE_YES_ASK, 60, TEN_TOKENS, ORDER_TYPE_LIMIT, 10);
     await provider.sendAndConfirm!(new Transaction().add(ix), [ctx.admin]);
 
-    // Verify on book at price level 59 (price 60 → index 59)
+    // Verify on book at the sparse level for price 60
     const obAcct = await ctx.context.banksClient.getAccount(ma.orderBook);
     const obData = Buffer.from(obAcct!.data);
-    const slot = readOrderSlot(obData, 59, 0);
+    const slot = readOrderSlot(obData, priceLevelIdx(obData, 60), 0);
 
     expect(slot.isActive).to.be.true;
     expect(slot.side).to.equal(SIDE_YES_ASK);
@@ -332,7 +333,7 @@ describe("Place Order", () => {
     // Read order book to get order ID
     const obAcct = await ctx.context.banksClient.getAccount(ma.orderBook);
     const obData = Buffer.from(obAcct!.data);
-    const slot = readOrderSlot(obData, 39, 0); // price 40 → index 39
+    const slot = readOrderSlot(obData, priceLevelIdx(obData, 40), 0);
     expect(slot.isActive).to.be.true;
 
     const balBefore = await getTokenBalance(ctx, uAta);
@@ -359,11 +360,13 @@ describe("Place Order", () => {
     const balAfter = await getTokenBalance(ctx, uAta);
     expect(balAfter - balBefore).to.equal(4_000_000);
 
-    // Verify order deactivated
+    // Verify order deactivated — in sparse layout, the level is freed
+    // when the last order is cancelled, so price_map should show unallocated.
     const obAcct2 = await ctx.context.banksClient.getAccount(ma.orderBook);
     const obData2 = Buffer.from(obAcct2!.data);
-    const slot2 = readOrderSlot(obData2, 39, 0);
-    expect(slot2.isActive).to.be.false;
+    const levelAfter = priceLevelIdx(obData2, 40);
+    // Level should be freed (unallocated) since it was the only order
+    expect(levelAfter).to.equal(0xFF);
   });
 
   it("rejects cancel from non-owner", async () => {
@@ -377,10 +380,10 @@ describe("Place Order", () => {
     // Read order ID
     const obAcct = await ctx.context.banksClient.getAccount(ma.orderBook);
     const obData = Buffer.from(obAcct!.data);
-    // Price 70 → index 69, find first active slot
+    // Find first active slot at price 70
     let orderId = 0;
     for (let i = 0; i < 16; i++) {
-      const s = readOrderSlot(obData, 69, i);
+      const s = readOrderSlot(obData, priceLevelIdx(obData, 70), i);
       if (s.isActive && s.side === SIDE_YES_ASK) {
         orderId = s.orderId;
         break;
@@ -809,8 +812,8 @@ describe("FIFO Priority (timestamp-based matching)", () => {
     // Verify both orders are on the book
     const obAcct = await ctx.context.banksClient.getAccount(ma.orderBook);
     const obData = Buffer.from(obAcct!.data);
-    const slotA = readOrderSlot(obData, 49, 0); // price 50 → index 49
-    const slotB = readOrderSlot(obData, 49, 1);
+    const slotA = readOrderSlot(obData, priceLevelIdx(obData, 50), 0);
+    const slotB = readOrderSlot(obData, priceLevelIdx(obData, 50), 1);
     expect(slotA.isActive).to.be.true;
     expect(slotB.isActive).to.be.true;
     expect(slotA.owner.toBase58()).to.equal(sellerA.publicKey.toBase58());
@@ -862,8 +865,8 @@ describe("FIFO Priority (timestamp-based matching)", () => {
     const obAcct2 = await ctx.context.banksClient.getAccount(ma.orderBook);
     const obData2 = Buffer.from(obAcct2!.data);
 
-    const slotA2 = readOrderSlot(obData2, 49, 0);
-    const slotB2 = readOrderSlot(obData2, 49, 1);
+    const slotA2 = readOrderSlot(obData2, priceLevelIdx(obData2, 50), 0);
+    const slotB2 = readOrderSlot(obData2, priceLevelIdx(obData2, 50), 1);
 
     expect(slotA2.isActive).to.be.false;  // Older order filled first
     expect(slotB2.isActive).to.be.true;   // Newer order still resting
@@ -927,7 +930,6 @@ describe("FIFO Priority (timestamp-based matching)", () => {
     const clock = await ctx.context.banksClient.getClock();
 
     const PRICE = 60;
-    const LEVEL_IDX = PRICE - 1; // = 59
 
     // Place order 1 at t=4000
     ctx.context.setClock(new Clock(
@@ -1028,12 +1030,12 @@ describe("FIFO Priority (timestamp-based matching)", () => {
     // Verify all three orders placed: slots 0, 1, 2
     let obAcct = await ctx.context.banksClient.getAccount(ma2.orderBook);
     let obData = Buffer.from(obAcct!.data);
-    expect(readOrderSlot(obData, LEVEL_IDX, 0).isActive).to.be.true;
-    expect(readOrderSlot(obData, LEVEL_IDX, 1).isActive).to.be.true;
-    expect(readOrderSlot(obData, LEVEL_IDX, 2).isActive).to.be.true;
+    expect(readOrderSlot(obData, priceLevelIdx(obData, PRICE), 0).isActive).to.be.true;
+    expect(readOrderSlot(obData, priceLevelIdx(obData, PRICE), 1).isActive).to.be.true;
+    expect(readOrderSlot(obData, priceLevelIdx(obData, PRICE), 2).isActive).to.be.true;
 
     // Read order 2's orderId for cancellation
-    const order2Id = readOrderSlot(obData, LEVEL_IDX, 1).orderId;
+    const order2Id = readOrderSlot(obData, priceLevelIdx(obData, PRICE), 1).orderId;
 
     // Cancel order 2 (the middle one at t=5000), creating a slot gap
     ctx.context.setClock(new Clock(
@@ -1063,7 +1065,7 @@ describe("FIFO Priority (timestamp-based matching)", () => {
     // Verify slot 1 is now inactive (cancelled)
     obAcct = await ctx.context.banksClient.getAccount(ma2.orderBook);
     obData = Buffer.from(obAcct!.data);
-    expect(readOrderSlot(obData, LEVEL_IDX, 1).isActive).to.be.false;
+    expect(readOrderSlot(obData, priceLevelIdx(obData, PRICE), 1).isActive).to.be.false;
 
     // Place a new order from s2 at t=7000 — should take the cancelled slot (slot 1)
     ctx.context.setClock(new Clock(
@@ -1103,15 +1105,16 @@ describe("FIFO Priority (timestamp-based matching)", () => {
 
     // Find which slot the new order took (should be slot 1, the cancelled gap)
     let newSlotIdx = -1;
-    for (let i = 0; i < 32; i++) {
-      const s = readOrderSlot(obData, LEVEL_IDX, i);
+    const opl = obData[149]; // HDR_ORDERS_PER_LEVEL
+    for (let i = 0; i < opl; i++) {
+      const s = readOrderSlot(obData, priceLevelIdx(obData, PRICE), i);
       if (s.isActive && s.owner.toBase58() === s2.publicKey.toBase58()) {
         newSlotIdx = i;
         break;
       }
     }
     expect(newSlotIdx).to.be.greaterThanOrEqual(0);
-    const newSlot = readOrderSlot(obData, LEVEL_IDX, newSlotIdx);
+    const newSlot = readOrderSlot(obData, priceLevelIdx(obData, PRICE), newSlotIdx);
     expect(newSlot.timestamp).to.equal(7000);
 
     // Now create a buyer and fill exactly one order
@@ -1157,8 +1160,8 @@ describe("FIFO Priority (timestamp-based matching)", () => {
 
     // Find s1's slot by owner key (more robust than hardcoding slot 0)
     let s1SlotActive = false;
-    for (let i = 0; i < 32; i++) {
-      const s = readOrderSlot(obData, LEVEL_IDX, i);
+    for (let i = 0; i < opl; i++) {
+      const s = readOrderSlot(obData, priceLevelIdx(obData, PRICE), i);
       if (s.owner.toBase58() === s1.publicKey.toBase58()) {
         s1SlotActive = s.isActive;
         break;
@@ -1168,8 +1171,8 @@ describe("FIFO Priority (timestamp-based matching)", () => {
 
     // The new order at t=7000 (slot 1) and order 3 at t=6000 (slot 2) should still be active
     let activeOrders = 0;
-    for (let i = 0; i < 32; i++) {
-      const s = readOrderSlot(obData, LEVEL_IDX, i);
+    for (let i = 0; i < opl; i++) {
+      const s = readOrderSlot(obData, priceLevelIdx(obData, PRICE), i);
       if (s.isActive) activeOrders++;
     }
     expect(activeOrders).to.equal(2); // Two orders remaining (t=6000 and t=7000)

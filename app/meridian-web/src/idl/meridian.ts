@@ -189,43 +189,6 @@ export type Meridian = {
       ]
     },
     {
-      "name": "allocateOrderBook",
-      "discriminator": [
-        47,
-        22,
-        106,
-        153,
-        238,
-        112,
-        183,
-        107
-      ],
-      "accounts": [
-        {
-          "name": "payer",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "orderBook",
-          "docs": [
-            "Address verified in handler against derived PDA seeds."
-          ],
-          "writable": true
-        },
-        {
-          "name": "systemProgram",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "marketKey",
-          "type": "pubkey"
-        }
-      ]
-    },
-    {
       "name": "cancelOrder",
       "discriminator": [
         95,
@@ -877,34 +840,9 @@ export type Meridian = {
         {
           "name": "orderBook",
           "docs": [
-            "OrderBook — ZeroCopy, pre-allocated by client due to 10KB CPI size limit.",
-            "Client must create this PDA (owned by program, zeroed, correct space)",
-            "before calling create_strike_market."
+            "Address verified via PDA derivation in handler."
           ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  111,
-                  114,
-                  100,
-                  101,
-                  114,
-                  95,
-                  98,
-                  111,
-                  111,
-                  107
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "market"
-              }
-            ]
-          }
+          "writable": true
         },
         {
           "name": "oracleFeed"
@@ -2371,19 +2309,6 @@ export type Meridian = {
       ]
     },
     {
-      "name": "orderBook",
-      "discriminator": [
-        55,
-        230,
-        125,
-        218,
-        149,
-        39,
-        65,
-        248
-      ]
-    },
-    {
       "name": "strikeMarket",
       "discriminator": [
         109,
@@ -2899,6 +2824,36 @@ export type Meridian = {
       "code": 6163,
       "name": "mockOracleAdminRequired",
       "msg": "Admin signer required when oracle_type is Mock"
+    },
+    {
+      "code": 6170,
+      "name": "orderBookTooSmall",
+      "msg": "Order book account data is too small for header"
+    },
+    {
+      "code": 6171,
+      "name": "orderBookDiscriminatorMismatch",
+      "msg": "Order book discriminator mismatch"
+    },
+    {
+      "code": 6172,
+      "name": "insufficientRentDeposit",
+      "msg": "Insufficient SOL for order book rent deposit"
+    },
+    {
+      "code": 6173,
+      "name": "maxLevelsReached",
+      "msg": "Order book has reached maximum level capacity"
+    },
+    {
+      "code": 6174,
+      "name": "maxSlotsReached",
+      "msg": "Cannot grow orders_per_level beyond 32"
+    },
+    {
+      "code": 6175,
+      "name": "orderBookAlreadyInitialized",
+      "msg": "Order book already initialized"
     }
   ],
   "types": [
@@ -3157,210 +3112,6 @@ export type Meridian = {
               "array": [
                 "u8",
                 6
-              ]
-            }
-          }
-        ]
-      }
-    },
-    {
-      "name": "orderBook",
-      "docs": [
-        "The full order book — one per market. ZeroCopy for efficient on-chain access.",
-        "",
-        "bytemuck requires manual Pod/Zeroable impls for arrays > 64 elements."
-      ],
-      "serialization": "bytemuckunsafe",
-      "repr": {
-        "kind": "c"
-      },
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "market",
-            "docs": [
-              "Parent market"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "nextOrderId",
-            "docs": [
-              "Monotonically incrementing order ID counter"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "levels",
-            "docs": [
-              "99 price levels (index 0 = price 1, index 98 = price 99)"
-            ],
-            "type": {
-              "array": [
-                {
-                  "defined": {
-                    "name": "priceLevel"
-                  }
-                },
-                99
-              ]
-            }
-          },
-          {
-            "name": "bump",
-            "docs": [
-              "PDA bump"
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "padding",
-            "docs": [
-              "Trailing alignment padding"
-            ],
-            "type": {
-              "array": [
-                "u8",
-                7
-              ]
-            }
-          }
-        ]
-      }
-    },
-    {
-      "name": "orderSlot",
-      "docs": [
-        "A single order slot in the order book"
-      ],
-      "serialization": "bytemuck",
-      "repr": {
-        "kind": "c"
-      },
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "owner",
-            "docs": [
-              "Order placer"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "orderId",
-            "docs": [
-              "Unique ID from next_order_id"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "quantity",
-            "docs": [
-              "Remaining quantity (token lamports)"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "originalQuantity",
-            "docs": [
-              "Original quantity (for fill tracking)"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "side",
-            "docs": [
-              "0=USDC bid (Buy Yes), 1=Yes ask (Sell Yes), 2=No-backed bid (Sell No)"
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "sidePadding",
-            "docs": [
-              "Padding for alignment before i64 timestamp"
-            ],
-            "type": {
-              "array": [
-                "u8",
-                7
-              ]
-            }
-          },
-          {
-            "name": "timestamp",
-            "docs": [
-              "Clock::get() at placement"
-            ],
-            "type": "i64"
-          },
-          {
-            "name": "isActive",
-            "docs": [
-              "0 = slot is empty/cancelled, 1 = active"
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "padding",
-            "docs": [
-              "Trailing alignment padding"
-            ],
-            "type": {
-              "array": [
-                "u8",
-                7
-              ]
-            }
-          }
-        ]
-      }
-    },
-    {
-      "name": "priceLevel",
-      "docs": [
-        "A price level containing up to MAX_ORDERS_PER_LEVEL orders"
-      ],
-      "serialization": "bytemuck",
-      "repr": {
-        "kind": "c"
-      },
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "orders",
-            "docs": [
-              "Order slots at this price"
-            ],
-            "type": {
-              "array": [
-                {
-                  "defined": {
-                    "name": "orderSlot"
-                  }
-                },
-                32
-              ]
-            }
-          },
-          {
-            "name": "count",
-            "docs": [
-              "Number of active orders at this level"
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "padding",
-            "docs": [
-              "Trailing alignment padding"
-            ],
-            "type": {
-              "array": [
-                "u8",
-                7
               ]
             }
           }

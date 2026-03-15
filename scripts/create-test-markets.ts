@@ -92,9 +92,6 @@ const ADMIN_KEYPAIR_PATH = path.resolve(
   ".config/solana/id.json",
 );
 
-const ORDER_BOOK_TOTAL_SPACE = 8 + 254_280; // 254,288 bytes
-const MAX_GROWTH = 10_240;
-const BATCH_SIZE = 6;
 const QUOTE_QTY = 200; // Post 200-token orders per price level per market
 const DEFAULT_VOL = 0.35; // 35% annualized volatility for seed pricing
 const SEED_LEVELS = 3; // Seed bids/asks at 3 price levels around fair value
@@ -158,37 +155,6 @@ function deriveMarketPDAs(
     marketPda, yesMint, noMint, usdcVault, escrowVault,
     yesEscrow, noEscrow, orderBook, oracleFeed, usdcMint, configPda,
   };
-}
-
-async function allocateOrderBook(
-  connection: Connection,
-  admin: Keypair,
-  marketPda: PublicKey,
-  orderBook: PublicKey,
-): Promise<void> {
-  const existingOB = await connection.getAccountInfo(orderBook);
-  const currentLen = existingOB?.data.length ?? 0;
-  if (currentLen >= ORDER_BOOK_TOTAL_SPACE) return;
-
-  const allocDisc = anchorDiscriminator("allocate_order_book");
-  const allocData = Buffer.concat([allocDisc, marketPda.toBuffer()]);
-  const allocIx = new TransactionInstruction({
-    programId: MERIDIAN_PROGRAM_ID,
-    keys: [
-      { pubkey: admin.publicKey, isSigner: true, isWritable: true },
-      { pubkey: orderBook, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    data: allocData,
-  });
-
-  const remainingCalls = Math.ceil((ORDER_BOOK_TOTAL_SPACE - currentLen) / MAX_GROWTH);
-  for (let i = 0; i < remainingCalls; i += BATCH_SIZE) {
-    const batchCount = Math.min(BATCH_SIZE, remainingCalls - i);
-    const batchTx = new Transaction();
-    for (let j = 0; j < batchCount; j++) batchTx.add(allocIx);
-    await sendAndConfirmTransaction(connection, batchTx, [admin], { commitment: "confirmed" });
-  }
 }
 
 async function createMarket(
@@ -441,7 +407,6 @@ function toScriptMarketAddrs(addrs: MarketAddresses) {
     try {
       const existing = await connection.getAccountInfo(addrs.marketPda);
       if (!existing) {
-        await allocateOrderBook(connection, admin, addrs.marketPda, addrs.orderBook);
         await createMarket(connection, admin, spec.ticker, strikeLamports, prevCloseLamports, marketCloseUnix, addrs);
         await createAndSetAlt(connection, admin, addrs);
         created++;

@@ -1,21 +1,36 @@
 import { PublicKey } from "@solana/web3.js";
 
 // ---------------------------------------------------------------------------
-// Constants
+// Sparse Order Book layout constants
 // ---------------------------------------------------------------------------
 
-const ANCHOR_DISCRIMINATOR_SIZE = 8;
+const DISC_SIZE = 8;
 const PUBKEY_SIZE = 32;
 
-const ORDER_SLOT_SIZE = 80;
-const ORDERS_PER_LEVEL = 32;
-const PRICE_LEVEL_SIZE = 2568; // 32 * 80 + 1 + 7
-const NUM_LEVELS = 99;
+// Header byte offsets (including 8-byte Anchor discriminator)
+const HDR_MARKET = 8;           // [8..40]  Pubkey
+const HDR_NEXT_ORDER_ID = 40;   // [40..48] u64
+const HDR_PRICE_MAP = 48;       // [48..147] [u8; 99]
+const HDR_LEVEL_COUNT = 147;    // u8
+const HDR_MAX_LEVELS = 148;     // u8
+const HDR_ORDERS_PER_LEVEL = 149; // u8
+const HEADER_SIZE = 168;
 
-// Offsets within the account data (after discriminator)
-const MARKET_OFFSET = 0;
-const NEXT_ORDER_ID_OFFSET = MARKET_OFFSET + PUBKEY_SIZE; // 32
-const LEVELS_OFFSET = NEXT_ORDER_ID_OFFSET + 8; // 40
+// Level / slot sizes
+const LEVEL_HEADER_SIZE = 8;
+const ORDER_SLOT_SIZE = 112;
+
+// Slot field offsets
+const SLOT_OWNER = 0;
+const SLOT_ORDER_ID = 32;
+const SLOT_QUANTITY = 40;
+const SLOT_ORIG_QTY = 48;
+const SLOT_SIDE = 56;
+const SLOT_TIMESTAMP = 64;
+const SLOT_IS_ACTIVE = 72;
+
+const MAX_PRICE_LEVELS = 99;
+const PRICE_UNALLOCATED = 0xFF;
 
 // Side enum values
 export const Side = {
@@ -71,13 +86,13 @@ export interface DeserializedOrderBook {
 }
 
 // ---------------------------------------------------------------------------
-// Deserializer
+// Deserializer (sparse layout)
 // ---------------------------------------------------------------------------
 
 /**
- * Deserialize a raw OrderBook account buffer into active orders grouped by
- * price level. Uses DataView for direct binary reads — no Borsh or Anchor
- * deserialization overhead on a 127KB zero-copy account.
+ * Deserialize a sparse OrderBook account buffer into active orders.
+ * The sparse layout starts with a 168-byte header containing a price_map[99]
+ * that indexes into dynamically allocated levels.
  */
 export function deserializeOrderBook(buffer: Buffer): DeserializedOrderBook {
   const data = new DataView(
@@ -86,58 +101,42 @@ export function deserializeOrderBook(buffer: Buffer): DeserializedOrderBook {
     buffer.byteLength,
   );
 
-  // Skip the 8-byte Anchor discriminator
-  const base = ANCHOR_DISCRIMINATOR_SIZE;
-
-  // Market pubkey (32 bytes)
-  const marketBytes = buffer.subarray(
-    base + MARKET_OFFSET,
-    base + MARKET_OFFSET + PUBKEY_SIZE,
-  );
+  // Market pubkey (32 bytes at offset 8)
+  const marketBytes = buffer.subarray(HDR_MARKET, HDR_MARKET + PUBKEY_SIZE);
   const market = new PublicKey(marketBytes);
 
-  // next_order_id (u64 little-endian)
-  const nextOrderId = data.getBigUint64(base + NEXT_ORDER_ID_OFFSET, true);
+  // next_order_id (u64 little-endian at offset 40)
+  const nextOrderId = data.getBigUint64(HDR_NEXT_ORDER_ID, true);
 
+  const ordersPerLevel = buffer[HDR_ORDERS_PER_LEVEL];
+  const entrySize = LEVEL_HEADER_SIZE + ordersPerLevel * ORDER_SLOT_SIZE;
   const orders: ActiveOrder[] = [];
 
-  for (let level = 0; level < NUM_LEVELS; level++) {
-    const levelBase = base + LEVELS_OFFSET + level * PRICE_LEVEL_SIZE;
+  // Walk price_map to find allocated levels
+  for (let priceIdx = 0; priceIdx < MAX_PRICE_LEVELS; priceIdx++) {
+    const levelIdx = buffer[HDR_PRICE_MAP + priceIdx];
+    if (levelIdx === PRICE_UNALLOCATED) continue;
 
-    // count is a high-water-mark of ever-written slots at this level.
-    // If 0, no orders have ever been placed here — safe to skip entirely.
-    // Non-zero doesn't mean all slots are active (holey layout after cancels/fills).
-    const count = data.getUint8(levelBase + ORDERS_PER_LEVEL * ORDER_SLOT_SIZE);
-    if (count === 0) continue;
+    const levelBase = HEADER_SIZE + levelIdx * entrySize;
+    // Safety: skip if level data extends beyond buffer
+    if (levelBase + entrySize > buffer.length) continue;
 
-    // Scan ALL slots, not just 0..count — the on-chain layout is holey.
-    // Cancellations and fills deactivate slots in-place without compacting,
-    // so active orders can reside in any of the 32 slots.
-    for (let slot = 0; slot < ORDERS_PER_LEVEL; slot++) {
-      const slotBase = levelBase + slot * ORDER_SLOT_SIZE;
+    const price = priceIdx + 1; // 1-indexed
 
-      // is_active: offset 72 within OrderSlot
-      const isActive = data.getUint8(slotBase + 72);
+    // Scan all slots at this level
+    for (let s = 0; s < ordersPerLevel; s++) {
+      const slotBase = levelBase + LEVEL_HEADER_SIZE + s * ORDER_SLOT_SIZE;
+
+      const isActive = data.getUint8(slotBase + SLOT_IS_ACTIVE);
       if (!isActive) continue;
 
-      // owner: 32 bytes at offset 0
-      const ownerBytes = buffer.subarray(slotBase, slotBase + PUBKEY_SIZE);
+      const ownerBytes = buffer.subarray(slotBase + SLOT_OWNER, slotBase + SLOT_OWNER + PUBKEY_SIZE);
       const owner = new PublicKey(ownerBytes);
-
-      // order_id: u64 at offset 32
-      const orderId = data.getBigUint64(slotBase + 32, true);
-
-      // quantity: u64 at offset 40
-      const quantity = data.getBigUint64(slotBase + 40, true);
-
-      // original_quantity: u64 at offset 48
-      const originalQuantity = data.getBigUint64(slotBase + 48, true);
-
-      // side: u8 at offset 56
-      const side = data.getUint8(slotBase + 56) as SideValue;
-
-      // timestamp: i64 at offset 64
-      const timestamp = data.getBigInt64(slotBase + 64, true);
+      const orderId = data.getBigUint64(slotBase + SLOT_ORDER_ID, true);
+      const quantity = data.getBigUint64(slotBase + SLOT_QUANTITY, true);
+      const originalQuantity = data.getBigUint64(slotBase + SLOT_ORIG_QTY, true);
+      const side = data.getUint8(slotBase + SLOT_SIDE) as SideValue;
+      const timestamp = data.getBigInt64(slotBase + SLOT_TIMESTAMP, true);
 
       orders.push({
         owner,
@@ -146,7 +145,7 @@ export function deserializeOrderBook(buffer: Buffer): DeserializedOrderBook {
         originalQuantity,
         side,
         timestamp,
-        priceLevel: level + 1, // 1-indexed: level 0 → price 1 cent
+        priceLevel: price,
       });
     }
   }
@@ -241,14 +240,12 @@ export function buildNoView(orders: ActiveOrder[]): OrderBookView {
   const invert = (p: number) => 100 - p;
 
   // Yes asks at price P → No bids at (100-P)
-  // A Yes seller is effectively a No buyer at the complement price
   const noBids = aggregateDepth(orders, Side.YesAsk, invert);
 
   // No-backed bids are native No asks (No holders selling)
   const noNativeAsks = aggregateDepth(orders, Side.NoBackedBid);
 
   // USDC bids at price P → No asks at (100-P)
-  // A Yes buyer is effectively a No seller at the complement price
   const invertedUsdcAsks = aggregateDepth(orders, Side.UsdcBid, invert);
 
   // Merge the two ask sources

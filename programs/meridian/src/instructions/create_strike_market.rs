@@ -1,7 +1,10 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::solana_program::system_instruction;
 use anchor_spl::token::{self, spl_token, Mint, Token, TokenAccount, Transfer};
 use crate::error::MeridianError;
-use crate::state::{GlobalConfig, OrderBook, StrikeMarket, TickerRegistry};
+use crate::state::order_book::{HEADER_SIZE, ORDER_BOOK_SEED, init_sparse_book};
+use crate::state::{GlobalConfig, StrikeMarket, TickerRegistry};
 
 #[derive(Accounts)]
 #[instruction(
@@ -99,15 +102,10 @@ pub struct CreateStrikeMarket<'info> {
     )]
     pub no_escrow: Box<Account<'info, TokenAccount>>,
 
-    /// OrderBook — ZeroCopy, pre-allocated by client due to 10KB CPI size limit.
-    /// Client must create this PDA (owned by program, zeroed, correct space)
-    /// before calling create_strike_market.
-    #[account(
-        zero,
-        seeds = [StrikeMarket::ORDER_BOOK_SEED, market.key().as_ref()],
-        bump,
-    )]
-    pub order_book: AccountLoader<'info, OrderBook>,
+    /// CHECK: OrderBook PDA — created inline as sparse book (168 bytes).
+    /// Address verified via PDA derivation in handler.
+    #[account(mut)]
+    pub order_book: UncheckedAccount<'info>,
 
     /// CHECK: Oracle price feed — validated to be owned by the configured oracle program
     #[account(
@@ -274,12 +272,50 @@ pub fn handle_create_strike_market(
     market.override_count = 0;
     market.bump = ctx.bumps.market;
 
-    // Initialize the order book (account pre-allocated by client, `zero` constraint
-    // verified it's zeroed; load_init sets the discriminator)
-    let mut ob = ctx.accounts.order_book.load_init()?;
-    ob.market = market.key();
-    ob.next_order_id = 0;
-    ob.bump = ctx.bumps.order_book;
+    // Create the OrderBook PDA inline (sparse layout, only 168 bytes)
+    let ob_info = ctx.accounts.order_book.to_account_info();
+    let (expected_ob, ob_bump) = Pubkey::find_program_address(
+        &[ORDER_BOOK_SEED, market.key().as_ref()],
+        ctx.program_id,
+    );
+    require!(
+        ob_info.key() == expected_ob,
+        MeridianError::InvalidOrderBook
+    );
+    require!(
+        ob_info.data_len() == 0,
+        MeridianError::OrderBookAlreadyInitialized
+    );
+
+    let market_key_bytes = market.key();
+    let ob_seeds: &[&[u8]] = &[
+        ORDER_BOOK_SEED,
+        market_key_bytes.as_ref(),
+        &[ob_bump],
+    ];
+    let rent = Rent::get()?;
+    let ob_lamports = rent.minimum_balance(HEADER_SIZE);
+    invoke_signed(
+        &system_instruction::create_account(
+            ctx.accounts.creator.key,
+            &expected_ob,
+            ob_lamports,
+            HEADER_SIZE as u64,
+            ctx.program_id,
+        ),
+        &[
+            ctx.accounts.creator.to_account_info(),
+            ob_info.clone(),
+            ctx.accounts.system_program.to_account_info(),
+        ],
+        &[ob_seeds],
+    )?;
+
+    // Initialize sparse book header
+    {
+        let mut ob_data = ob_info.try_borrow_mut_data()?;
+        init_sparse_book(&mut ob_data, &market.key(), ob_bump);
+    }
 
     let ticker_str = std::str::from_utf8(&ticker)
         .unwrap_or("???")

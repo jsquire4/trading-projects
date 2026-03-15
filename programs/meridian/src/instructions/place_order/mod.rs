@@ -12,7 +12,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
 use crate::error::MeridianError;
-use crate::matching::engine::{match_order, MatchResult};
+use crate::matching::engine::{match_against_book, place_resting_order, MatchResult, PlaceError};
 use crate::state::order_book::*;
 use crate::state::{GlobalConfig, StrikeMarket};
 
@@ -42,11 +42,9 @@ pub struct PlaceOrder<'info> {
     )]
     pub market: Box<Account<'info, StrikeMarket>>,
 
-    #[account(
-        mut,
-        constraint = order_book.load()?.market == market.key() @ MeridianError::InvalidMarket,
-    )]
-    pub order_book: AccountLoader<'info, OrderBook>,
+    /// CHECK: Sparse order book PDA — validated via market.order_book and discriminator.
+    #[account(mut)]
+    pub order_book: UncheckedAccount<'info>,
 
     /// USDC collateral vault (for merge/burn debits)
     #[account(mut)]
@@ -120,9 +118,14 @@ pub fn handle_place_order<'info>(
     validate_order_params(side, price, quantity, order_type)?;
     validate_market_time(&ctx, &clock)?;
 
-    // Position constraints with reload() to get fresh balances in composable txs.
-    // Note: No constraint for SIDE_YES_ASK (Sell Yes). Selling Yes must work while
-    // holding No tokens — this is part of the atomic "Buy No" flow (mint pair → sell Yes).
+    // Validate order book
+    let ob_info = ctx.accounts.order_book.to_account_info();
+    require!(
+        ob_info.owner == ctx.program_id,
+        MeridianError::InvalidOrderBook
+    );
+
+    // Position constraints with reload()
     if side == SIDE_USDC_BID {
         ctx.accounts.user_no_ata.reload()?;
         require!(
@@ -147,18 +150,25 @@ pub fn handle_place_order<'info>(
     escrow_taker_assets(&ctx, side, price, quantity)?;
 
     // --- Run matching engine ---
-    let mut ob = ctx.accounts.order_book.load_mut()?;
-    let match_result = match_order(
-        &mut ob,
-        ctx.accounts.user.key(),
-        side,
-        price,
-        quantity,
-        order_type,
-        max_fills,
-        clock.unix_timestamp,
-    );
-    drop(ob); // Release borrow before token operations
+    let match_result;
+    {
+        let mut ob_data = ob_info.try_borrow_mut_data()?;
+        require!(
+            verify_discriminator(&ob_data),
+            MeridianError::OrderBookDiscriminatorMismatch
+        );
+        require!(
+            book_market(&ob_data) == market_key,
+            MeridianError::InvalidMarket
+        );
+        match_result = match_against_book(
+            &mut ob_data,
+            side,
+            price,
+            quantity,
+            max_fills,
+        );
+    }
 
     // --- Process fills and compute price improvement refund ---
     let tp = ctx.accounts.token_program.to_account_info();
@@ -197,7 +207,7 @@ pub fn handle_place_order<'info>(
         signer_seeds,
     )?;
 
-    // --- Price improvement refund (USDC bids filled at better price) ---
+    // --- Price improvement refund ---
     if price_improvement_refund > 0 {
         token::transfer(
             CpiContext::new_with_signer(
@@ -213,18 +223,31 @@ pub fn handle_place_order<'info>(
         )?;
     }
 
+    // --- Place resting order (limit orders with remaining qty) ---
+    let mut resting_failed = false;
+    if order_type == ORDER_TYPE_LIMIT && match_result.remaining_quantity >= MIN_ORDER_SIZE {
+        // May need to allocate a new level via realloc
+        let place_result = try_place_resting_order(
+            &ob_info,
+            &ctx.accounts.user,
+            &ctx.accounts.system_program,
+            &ctx.accounts.market,
+            side,
+            price,
+            match_result.remaining_quantity,
+            quantity,
+            clock.unix_timestamp,
+        )?;
+        resting_failed = !place_result;
+    }
+
     // --- Handle resting order failure: refund remaining quantity ---
-    // Note: For USDC bids, the refund uses floor division (quantity * price / 100),
-    // which may leave up to (price-1) lamports in escrow due to rounding. This is
-    // acceptable because the ceiling-division escrow ensures the protocol never
-    // under-collateralizes, and the dust amount is negligible (<1 cent).
-    if match_result.resting_failed && match_result.remaining_quantity > 0 {
+    if resting_failed && match_result.remaining_quantity > 0 {
         msg!(
             "Resting order failed (level full): refunding {} remaining to user={}",
             match_result.remaining_quantity,
             ctx.accounts.user.key(),
         );
-        // Force refund as if it were a market order (treat remaining as unfilled)
         let failed_refund_result = MatchResult {
             fills: Vec::new(),
             remaining_quantity: match_result.remaining_quantity,
@@ -234,7 +257,7 @@ pub fn handle_place_order<'info>(
             &failed_refund_result,
             side,
             price,
-            ORDER_TYPE_MARKET, // treat as market order to force refund
+            ORDER_TYPE_MARKET,
             &ctx,
             &tp,
             &market_ai,
@@ -246,7 +269,7 @@ pub fn handle_place_order<'info>(
     }
 
     // --- Refund unfilled escrow ---
-    if !match_result.resting_failed {
+    if !resting_failed {
         refund_unfilled(
             &match_result,
             side,
@@ -262,11 +285,16 @@ pub fn handle_place_order<'info>(
         )?;
     }
 
-    // --- Update market stats and validate fill requirements ---
-    update_market_stats(&mut ctx.accounts.market, &match_result, order_type)?;
+    // --- Update market stats ---
+    let stats_result = MatchResult {
+        fills: match_result.fills.clone(),
+        remaining_quantity: match_result.remaining_quantity,
+        resting_failed,
+    };
+    update_market_stats(&mut ctx.accounts.market, &stats_result, order_type)?;
 
     let unfilled = match_result.remaining_quantity;
-    let was_rested = order_type == ORDER_TYPE_LIMIT && unfilled >= MIN_ORDER_SIZE;
+    let was_rested = order_type == ORDER_TYPE_LIMIT && unfilled >= MIN_ORDER_SIZE && !resting_failed;
     let total_filled: u64 = match_result
         .fills
         .iter()
@@ -284,6 +312,132 @@ pub fn handle_place_order<'info>(
         total_filled,
         was_rested,
     );
+
+    Ok(())
+}
+
+/// Try to place a resting order, allocating a new level via realloc if needed.
+/// Returns Ok(true) if placed successfully, Ok(false) if level is full.
+fn try_place_resting_order<'info>(
+    ob_info: &AccountInfo<'info>,
+    user: &Signer<'info>,
+    system_program: &Program<'info, System>,
+    market: &Account<'info, StrikeMarket>,
+    side: u8,
+    price: u8,
+    quantity: u64,
+    original_quantity: u64,
+    timestamp: i64,
+) -> Result<bool> {
+    // First attempt: try placing directly
+    {
+        let mut ob_data = ob_info.try_borrow_mut_data()?;
+        match place_resting_order(
+            &mut ob_data,
+            &user.key(),
+            side,
+            price,
+            quantity,
+            original_quantity,
+            timestamp,
+            &user.key(),
+        ) {
+            Ok(_order_id) => return Ok(true),
+            Err(PlaceError::LevelFull) => return Ok(false),
+            Err(PlaceError::OrderIdOverflow) => return Ok(false),
+            Err(PlaceError::NeedsNewLevel) => {
+                // Fall through to allocate
+            }
+        }
+    }
+
+    // Need to allocate a new level — realloc the account
+    allocate_new_level(ob_info, user, system_program, market)?;
+
+    // Initialize the new level
+    {
+        let mut ob_data = ob_info.try_borrow_mut_data()?;
+        let _level_idx = ob_data[HDR_LEVEL_COUNT]; // will be incremented by init_level
+        let max_levels = ob_data[HDR_MAX_LEVELS];
+        // Find a free slot in the allocated levels
+        let free_idx = find_free_level_slot(&ob_data)
+            .unwrap_or(max_levels.saturating_sub(1));
+        init_level(&mut ob_data, free_idx, price);
+    }
+
+    // Retry placement
+    {
+        let mut ob_data = ob_info.try_borrow_mut_data()?;
+        match place_resting_order(
+            &mut ob_data,
+            &user.key(),
+            side,
+            price,
+            quantity,
+            original_quantity,
+            timestamp,
+            &user.key(),
+        ) {
+            Ok(_order_id) => Ok(true),
+            Err(_) => Ok(false),
+        }
+    }
+}
+
+/// Allocate space for one new level in the order book via realloc.
+/// Transfers rent from user to the order book account.
+fn allocate_new_level<'info>(
+    ob_info: &AccountInfo<'info>,
+    user: &Signer<'info>,
+    system_program: &Program<'info, System>,
+    _market: &Account<'info, StrikeMarket>,
+) -> Result<()> {
+    let current_len = ob_info.data_len();
+    let orders_per_level;
+    let new_max_levels;
+
+    {
+        let ob_data = ob_info.try_borrow_data()?;
+        orders_per_level = ob_data[HDR_ORDERS_PER_LEVEL];
+        let max_levels = ob_data[HDR_MAX_LEVELS];
+        new_max_levels = max_levels + 1;
+
+        require!(
+            (new_max_levels as usize) <= MAX_PRICE_LEVELS,
+            MeridianError::MaxLevelsReached
+        );
+    }
+
+    let entry_size = LEVEL_HEADER_SIZE + orders_per_level as usize * ORDER_SLOT_SIZE;
+    let new_len = current_len + entry_size;
+
+    // Transfer rent for the new space
+    let rent = Rent::get()?;
+    let required_lamports = rent.minimum_balance(new_len);
+    let current_lamports = ob_info.lamports();
+
+    if required_lamports > current_lamports {
+        let diff = required_lamports - current_lamports;
+        anchor_lang::system_program::transfer(
+            CpiContext::new(
+                system_program.to_account_info(),
+                anchor_lang::system_program::Transfer {
+                    from: user.to_account_info(),
+                    to: ob_info.clone(),
+                },
+            ),
+            diff,
+        )?;
+    }
+
+    // Realloc
+    ob_info.realloc(new_len, false)?;
+
+    // Update max_levels in header
+    {
+        let mut ob_data = ob_info.try_borrow_mut_data()?;
+        ob_data[HDR_MAX_LEVELS] = new_max_levels;
+    }
 
     Ok(())
 }

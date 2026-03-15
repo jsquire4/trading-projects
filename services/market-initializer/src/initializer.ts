@@ -46,8 +46,7 @@ const log = createLogger("market-initializer");
 // USDC has 6 decimals — $1.00 = 1_000_000 lamports
 const USDC_DECIMALS = 6;
 
-// OrderBook needs ~127KB, allocated in 10KB increments
-const ORDER_BOOK_ALLOC_CALLS = 13;
+// OrderBook is now created inline by create_strike_market (sparse layout, 168 bytes)
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -327,31 +326,7 @@ async function createSingleMarket(
     return false; // already exists
   }
 
-  // ---- Step 1: Allocate OrderBook (incremental, ~10KB per call) ------------
-  // Check existing order book size for crash recovery (partial prior allocation)
-  const existingOb = await connection.getAccountInfo(orderBook);
-  const existingAllocCalls = existingOb ? Math.floor(existingOb.data.length / 10240) : 0;
-  const remainingCalls = Math.max(0, ORDER_BOOK_ALLOC_CALLS - existingAllocCalls);
-
-  if (remainingCalls > 0) {
-    log.info(`Allocating order book for ${ticker} (${remainingCalls} calls, ${existingAllocCalls} already done)...`);
-
-    for (let i = 0; i < remainingCalls; i++) {
-      await program.methods
-        .allocateOrderBook(marketPda)
-        .accounts({
-          payer: admin.publicKey,
-          orderBook: orderBook,
-          systemProgram: SystemProgram.programId,
-        })
-        .signers([admin])
-        .rpc({ commitment: "confirmed" });
-    }
-  } else {
-    log.info(`Order book for ${ticker} already fully allocated`);
-  }
-
-  // ---- Step 2: Create strike market ----------------------------------------
+  // ---- Create strike market (order book created inline) --------------------
   const tickerBytes = Array.from(padTicker(ticker));
 
   await program.methods

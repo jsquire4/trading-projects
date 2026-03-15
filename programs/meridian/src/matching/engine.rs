@@ -4,15 +4,16 @@
 /// - Standard swap: USDC bid (side=0) matched with Yes ask (side=1)
 /// - Merge/burn: No-backed bid (side=2) matched with Yes ask (side=1)
 ///
-/// The engine never touches accounts directly — it operates on OrderBook
-/// data and returns fill results for the instruction handler to execute.
+/// The engine never touches accounts directly — it operates on raw order book
+/// byte data and returns fill results for the instruction handler to execute.
+///
+/// Sparse layout: levels are indexed via price_map[0..99]. Only allocated
+/// levels are scanned, skipping 0xFF (unallocated) entries.
 
 use anchor_lang::prelude::*;
 use crate::state::order_book::*;
 
 /// The total price in cents for a Yes+No pair (always $1.00 = 100 cents).
-/// Used in merge/burn matching to compute the price complement:
-/// if a No-backed bid is at price P, the maximum Yes ask it can match is (MERGE_TOTAL_CENTS - P).
 const MERGE_TOTAL_CENTS: u8 = 100;
 
 /// Result of a single fill during matching
@@ -32,10 +33,10 @@ pub struct Fill {
     pub quantity: u64,
     /// True if this is a merge/burn fill (No-backed bid × Yes ask)
     pub is_merge: bool,
-    /// Price level index (0-based, = price - 1)
-    pub price_level_idx: usize,
+    /// Level index in sparse layout
+    pub level_idx: u8,
     /// Slot index within the price level
-    pub slot_idx: usize,
+    pub slot_idx: u8,
 }
 
 /// Result of running the matching engine
@@ -43,35 +44,32 @@ pub struct Fill {
 pub struct MatchResult {
     /// Fills that occurred
     pub fills: Vec<Fill>,
-    /// Remaining quantity that wasn't filled (rests as limit or rejected for market)
+    /// Remaining quantity that wasn't filled
     pub remaining_quantity: u64,
-    /// True if the resting order placement failed (e.g. level full)
+    /// True if the resting order placement failed
     pub resting_failed: bool,
 }
 
-/// Place a new order into the book, attempting to match against resting orders.
-///
-/// Returns the match result. The caller (instruction handler) is responsible for
-/// executing the actual token transfers, burns, and escrow operations.
-///
-/// # Arguments
-/// * `book` - Mutable reference to the ZeroCopy OrderBook
-/// * `taker` - Taker's pubkey
-/// * `side` - 0=USDC bid (Buy Yes), 1=Yes ask (Sell Yes), 2=No-backed bid (Sell No)
-/// * `price` - Price in cents (1-99). Market buy=99, market sell=1.
-/// * `quantity` - Order size in token lamports
-/// * `order_type` - 0=Market, 1=Limit
-/// * `max_fills` - Maximum number of fills to execute
-/// * `timestamp` - Current clock timestamp
-pub fn match_order(
-    book: &mut OrderBook,
-    taker: Pubkey,
-    side: u8,
+/// Error from place_resting_order
+#[derive(Clone, Debug, PartialEq)]
+pub enum PlaceError {
+    /// Price level not allocated — caller must realloc
+    NeedsNewLevel,
+    /// All slots at this level are full
+    LevelFull,
+    /// Order ID overflow
+    OrderIdOverflow,
+}
+
+/// Match a new order against the book. Does NOT place a resting order —
+/// the caller (instruction handler) handles that separately so it can
+/// realloc if needed.
+pub fn match_against_book(
+    data: &mut [u8],
+    taker_side: u8,
     price: u8,
     quantity: u64,
-    order_type: u8,
     max_fills: u8,
-    timestamp: i64,
 ) -> MatchResult {
     let mut result = MatchResult {
         fills: Vec::new(),
@@ -79,235 +77,174 @@ pub fn match_order(
         resting_failed: false,
     };
 
-    // Match against the opposite side of the book
-    match side {
+    match taker_side {
         // USDC bid (Buy Yes) — matches against Yes asks (side=1)
-        // Walk asks from lowest price upward
         SIDE_USDC_BID => {
-            match_against_asks(book, side, price, &mut result, max_fills);
+            match_against_asks(data, taker_side, price, &mut result, max_fills);
         }
         // Yes ask (Sell Yes) — matches against USDC bids (side=0) AND No-backed bids (side=2)
-        // Walk bids from highest price downward
         SIDE_YES_ASK => {
-            match_against_bids(book, side, price, &mut result, max_fills);
+            match_against_bids(data, taker_side, price, &mut result, max_fills);
         }
         // No-backed bid (Sell No) — matches against Yes asks (side=1)
-        // Walk asks from lowest price upward (merge/burn)
         SIDE_NO_BID => {
-            match_against_asks_merge(book, side, price, &mut result, max_fills);
+            match_against_asks_merge(data, taker_side, price, &mut result, max_fills);
         }
-        _ => {} // Invalid side — caller validates before calling
-    }
-
-    // If limit order and there's remaining quantity, place it on the book
-    if order_type == ORDER_TYPE_LIMIT && result.remaining_quantity >= MIN_ORDER_SIZE {
-        match place_resting_order(
-            book,
-            taker,
-            side,
-            price,
-            result.remaining_quantity,
-            quantity,
-            timestamp,
-        ) {
-            Ok(_order_id) => {}
-            Err(()) => {
-                result.resting_failed = true;
-            }
-        }
+        _ => {}
     }
 
     result
 }
 
 /// Match a USDC bid against Yes asks (standard swap).
-/// Walks price levels from lowest ask upward until price exceeds bid or max_fills hit.
 fn match_against_asks(
-    book: &mut OrderBook,
+    data: &mut [u8],
     taker_side: u8,
     max_price: u8,
     result: &mut MatchResult,
     max_fills: u8,
 ) {
-    // Walk from price level 0 (price=1) upward
-    for level_idx in 0..MAX_PRICE_LEVELS {
-        if result.remaining_quantity < MIN_ORDER_SIZE {
-            break;
-        }
-        if result.fills.len() >= max_fills as usize {
-            break;
-        }
+    // Walk prices from 1 upward via price_map
+    for price_idx in 0..MAX_PRICE_LEVELS {
+        if result.remaining_quantity < MIN_ORDER_SIZE { break; }
+        if result.fills.len() >= max_fills as usize { break; }
 
-        let ask_price = (level_idx + 1) as u8;
-        // Bid must be >= ask price for a fill
-        if ask_price > max_price {
-            break;
-        }
+        let ask_price = (price_idx + 1) as u8;
+        if ask_price > max_price { break; }
+
+        let level_idx = data[HDR_PRICE_MAP + price_idx];
+        if level_idx == PRICE_UNALLOCATED { continue; }
 
         match_at_level_for_side(
-            book, taker_side, SIDE_YES_ASK, ask_price, level_idx, result, max_fills, false,
+            data, taker_side, SIDE_YES_ASK, ask_price, level_idx, result, max_fills, false,
         );
     }
 }
 
 /// Match a No-backed bid against Yes asks (merge/burn).
-///
-/// Matching condition: Yes ask price Q + No bid price P <= 100.
-/// No seller gets $(P/100), Yes seller gets $((100-P)/100).
-/// Fill price is the resting order's price.
 fn match_against_asks_merge(
-    book: &mut OrderBook,
+    data: &mut [u8],
     taker_side: u8,
     no_bid_price: u8,
     result: &mut MatchResult,
     max_fills: u8,
 ) {
-    // Max Yes ask price that this No bid can match against
     let max_yes_ask = MERGE_TOTAL_CENTS.saturating_sub(no_bid_price);
 
-    // Walk from price level 0 (price=1) upward
-    for level_idx in 0..MAX_PRICE_LEVELS {
-        if result.remaining_quantity < MIN_ORDER_SIZE {
-            break;
-        }
-        if result.fills.len() >= max_fills as usize {
-            break;
-        }
+    for price_idx in 0..MAX_PRICE_LEVELS {
+        if result.remaining_quantity < MIN_ORDER_SIZE { break; }
+        if result.fills.len() >= max_fills as usize { break; }
 
-        let ask_price = (level_idx + 1) as u8;
-        if ask_price > max_yes_ask {
-            break;
-        }
+        let ask_price = (price_idx + 1) as u8;
+        if ask_price > max_yes_ask { break; }
+
+        let level_idx = data[HDR_PRICE_MAP + price_idx];
+        if level_idx == PRICE_UNALLOCATED { continue; }
 
         match_at_level_for_side(
-            book, taker_side, SIDE_YES_ASK, ask_price, level_idx, result, max_fills, true,
+            data, taker_side, SIDE_YES_ASK, ask_price, level_idx, result, max_fills, true,
         );
     }
 }
 
 /// Match a Yes ask against both USDC bids and No-backed bids.
-///
-/// For USDC bids: fill when bid_price >= ask_price (standard swap).
-/// For No-backed bids: fill when (100 - no_bid_price) >= ask_price (merge/burn).
-/// Walks from highest bid price downward (price-time priority).
 fn match_against_bids(
-    book: &mut OrderBook,
+    data: &mut [u8],
     taker_side: u8,
     min_price: u8,
     result: &mut MatchResult,
     max_fills: u8,
 ) {
-    // Walk from price level 98 (price=99) downward
-    for level_idx in (0..MAX_PRICE_LEVELS).rev() {
-        if result.remaining_quantity < MIN_ORDER_SIZE {
-            break;
-        }
-        if result.fills.len() >= max_fills as usize {
-            break;
-        }
+    // Walk prices from 99 downward
+    for price_idx in (0..MAX_PRICE_LEVELS).rev() {
+        if result.remaining_quantity < MIN_ORDER_SIZE { break; }
+        if result.fills.len() >= max_fills as usize { break; }
 
-        let bid_price = (level_idx + 1) as u8;
-        // Ask must be <= bid price for a fill (for USDC bids)
-        // But we also need to check No-backed bids at this level
-        // For USDC bids: fill when bid_price >= min_price (taker's ask price)
-        // For No-backed bids: fill when (100 - no_bid_price) >= min_price
-        //   i.e., no_bid_price <= 100 - min_price
+        let bid_price = (price_idx + 1) as u8;
 
-        // Priority: At each price level, USDC bids are matched before No-backed bids.
-        // This is deterministic and by design — taker's Yes asks fill standard swaps first.
+        let level_idx = data[HDR_PRICE_MAP + price_idx];
+        if level_idx == PRICE_UNALLOCATED { continue; }
+
+        // USDC bids at this level
         if bid_price >= min_price {
             match_at_level_for_side(
-                book, taker_side, SIDE_USDC_BID, bid_price, level_idx, result, max_fills, false,
+                data, taker_side, SIDE_USDC_BID, bid_price, level_idx, result, max_fills, false,
             );
         }
 
-        // No-backed bids: fill when (100 - no_bid_price) >= min_price,
-        // i.e., no_bid_price <= (100 - min_price).
+        // No-backed bids: fill when (100 - no_bid_price) >= min_price
         let max_no_price = MERGE_TOTAL_CENTS.saturating_sub(min_price);
         if bid_price <= max_no_price {
             match_at_level_for_side(
-                book, taker_side, SIDE_NO_BID, bid_price, level_idx, result, max_fills, true,
+                data, taker_side, SIDE_NO_BID, bid_price, level_idx, result, max_fills, true,
             );
         }
     }
 }
 
 /// Core matching at a price level — scans slots for active orders of the given side.
-/// Uses FIFO time priority: for each fill, finds the active order with the lowest
-/// timestamp (oldest order first), with ties broken by lowest slot index.
-/// This ensures correct price-time priority even when cancelled slots are reused
-/// by newer orders.
+/// Uses FIFO time priority: finds the oldest active order first.
 fn match_at_level_for_side(
-    book: &mut OrderBook,
+    data: &mut [u8],
     taker_side: u8,
     resting_side: u8,
     fill_price: u8,
-    level_idx: usize,
+    level_idx: u8,
     result: &mut MatchResult,
     max_fills: u8,
     is_merge: bool,
 ) {
+    let opl = data[HDR_ORDERS_PER_LEVEL];
+
     loop {
-        if result.remaining_quantity < MIN_ORDER_SIZE {
-            break;
-        }
-        if result.fills.len() >= max_fills as usize {
-            break;
-        }
+        if result.remaining_quantity < MIN_ORDER_SIZE { break; }
+        if result.fills.len() >= max_fills as usize { break; }
 
         // Find the active order with the lowest timestamp (FIFO priority)
-        let level = &book.levels[level_idx];
-        let mut best_slot: Option<usize> = None;
+        let mut best_slot: Option<u8> = None;
         let mut best_ts: i64 = i64::MAX;
 
-        for slot_idx in 0..MAX_ORDERS_PER_LEVEL {
-            let order = &level.orders[slot_idx];
-            if !order.active() || order.side != resting_side {
-                continue;
-            }
-            if order.timestamp < best_ts {
-                best_ts = order.timestamp;
-                best_slot = Some(slot_idx);
+        for s in 0..opl {
+            if !slot_is_active(data, level_idx, s) { continue; }
+            if slot_side(data, level_idx, s) != resting_side { continue; }
+            let ts = slot_timestamp(data, level_idx, s);
+            if ts < best_ts {
+                best_ts = ts;
+                best_slot = Some(s);
             }
         }
 
-        let slot_idx = match best_slot {
+        let s = match best_slot {
             Some(idx) => idx,
-            None => break, // No more matching orders at this level
+            None => break,
         };
 
-        let order = &book.levels[level_idx].orders[slot_idx];
+        let order_qty = slot_quantity(data, level_idx, s);
+        let fill_qty = result.remaining_quantity.min(order_qty);
 
-        // Calculate fill quantity
-        let fill_qty = result.remaining_quantity.min(order.quantity);
-
-        // Record the fill
         result.fills.push(Fill {
-            maker: order.owner,
-            maker_order_id: order.order_id,
+            maker: slot_owner(data, level_idx, s),
+            maker_order_id: slot_order_id(data, level_idx, s),
             maker_side: resting_side,
             taker_side,
             price: fill_price,
             quantity: fill_qty,
             is_merge,
-            price_level_idx: level_idx,
-            slot_idx,
+            level_idx,
+            slot_idx: s,
         });
 
         // Update the resting order
-        let level = &mut book.levels[level_idx];
-        let order_mut = &mut level.orders[slot_idx];
-        if fill_qty >= order_mut.quantity {
+        if fill_qty >= order_qty {
             // Fully filled — deactivate
-            order_mut.quantity = 0;
-            order_mut.set_active(false);
-            debug_assert!(level.count > 0);
-            if level.count > 0 {
-                level.count -= 1;
+            deactivate_slot(data, level_idx, s);
+            let cnt = level_count(data, level_idx);
+            if cnt > 0 {
+                set_level_count(data, level_idx, cnt - 1);
             }
         } else {
-            // Partial fill — reduce quantity
-            order_mut.quantity -= fill_qty;
+            // Partial fill
+            set_slot_quantity(data, level_idx, s, order_qty - fill_qty);
         }
 
         result.remaining_quantity -= fill_qty;
@@ -315,100 +252,98 @@ fn match_at_level_for_side(
 }
 
 /// Place a resting order on the book at the given price level.
-/// Returns Ok(order_id) on success, Err if the level is full.
+/// Returns Ok(order_id) on success. The caller must ensure the level exists
+/// (allocate via realloc before calling if price_map shows unallocated).
 pub fn place_resting_order(
-    book: &mut OrderBook,
-    owner: Pubkey,
+    data: &mut [u8],
+    owner: &Pubkey,
     side: u8,
     price: u8,
     quantity: u64,
     original_quantity: u64,
     timestamp: i64,
-) -> std::result::Result<u64, ()> {
-    let level_idx = (price as usize).saturating_sub(1);
-    if level_idx >= MAX_PRICE_LEVELS {
-        return Err(());
+    rent_depositor: &Pubkey,
+) -> std::result::Result<u64, PlaceError> {
+    // Look up level for this price
+    let level_idx = book_price_map(data, price);
+    if level_idx == PRICE_UNALLOCATED {
+        return Err(PlaceError::NeedsNewLevel);
     }
 
-    let level = &mut book.levels[level_idx];
+    let opl = data[HDR_ORDERS_PER_LEVEL];
 
     // Find an empty slot
-    let mut empty_slot: Option<usize> = None;
-    for i in 0..MAX_ORDERS_PER_LEVEL {
-        if !level.orders[i].active() {
-            empty_slot = Some(i);
+    let mut empty_slot: Option<u8> = None;
+    for s in 0..opl {
+        if !slot_is_active(data, level_idx, s) {
+            empty_slot = Some(s);
             break;
         }
     }
 
-    let slot_idx = match empty_slot {
+    let s = match empty_slot {
         Some(idx) => idx,
-        None => return Err(()), // Level full
+        None => return Err(PlaceError::LevelFull),
     };
 
-    let order_id = book.next_order_id;
-    book.next_order_id = book.next_order_id.checked_add(1).ok_or(())?;
+    // Allocate order ID
+    let order_id = book_next_order_id(data);
+    let next = order_id.checked_add(1).ok_or(PlaceError::OrderIdOverflow)?;
+    write_u64(data, HDR_NEXT_ORDER_ID, next);
 
-    let order = &mut book.levels[level_idx].orders[slot_idx];
-    order.owner = owner;
-    order.order_id = order_id;
-    order.quantity = quantity;
-    order.original_quantity = original_quantity;
-    order.side = side;
-    order._side_padding = [0; 7];
-    order.timestamp = timestamp;
-    order.set_active(true);
-    order._padding = [0; 7];
+    // Write the order
+    write_order_slot(data, level_idx, s, owner, order_id, quantity, original_quantity, side, timestamp, rent_depositor);
 
-    book.levels[level_idx].count += 1;
+    // Increment level count
+    let cnt = level_count(data, level_idx);
+    set_level_count(data, level_idx, cnt + 1);
 
     Ok(order_id)
 }
 
-/// Cancel a resting order by (price_level, order_id).
-/// Returns the cancelled order's details if found and owned by the caller.
+/// Cancel a resting order by (price, order_id).
 pub fn cancel_resting_order(
-    book: &mut OrderBook,
+    data: &mut [u8],
     price: u8,
     order_id: u64,
     owner: &Pubkey,
 ) -> std::result::Result<CancelledOrder, CancelError> {
-    let level_idx = (price as usize).saturating_sub(1);
-    if level_idx >= MAX_PRICE_LEVELS {
+    if price < 1 || price > 99 {
         return Err(CancelError::NotFound);
     }
 
-    let level = &mut book.levels[level_idx];
+    let level_idx = book_price_map(data, price);
+    if level_idx == PRICE_UNALLOCATED {
+        return Err(CancelError::NotFound);
+    }
 
-    for slot_idx in 0..MAX_ORDERS_PER_LEVEL {
-        let order = &level.orders[slot_idx];
-        if !order.active() {
-            continue;
-        }
-        if order.order_id != order_id {
-            continue;
-        }
+    let opl = data[HDR_ORDERS_PER_LEVEL];
 
-        // Found the order — check ownership
-        if order.owner != *owner {
+    for s in 0..opl {
+        if !slot_is_active(data, level_idx, s) { continue; }
+        if slot_order_id(data, level_idx, s) != order_id { continue; }
+
+        // Found — check ownership
+        let slot_owner_key = slot_owner(data, level_idx, s);
+        if slot_owner_key != *owner {
             return Err(CancelError::NotOwned);
         }
 
         let cancelled = CancelledOrder {
-            owner: order.owner,
-            order_id: order.order_id,
-            side: order.side,
-            quantity: order.quantity,
+            owner: slot_owner_key,
+            order_id,
+            side: slot_side(data, level_idx, s),
+            quantity: slot_quantity(data, level_idx, s),
             price,
+            rent_depositor: slot_rent_depositor(data, level_idx, s),
+            level_idx,
         };
 
         // Deactivate
-        let order_mut = &mut level.orders[slot_idx];
-        order_mut.set_active(false);
-        order_mut.quantity = 0;
-        debug_assert!(level.count > 0);
-        if level.count > 0 {
-            level.count -= 1;
+        deactivate_slot(data, level_idx, s);
+        let cnt = level_count(data, level_idx);
+        if cnt > 0 {
+            set_level_count(data, level_idx, cnt - 1);
         }
 
         return Ok(cancelled);
@@ -425,6 +360,8 @@ pub struct CancelledOrder {
     pub side: u8,
     pub quantity: u64,
     pub price: u8,
+    pub rent_depositor: Pubkey,
+    pub level_idx: u8,
 }
 
 /// Cancel error variants
@@ -435,45 +372,40 @@ pub enum CancelError {
 }
 
 /// Crank-cancel: iterate slots and cancel up to `batch_size` active orders.
-/// Returns a list of cancelled orders for escrow refund processing.
 pub fn crank_cancel_batch(
-    book: &mut OrderBook,
+    data: &mut [u8],
     batch_size: usize,
 ) -> Vec<CancelledOrder> {
     let mut cancelled = Vec::new();
+    let opl = data[HDR_ORDERS_PER_LEVEL];
 
-    for level_idx in 0..MAX_PRICE_LEVELS {
-        if cancelled.len() >= batch_size {
-            break;
-        }
+    // Walk price_map for allocated levels
+    for price_idx in 0..MAX_PRICE_LEVELS {
+        if cancelled.len() >= batch_size { break; }
 
-        let price = (level_idx + 1) as u8;
-        let level = &mut book.levels[level_idx];
+        let level_idx = data[HDR_PRICE_MAP + price_idx];
+        if level_idx == PRICE_UNALLOCATED { continue; }
 
-        for slot_idx in 0..MAX_ORDERS_PER_LEVEL {
-            if cancelled.len() >= batch_size {
-                break;
-            }
+        let price = (price_idx + 1) as u8;
 
-            let order = &level.orders[slot_idx];
-            if !order.active() {
-                continue;
-            }
+        for s in 0..opl {
+            if cancelled.len() >= batch_size { break; }
+            if !slot_is_active(data, level_idx, s) { continue; }
 
             cancelled.push(CancelledOrder {
-                owner: order.owner,
-                order_id: order.order_id,
-                side: order.side,
-                quantity: order.quantity,
+                owner: slot_owner(data, level_idx, s),
+                order_id: slot_order_id(data, level_idx, s),
+                side: slot_side(data, level_idx, s),
+                quantity: slot_quantity(data, level_idx, s),
                 price,
+                rent_depositor: slot_rent_depositor(data, level_idx, s),
+                level_idx,
             });
 
-            let order_mut = &mut level.orders[slot_idx];
-            order_mut.set_active(false);
-            order_mut.quantity = 0;
-            debug_assert!(level.count > 0);
-            if level.count > 0 {
-                level.count -= 1;
+            deactivate_slot(data, level_idx, s);
+            let cnt = level_count(data, level_idx);
+            if cnt > 0 {
+                set_level_count(data, level_idx, cnt - 1);
             }
         }
     }
@@ -482,9 +414,11 @@ pub fn crank_cancel_batch(
 }
 
 /// Check if the order book has any active orders.
-pub fn has_active_orders(book: &OrderBook) -> bool {
-    for level_idx in 0..MAX_PRICE_LEVELS {
-        if book.levels[level_idx].count > 0 {
+pub fn has_active_orders(data: &[u8]) -> bool {
+    for price_idx in 0..MAX_PRICE_LEVELS {
+        let level_idx = data[HDR_PRICE_MAP + price_idx];
+        if level_idx == PRICE_UNALLOCATED { continue; }
+        if level_count(data, level_idx) > 0 {
             return true;
         }
     }

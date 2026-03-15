@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { PublicKey } from "@solana/web3.js";
+import { createHash } from "crypto";
 import {
   deserializeOrderBook,
   buildYesView,
@@ -9,31 +10,80 @@ import {
 } from "../orderbook";
 
 // ---------------------------------------------------------------------------
-// Helpers to build mock buffers matching the on-chain layout
+// Sparse layout constants (must match orderbook.ts / on-chain order_book.rs)
 // ---------------------------------------------------------------------------
 
-const ANCHOR_DISCRIMINATOR_SIZE = 8;
-const PUBKEY_SIZE = 32;
-const ORDER_SLOT_SIZE = 80;
-const ORDERS_PER_LEVEL = 32;
-const PRICE_LEVEL_SIZE = 2568; // 32 * 80 + 1 + 7
-const NUM_LEVELS = 99;
+const DISC_SIZE = 8;
+const HDR_MARKET = 8;
+const HDR_NEXT_ORDER_ID = 40;
+const HDR_PRICE_MAP = 48;
+const HDR_LEVEL_COUNT = 147;
+const HDR_MAX_LEVELS = 148;
+const HDR_ORDERS_PER_LEVEL = 149;
+const HDR_BUMP = 150;
+const HEADER_SIZE = 168;
+const LEVEL_HEADER_SIZE = 8;
+const ORDER_SLOT_SIZE = 112;
+const MAX_PRICE_LEVELS = 99;
+const PRICE_UNALLOCATED = 0xFF;
+const ORDERS_PER_LEVEL = 4; // matches INITIAL_ORDERS_PER_LEVEL
 
-const TOTAL_SIZE =
-  ANCHOR_DISCRIMINATOR_SIZE + // discriminator
-  PUBKEY_SIZE + // market pubkey
-  8 + // next_order_id (u64)
-  NUM_LEVELS * PRICE_LEVEL_SIZE; // price levels
+// Slot offsets
+const SLOT_OWNER = 0;
+const SLOT_ORDER_ID = 32;
+const SLOT_QUANTITY = 40;
+const SLOT_ORIG_QTY = 48;
+const SLOT_SIDE = 56;
+const SLOT_TIMESTAMP = 64;
+const SLOT_IS_ACTIVE = 72;
+const SLOT_RENT_DEPOSITOR = 80;
 
-function createEmptyBuffer(): Buffer {
-  return Buffer.alloc(TOTAL_SIZE);
+function sparseDiscriminator(): Buffer {
+  const hash = createHash("sha256").update("account:OrderBook").digest();
+  return hash.subarray(0, 8);
 }
 
-/** Write an order slot into the buffer at the given price level and slot index. */
+// ---------------------------------------------------------------------------
+// Helpers to build mock sparse buffers
+// ---------------------------------------------------------------------------
+
+function levelEntrySize(): number {
+  return LEVEL_HEADER_SIZE + ORDERS_PER_LEVEL * ORDER_SLOT_SIZE;
+}
+
+/** Create a sparse book buffer with the given number of allocated levels. */
+function createSparseBuffer(numLevels: number = 0): Buffer {
+  const size = HEADER_SIZE + numLevels * levelEntrySize();
+  const buf = Buffer.alloc(size, 0);
+  // Discriminator
+  sparseDiscriminator().copy(buf, 0);
+  // price_map: all unallocated
+  buf.fill(PRICE_UNALLOCATED, HDR_PRICE_MAP, HDR_PRICE_MAP + MAX_PRICE_LEVELS);
+  // orders_per_level
+  buf[HDR_ORDERS_PER_LEVEL] = ORDERS_PER_LEVEL;
+  buf[HDR_MAX_LEVELS] = numLevels;
+  buf[HDR_LEVEL_COUNT] = 0;
+  return buf;
+}
+
+/** Allocate a level in the buffer for a given price. Returns the level index. */
+function allocateLevel(buf: Buffer, price: number): number {
+  const levelIdx = buf[HDR_LEVEL_COUNT];
+  // Set price_map
+  buf[HDR_PRICE_MAP + (price - 1)] = levelIdx;
+  // Set level header: price byte
+  const levelBase = HEADER_SIZE + levelIdx * levelEntrySize();
+  buf[levelBase] = price;
+  // Increment level_count
+  buf[HDR_LEVEL_COUNT] = levelIdx + 1;
+  return levelIdx;
+}
+
+/** Write an order slot into a sparse buffer. */
 function writeOrder(
   buf: Buffer,
-  priceLevel: number, // 1-based (1..99)
-  slotIndex: number,
+  levelIdx: number,
+  slotIdx: number,
   opts: {
     owner?: Buffer;
     orderId?: bigint;
@@ -44,70 +94,47 @@ function writeOrder(
     isActive?: boolean;
   },
 ) {
-  const levelIdx = priceLevel - 1; // 0-based
-  const levelBase =
-    ANCHOR_DISCRIMINATOR_SIZE + PUBKEY_SIZE + 8 + levelIdx * PRICE_LEVEL_SIZE;
-  const slotBase = levelBase + slotIndex * ORDER_SLOT_SIZE;
+  const slotBase = HEADER_SIZE + levelIdx * levelEntrySize() + LEVEL_HEADER_SIZE + slotIdx * ORDER_SLOT_SIZE;
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
 
-  // owner (32 bytes)
-  const owner = opts.owner ?? Buffer.alloc(PUBKEY_SIZE, 1);
-  owner.copy(buf, slotBase, 0, PUBKEY_SIZE);
+  const owner = opts.owner ?? Buffer.alloc(32, 1);
+  owner.copy(buf, slotBase + SLOT_OWNER, 0, 32);
 
-  // order_id (u64 LE at offset 32)
-  dv.setBigUint64(slotBase + 32, opts.orderId ?? 1n, true);
-
-  // quantity (u64 LE at offset 40)
-  dv.setBigUint64(slotBase + 40, opts.quantity ?? 100n, true);
-
-  // original_quantity (u64 LE at offset 48)
-  dv.setBigUint64(slotBase + 48, opts.originalQuantity ?? 100n, true);
-
-  // side (u8 at offset 56)
-  dv.setUint8(slotBase + 56, opts.side ?? Side.UsdcBid);
-
-  // timestamp (i64 LE at offset 64)
-  dv.setBigInt64(slotBase + 64, opts.timestamp ?? 1700000000n, true);
-
-  // is_active (u8 at offset 72)
-  dv.setUint8(slotBase + 72, opts.isActive !== false ? 1 : 0);
-
-  // Update the count at the end of the price level (offset 32*80 = 2560)
-  const countOffset = levelBase + ORDERS_PER_LEVEL * ORDER_SLOT_SIZE;
-  const currentCount = dv.getUint8(countOffset);
-  if (slotIndex >= currentCount) {
-    dv.setUint8(countOffset, slotIndex + 1);
-  }
+  dv.setBigUint64(slotBase + SLOT_ORDER_ID, opts.orderId ?? 1n, true);
+  dv.setBigUint64(slotBase + SLOT_QUANTITY, opts.quantity ?? 100n, true);
+  dv.setBigUint64(slotBase + SLOT_ORIG_QTY, opts.originalQuantity ?? 100n, true);
+  buf[slotBase + SLOT_SIDE] = opts.side ?? Side.UsdcBid;
+  dv.setBigInt64(slotBase + SLOT_TIMESTAMP, opts.timestamp ?? 1700000000n, true);
+  buf[slotBase + SLOT_IS_ACTIVE] = opts.isActive !== false ? 1 : 0;
+  // rent_depositor (32 bytes) — defaults to zero
 }
 
 function setMarketPubkey(buf: Buffer, pubkey: PublicKey) {
-  const bytes = pubkey.toBuffer();
-  bytes.copy(buf, ANCHOR_DISCRIMINATOR_SIZE);
+  pubkey.toBuffer().copy(buf, HDR_MARKET);
 }
 
 function setNextOrderId(buf: Buffer, id: bigint) {
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  dv.setBigUint64(ANCHOR_DISCRIMINATOR_SIZE + PUBKEY_SIZE, id, true);
+  dv.setBigUint64(HDR_NEXT_ORDER_ID, id, true);
 }
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("deserializeOrderBook", () => {
-  it("returns empty orders for an empty book", () => {
-    const buf = createEmptyBuffer();
+describe("deserializeOrderBook (sparse)", () => {
+  it("returns empty orders for a header-only book (no levels)", () => {
+    const buf = createSparseBuffer(0);
     const result = deserializeOrderBook(buf);
     expect(result.orders).toHaveLength(0);
   });
 
   it("returns only active orders, skips inactive", () => {
-    const buf = createEmptyBuffer();
+    const buf = createSparseBuffer(1);
+    const lvl = allocateLevel(buf, 50);
 
-    // Active order at price level 50, slot 0
-    writeOrder(buf, 50, 0, { orderId: 1n, isActive: true });
-    // Inactive order at price level 50, slot 1
-    writeOrder(buf, 50, 1, { orderId: 2n, isActive: false });
+    writeOrder(buf, lvl, 0, { orderId: 1n, isActive: true });
+    writeOrder(buf, lvl, 1, { orderId: 2n, isActive: false });
 
     const result = deserializeOrderBook(buf);
     expect(result.orders).toHaveLength(1);
@@ -116,7 +143,7 @@ describe("deserializeOrderBook", () => {
   });
 
   it("reads market pubkey and nextOrderId correctly", () => {
-    const buf = createEmptyBuffer();
+    const buf = createSparseBuffer(0);
     const marketKey = PublicKey.unique();
     setMarketPubkey(buf, marketKey);
     setNextOrderId(buf, 42n);
@@ -127,9 +154,10 @@ describe("deserializeOrderBook", () => {
   });
 
   it("reads all order fields correctly", () => {
-    const buf = createEmptyBuffer();
+    const buf = createSparseBuffer(1);
+    const lvl = allocateLevel(buf, 25);
     const ownerBuf = PublicKey.unique().toBuffer();
-    writeOrder(buf, 25, 0, {
+    writeOrder(buf, lvl, 0, {
       owner: ownerBuf,
       orderId: 7n,
       quantity: 500n,
@@ -152,15 +180,30 @@ describe("deserializeOrderBook", () => {
   });
 
   it("reads orders from multiple price levels", () => {
-    const buf = createEmptyBuffer();
-    writeOrder(buf, 1, 0, { orderId: 1n, isActive: true });
-    writeOrder(buf, 50, 0, { orderId: 2n, isActive: true });
-    writeOrder(buf, 99, 0, { orderId: 3n, isActive: true });
+    const buf = createSparseBuffer(3);
+    const lvl1 = allocateLevel(buf, 1);
+    const lvl50 = allocateLevel(buf, 50);
+    const lvl99 = allocateLevel(buf, 99);
+
+    writeOrder(buf, lvl1, 0, { orderId: 1n, isActive: true });
+    writeOrder(buf, lvl50, 0, { orderId: 2n, isActive: true });
+    writeOrder(buf, lvl99, 0, { orderId: 3n, isActive: true });
 
     const result = deserializeOrderBook(buf);
     expect(result.orders).toHaveLength(3);
     const prices = result.orders.map((o) => o.priceLevel).sort((a, b) => a - b);
     expect(prices).toEqual([1, 50, 99]);
+  });
+
+  it("skips unallocated prices in price_map", () => {
+    const buf = createSparseBuffer(1);
+    // Only allocate price 42 — all other prices should be skipped
+    const lvl = allocateLevel(buf, 42);
+    writeOrder(buf, lvl, 0, { orderId: 1n, isActive: true });
+
+    const result = deserializeOrderBook(buf);
+    expect(result.orders).toHaveLength(1);
+    expect(result.orders[0].priceLevel).toBe(42);
   });
 });
 
@@ -256,15 +299,9 @@ describe("buildNoView", () => {
     };
   }
 
-  // Corrected No view logic (H-new1):
-  //   YesAsk at P  → No BID at (100-P) [Yes sellers = No buyers]
-  //   NoBackedBid at P → No ASK at P [No holders selling at native price]
-  //   UsdcBid at P → No ASK at (100-P) [Yes buyers = No sellers at complement]
-
   it("inverts USDC bid at price 60 to No ask at price 40", () => {
     const orders: ActiveOrder[] = [makeOrder(60, Side.UsdcBid, 200n)];
     const view = buildNoView(orders);
-    // USDC bid at 60 → No ASK at 100-60 = 40
     expect(view.asks).toHaveLength(1);
     expect(view.asks[0].price).toBe(40);
     expect(view.asks[0].totalQuantity).toBe(200n);
@@ -273,7 +310,6 @@ describe("buildNoView", () => {
   it("inverts Yes ask at price 70 to No bid at price 30", () => {
     const orders: ActiveOrder[] = [makeOrder(70, Side.YesAsk, 150n)];
     const view = buildNoView(orders);
-    // Yes ask at 70 → No BID at 100-70 = 30
     expect(view.bids).toHaveLength(1);
     expect(view.bids[0].price).toBe(30);
     expect(view.bids[0].totalQuantity).toBe(150n);
@@ -282,7 +318,6 @@ describe("buildNoView", () => {
   it("No-backed bid at price 55 becomes No ask at price 55", () => {
     const orders: ActiveOrder[] = [makeOrder(55, Side.NoBackedBid, 100n)];
     const view = buildNoView(orders);
-    // NoBackedBid → No ASK at native price
     expect(view.asks).toHaveLength(1);
     expect(view.asks[0].price).toBe(55);
   });
@@ -319,11 +354,10 @@ describe("buildNoView", () => {
 
   it("calculates spread correctly with inverted prices", () => {
     const orders: ActiveOrder[] = [
-      makeOrder(60, Side.UsdcBid),   // → No ask at 40
-      makeOrder(70, Side.YesAsk),    // → No bid at 30
+      makeOrder(60, Side.UsdcBid),
+      makeOrder(70, Side.YesAsk),
     ];
     const view = buildNoView(orders);
-    // bids at 30, asks at 40 → spread = 40 - 30 = 10
     expect(view.bestBid).toBe(30);
     expect(view.bestAsk).toBe(40);
     expect(view.spread).toBe(10);
@@ -331,8 +365,8 @@ describe("buildNoView", () => {
 
   it("merges No-backed bids with inverted USDC bids at same ask price", () => {
     const orders: ActiveOrder[] = [
-      makeOrder(55, Side.NoBackedBid, 100n), // No ask at 55 (native)
-      makeOrder(45, Side.UsdcBid, 200n),     // inverted: No ask at 100-45 = 55
+      makeOrder(55, Side.NoBackedBid, 100n),
+      makeOrder(45, Side.UsdcBid, 200n),
     ];
     const view = buildNoView(orders);
     expect(view.asks).toHaveLength(1);

@@ -1,7 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Mint, SetAuthority, CloseAccount, spl_token::instruction::AuthorityType};
 use crate::error::MeridianError;
-use crate::state::{GlobalConfig, StrikeMarket, OrderBook, MAX_PRICE_LEVELS, CLOSE_GRACE_PERIOD_SECS};
+use crate::matching::engine::has_active_orders;
+use crate::state::order_book::verify_discriminator;
+use crate::state::{GlobalConfig, StrikeMarket, CLOSE_GRACE_PERIOD_SECS};
 
 #[derive(Accounts)]
 pub struct CloseMarket<'info> {
@@ -27,8 +29,9 @@ pub struct CloseMarket<'info> {
     )]
     pub market: Box<Account<'info, StrikeMarket>>,
 
+    /// CHECK: Sparse order book PDA — validated via market.order_book.
     #[account(mut)]
-    pub order_book: AccountLoader<'info, OrderBook>,
+    pub order_book: UncheckedAccount<'info>,
 
     #[account(mut)]
     pub usdc_vault: Box<Account<'info, TokenAccount>>,
@@ -77,15 +80,22 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
     // Gate: not already closed
     require!(!market.is_closed, MeridianError::MarketClosed);
 
-    // Gate: order book must be empty (all levels count == 0)
+    // Gate: order book must be empty (no active orders in sparse layout)
     {
-        let ob = ctx.accounts.order_book.load()?;
-        for i in 0..MAX_PRICE_LEVELS {
-            require!(
-                ob.levels[i].count == 0,
-                MeridianError::CloseMarketOrderBookNotEmpty,
-            );
-        }
+        let ob_info = ctx.accounts.order_book.to_account_info();
+        require!(
+            ob_info.owner == ctx.program_id,
+            MeridianError::InvalidOrderBook
+        );
+        let ob_data = ob_info.try_borrow_data()?;
+        require!(
+            verify_discriminator(&ob_data),
+            MeridianError::OrderBookDiscriminatorMismatch
+        );
+        require!(
+            !has_active_orders(&ob_data),
+            MeridianError::CloseMarketOrderBookNotEmpty,
+        );
     }
 
     // Determine if standard close (all tokens redeemed) or partial close

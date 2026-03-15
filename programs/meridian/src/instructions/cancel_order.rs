@@ -23,11 +23,9 @@ pub struct CancelOrder<'info> {
     )]
     pub market: Box<Account<'info, StrikeMarket>>,
 
-    #[account(
-        mut,
-        constraint = order_book.load()?.market == market.key() @ MeridianError::InvalidMarket,
-    )]
-    pub order_book: AccountLoader<'info, OrderBook>,
+    /// CHECK: Sparse order book PDA — validated via market.order_book.
+    #[account(mut)]
+    pub order_book: UncheckedAccount<'info>,
 
     /// USDC escrow vault — refund source for USDC bids
     #[account(mut)]
@@ -73,18 +71,38 @@ pub fn handle_cancel_order(
     price: u8,
     order_id: u64,
 ) -> Result<()> {
-    // Note: Cancellation is intentionally allowed on settled/closed markets.
-    // Users must be able to retrieve escrowed funds at any time.
     require!(price >= 1 && price <= 99, MeridianError::InvalidPrice);
 
-    let mut ob = ctx.accounts.order_book.load_mut()?;
-    let cancelled = cancel_resting_order(&mut ob, price, order_id, &ctx.accounts.user.key())
-        .map_err(|e| match e {
-            CancelError::NotFound => MeridianError::OrderNotFound,
-            CancelError::NotOwned => MeridianError::OrderNotOwned,
-        })?;
+    let ob_info = ctx.accounts.order_book.to_account_info();
+    require!(
+        ob_info.owner == ctx.program_id,
+        MeridianError::InvalidOrderBook
+    );
 
-    drop(ob);
+    let cancelled;
+    {
+        let mut ob_data = ob_info.try_borrow_mut_data()?;
+        require!(
+            verify_discriminator(&ob_data),
+            MeridianError::OrderBookDiscriminatorMismatch
+        );
+        cancelled = cancel_resting_order(&mut ob_data, price, order_id, &ctx.accounts.user.key())
+            .map_err(|e| match e {
+                CancelError::NotFound => MeridianError::OrderNotFound,
+                CancelError::NotOwned => MeridianError::OrderNotOwned,
+            })?;
+    }
+
+    // Check if level is now empty — if so, free it
+    let level_empty;
+    {
+        let ob_data = ob_info.try_borrow_data()?;
+        level_empty = level_count(&ob_data, cancelled.level_idx) == 0;
+    }
+    if level_empty {
+        let mut ob_data = ob_info.try_borrow_mut_data()?;
+        free_level(&mut ob_data, cancelled.level_idx);
+    }
 
     // Build signer seeds for market PDA
     let market = &ctx.accounts.market;
@@ -93,9 +111,6 @@ pub fn handle_cancel_order(
     // Refund based on order side
     match cancelled.side {
         SIDE_USDC_BID => {
-            // Refund USDC: floor(quantity * price / 100).
-            // Escrow uses ceiling division (escrow.rs), so refund ≤ escrowed amount.
-            // Max dust retained per cancel: 99 lamports (< $0.0001). Swept at market close.
             let refund = cancelled
                 .quantity
                 .checked_mul(cancelled.price as u64)
@@ -117,7 +132,6 @@ pub fn handle_cancel_order(
             )?;
         }
         SIDE_YES_ASK => {
-            // Refund Yes tokens
             token::transfer(
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program.to_account_info(),
@@ -132,7 +146,6 @@ pub fn handle_cancel_order(
             )?;
         }
         SIDE_NO_BID => {
-            // Refund No tokens
             token::transfer(
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program.to_account_info(),

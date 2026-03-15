@@ -302,40 +302,6 @@ export function buildMintPairIx(
 }
 
 // ---------------------------------------------------------------------------
-// Meridian: allocate_order_book
-// ---------------------------------------------------------------------------
-
-export interface AllocateOrderBookParams {
-  payer: PublicKey;
-  orderBook: PublicKey;
-  /** The market PDA key (used to verify the OrderBook PDA derivation) */
-  marketKey: PublicKey;
-}
-
-export function buildAllocateOrderBookIx(
-  params: AllocateOrderBookParams,
-): TransactionInstruction {
-  const disc = anchorDiscriminator("allocate_order_book");
-
-  // Data: disc(8) + market_key(32)
-  const data = Buffer.concat([disc, params.marketKey.toBuffer()]);
-
-  // Account order matches AllocateOrderBook struct:
-  //   payer, order_book, system_program
-  const keys = [
-    { pubkey: params.payer, isSigner: true, isWritable: true },
-    { pubkey: params.orderBook, isSigner: false, isWritable: true },
-    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-  ];
-
-  return new TransactionInstruction({
-    programId: MERIDIAN_PROGRAM_ID,
-    keys,
-    data,
-  });
-}
-
-// ---------------------------------------------------------------------------
 // MockOracle: initialize_feed
 // ---------------------------------------------------------------------------
 

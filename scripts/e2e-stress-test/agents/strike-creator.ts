@@ -1,12 +1,10 @@
 /**
  * strike-creator.ts — Agent that creates new strike markets during the test.
- * Only fires ~10% of the time. Handles the full creation flow: allocate
- * orderbook, create market, ALT warmup + create + extend + set, then seed
- * liquidity with a mint_pair.
+ * Only fires ~10% of the time. Handles the full creation flow: create market,
+ * ALT warmup + create + extend + set, then seed liquidity with a mint_pair.
  */
 
 import {
-  Keypair,
   Transaction,
   PublicKey,
   AddressLookupTableProgram,
@@ -18,7 +16,6 @@ import BN from "bn.js";
 import { BaseAgent } from "./base-agent";
 import type { MarketContext } from "../types";
 import {
-  buildAllocateOrderBookIx,
   buildCreateStrikeMarketIx,
   buildSetMarketAltIx,
   buildMintPairIx,
@@ -36,12 +33,10 @@ import {
   findPriceFeed,
 } from "../../../services/shared/src/pda";
 import {
-  ALLOC_CALLS_REQUIRED,
-  ALLOC_BATCH_SIZE,
   ALT_WARMUP_SLEEP_MS,
   DEFAULT_MINT_QUANTITY,
 } from "../config";
-import { sendTx, batch } from "../helpers";
+import { sendTx } from "../helpers";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -99,31 +94,7 @@ export class StrikeCreator extends BaseAgent {
 
       const admin = this.ctx.admin;
 
-      // ── Step 1: Allocate OrderBook (13 calls, batched 6/tx) ──────────────
-      const allocIxs = [];
-      for (let i = 0; i < ALLOC_CALLS_REQUIRED; i++) {
-        allocIxs.push(
-          buildAllocateOrderBookIx({
-            payer: admin.publicKey,
-            orderBook,
-            marketKey: market,
-          }),
-        );
-      }
-
-      const allocBatches = batch(allocIxs, ALLOC_BATCH_SIZE);
-      for (let bi = 0; bi < allocBatches.length; bi++) {
-        const tx = new Transaction();
-        for (const ix of allocBatches[bi]) {
-          tx.add(ix);
-        }
-        const sig = await this.sendTimed(tx, [admin], "allocate_order_book");
-        if (!sig) return;
-        process.stdout.write(`\r      strike-creator alloc ${ticker} ${bi + 1}/${allocBatches.length}`);
-      }
-      process.stdout.write("\n");
-
-      // ── Step 2: Create Strike Market ─────────────────────────────────────
+      // ── Step 1: Create Strike Market ─────────────────────────────────────
       const expiryDay = Math.floor(marketCloseUnix / 86400);
       const previousCloseLamports = oraclePrice; // use current price as previous close
 
@@ -153,7 +124,7 @@ export class StrikeCreator extends BaseAgent {
       const createSig = await this.sendTimed(createTx, [admin], "create_strike_market");
       if (!createSig) return;
 
-      // ── Step 3: ALT warmup + create + extend + sleep + setMarketAlt ──────
+      // ── Step 2: ALT warmup + create + extend + sleep + setMarketAlt ──────
       // Warmup: self-transfer 1 lamport to advance slot
       const warmupIx = SystemProgram.transfer({
         fromPubkey: admin.publicKey,
@@ -210,7 +181,7 @@ export class StrikeCreator extends BaseAgent {
       const setAltTx = new Transaction().add(setAltIx);
       await this.sendTimed(setAltTx, [admin], "set_market_alt");
 
-      // ── Step 4: Push new MarketContext ────────────────────────────────────
+      // ── Step 3: Push new MarketContext ────────────────────────────────────
       const newMarket: MarketContext = {
         ticker,
         strikeLamports,
@@ -231,7 +202,7 @@ export class StrikeCreator extends BaseAgent {
 
       this.ctx.markets.push(newMarket);
 
-      // ── Step 5: Mint to seed liquidity ───────────────────────────────────
+      // ── Step 4: Mint to seed liquidity ───────────────────────────────────
       // Create ATAs for the creator agent
       await getOrCreateAssociatedTokenAccount(
         this.ctx.connection,

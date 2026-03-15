@@ -191,17 +191,6 @@ describe("Permissionless Strike Creation", () => {
     const [noEscrow] = findNoEscrow(market);
     const [orderBook] = findOrderBook(market);
 
-    // Pre-allocate OrderBook PDA
-    const ORDER_BOOK_SPACE = 8 + 254_280;
-    const rent = await ctx.context.banksClient.getRent();
-    const orderBookLamports = Number(rent.minimumBalance(BigInt(ORDER_BOOK_SPACE)));
-    ctx.context.setAccount(orderBook, {
-      lamports: orderBookLamports,
-      data: Buffer.alloc(ORDER_BOOK_SPACE, 0),
-      owner: MERIDIAN_PROGRAM_ID,
-      executable: false,
-    });
-
     const ix = buildCreateStrikeMarketIx({
       admin: user.publicKey, // creator field — the key array uses `admin` name for backward compat
       config,

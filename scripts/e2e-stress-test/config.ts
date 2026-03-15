@@ -21,10 +21,7 @@ export const DEFAULT_CONFIG: RunConfig = {
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-export const ORDER_BOOK_TOTAL_SPACE = 8 + 254_280;
-export const MAX_GROWTH = 10_240;
-export const ALLOC_BATCH_SIZE = 6;
-export const ALLOC_CALLS_REQUIRED = Math.ceil(254_280 / MAX_GROWTH);
+// Order book is now created inline by create_strike_market (sparse layout)
 export const STRESS_ADMIN_SETTLE_DELAY_S = 5;
 export const STRESS_OVERRIDE_WINDOW_S = 5;
 export const STRESS_GRACE_PERIOD_S = 5;

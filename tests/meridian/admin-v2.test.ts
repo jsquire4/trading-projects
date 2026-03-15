@@ -677,17 +677,6 @@ describe("Admin V2 — Phase 6A", () => {
         [Buffer.from("order_book"), newMarket.toBuffer()], MERIDIAN_PROGRAM_ID,
       );
 
-      // Pre-allocate OrderBook PDA
-      const ORDER_BOOK_SPACE = 8 + 254_280;
-      const rent = await ctx.context.banksClient.getRent();
-      const obLamports = Number(rent.minimumBalance(BigInt(ORDER_BOOK_SPACE)));
-      ctx.context.setAccount(orderBook, {
-        lamports: obLamports,
-        data: Buffer.alloc(ORDER_BOOK_SPACE, 0),
-        owner: MERIDIAN_PROGRAM_ID,
-        executable: false,
-      });
-
       // Import the builder
       const { buildCreateStrikeMarketIx } = await import("../helpers/instructions");
 
@@ -1157,16 +1146,6 @@ describe("Admin V2 — Phase 6A", () => {
         [Buffer.from("order_book"), mkt.toBuffer()], MERIDIAN_PROGRAM_ID,
       );
 
-      const ORDER_BOOK_SPACE = 8 + 254_280;
-      const rent = await ctx.context.banksClient.getRent();
-      const obLamports = Number(rent.minimumBalance(BigInt(ORDER_BOOK_SPACE)));
-      ctx.context.setAccount(orderBook, {
-        lamports: obLamports,
-        data: Buffer.alloc(ORDER_BOOK_SPACE, 0),
-        owner: MERIDIAN_PROGRAM_ID,
-        executable: false,
-      });
-
       const { buildCreateStrikeMarketIx } = await import("../helpers/instructions");
       const createIx = buildCreateStrikeMarketIx({
         admin: ctx.admin.publicKey,
@@ -1240,16 +1219,6 @@ describe("Admin V2 — Phase 6A", () => {
       const [orderBook] = PublicKey.findProgramAddressSync(
         [Buffer.from("order_book"), mkt.toBuffer()], MERIDIAN_PROGRAM_ID,
       );
-
-      const ORDER_BOOK_SPACE = 8 + 254_280;
-      const rent = await ctx.context.banksClient.getRent();
-      const obLamports = Number(rent.minimumBalance(BigInt(ORDER_BOOK_SPACE)));
-      ctx.context.setAccount(orderBook, {
-        lamports: obLamports,
-        data: Buffer.alloc(ORDER_BOOK_SPACE, 0),
-        owner: MERIDIAN_PROGRAM_ID,
-        executable: false,
-      });
 
       const { buildCreateStrikeMarketIx } = await import("../helpers/instructions");
       const createIx = buildCreateStrikeMarketIx({

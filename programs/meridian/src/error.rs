@@ -210,4 +210,18 @@ pub enum MeridianError {
     InsufficientTreasuryRent = 162,
     #[msg("Admin signer required when oracle_type is Mock")]
     MockOracleAdminRequired = 163,
+
+    // === Sparse Order Book (on-chain: 6170-6175) ===
+    #[msg("Order book account data is too small for header")]
+    OrderBookTooSmall = 170,
+    #[msg("Order book discriminator mismatch")]
+    OrderBookDiscriminatorMismatch = 171,
+    #[msg("Insufficient SOL for order book rent deposit")]
+    InsufficientRentDeposit = 172,
+    #[msg("Order book has reached maximum level capacity")]
+    MaxLevelsReached = 173,
+    #[msg("Cannot grow orders_per_level beyond 32")]
+    MaxSlotsReached = 174,
+    #[msg("Order book already initialized")]
+    OrderBookAlreadyInitialized = 175,
 }

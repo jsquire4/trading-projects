@@ -34,8 +34,6 @@ import type {
   DayResult,
 } from "./types";
 import {
-  ALLOC_CALLS_REQUIRED,
-  ALLOC_BATCH_SIZE,
   ALT_WARMUP_SLEEP_MS,
   STRESS_ADMIN_SETTLE_DELAY_S,
   STRESS_OVERRIDE_WINDOW_S,
@@ -46,7 +44,6 @@ import {
   MAX_FILLS,
 } from "./config";
 import {
-  buildAllocateOrderBookIx,
   buildCreateStrikeMarketIx,
   buildSetMarketAltIx,
   buildSettleMarketIx,
@@ -119,7 +116,6 @@ async function createDayMarkets(
       const m = await createMarket(ctx, ticker, strikeLamports, previousCloseLamports, marketCloseUnix, day);
       markets.push(m);
       ctx.markets.push(m);
-      ctx.metrics.instructionTypes.add("allocate_order_book");
       ctx.metrics.instructionTypes.add("create_strike_market");
       ctx.metrics.instructionTypes.add("set_market_alt");
       console.log(`      ✓ ${ticker} created`);
@@ -150,27 +146,7 @@ async function createMarket(
   const [orderBook] = findOrderBook(market);
   const [oracleFeed] = findPriceFeed(ticker);
 
-  // 1. Allocate order book (25 calls, batched 6/tx)
-  const allocIxs = [];
-  for (let i = 0; i < ALLOC_CALLS_REQUIRED; i++) {
-    allocIxs.push(
-      buildAllocateOrderBookIx({
-        payer: ctx.admin.publicKey,
-        orderBook,
-        marketKey: market,
-      }),
-    );
-  }
-  const allocBatches = batch(allocIxs, ALLOC_BATCH_SIZE);
-  for (let bi = 0; bi < allocBatches.length; bi++) {
-    const tx = new Transaction();
-    for (const ix of allocBatches[bi]) tx.add(ix);
-    await sendTx(ctx.connection, tx, [ctx.admin]);
-    process.stdout.write(`\r      alloc ${ticker} ${bi + 1}/${allocBatches.length}`);
-  }
-  process.stdout.write("\n");
-
-  // 2. Create strike market
+  // 1. Create strike market (also creates order book inline)
   const createIx = buildCreateStrikeMarketIx({
     admin: ctx.admin.publicKey,
     config: ctx.configPda,

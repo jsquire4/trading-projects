@@ -59,7 +59,6 @@ const KNOWN_INSTRUCTIONS = [
   "initialize_config",
   "initialize_feed",
   // Market lifecycle
-  "allocate_order_book",
   "create_strike_market",
   "set_market_alt",
   // Trading

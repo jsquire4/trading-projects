@@ -22,7 +22,6 @@ import BN from "bn.js";
 
 import {
   buildCreateStrikeMarketIx,
-  buildAllocateOrderBookIx,
   buildSetMarketAltIx,
   buildMintPairIx,
   buildPlaceOrderIx,
@@ -67,8 +66,6 @@ import { BASE_PRICES } from "../../services/shared/src/synthetic-config";
 
 import type { SharedContext, MarketContext, ActResult, ErrorEntry } from "./types";
 import {
-  ALLOC_CALLS_REQUIRED,
-  ALLOC_BATCH_SIZE,
   ALT_WARMUP_SLEEP_MS,
   MAX_FILLS,
   STRESS_OVERRIDE_WINDOW_S,
@@ -145,28 +142,7 @@ async function createMarket(
   const [orderBook] = findOrderBook(market);
   const [oracleFeed] = findPriceFeedPda(ticker);
 
-  // 2. Allocate order book — 25 calls batched 6/tx
-  const allocIxs = [];
-  for (let i = 0; i < ALLOC_CALLS_REQUIRED; i++) {
-    allocIxs.push(
-      buildAllocateOrderBookIx({
-        payer: admin.publicKey,
-        orderBook,
-        marketKey: market,
-      }),
-    );
-  }
-  const allocBatches = batch(allocIxs, ALLOC_BATCH_SIZE);
-  for (let bi = 0; bi < allocBatches.length; bi++) {
-    const tx = new Transaction();
-    allocBatches[bi].forEach((ix) => tx.add(ix));
-    await sendTx(connection, tx, [admin]);
-    process.stdout.write(`\r      alloc ${bi + 1}/${allocBatches.length}`);
-  }
-  process.stdout.write("\n");
-  track(ctx, "allocate_order_book");
-
-  // 3. Create strike market
+  // 2. Create strike market
   const expiryDay = Math.floor(marketCloseUnix / 86400);
   const createIx = buildCreateStrikeMarketIx({
     admin: admin.publicKey,

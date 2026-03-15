@@ -30,6 +30,20 @@ function makeEvent(overrides: Partial<Omit<EventRow, "id" | "created_at">> = {})
   };
 }
 
+/** Build a fill data JSON string with field overrides. */
+function makeFillData(overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    taker: "TakerAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    maker: "MakerAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    takerSide: 0,
+    makerSide: 0,
+    price: 50,
+    quantity: 1000000,
+    makerOrderId: "1",
+    ...overrides,
+  });
+}
+
 describe("Database Layer", () => {
   beforeEach(() => {
     initDb(":memory:");
@@ -333,15 +347,7 @@ describe("Database Layer", () => {
       insertEvent(makeEvent({
         market,
         signature: "fill_sig_1",
-        data: JSON.stringify({
-          taker: wallet,
-          maker: "OtherWallet",
-          takerSide: 0,
-          makerSide: 0,
-          price: 65,
-          quantity: 1000000,
-          makerOrderId: "100",
-        }),
+        data: makeFillData({ taker: wallet, maker: "OtherWallet", price: 65, makerOrderId: "100" }),
       }));
 
       const fills = queryFillsWithIntent(wallet);
@@ -363,15 +369,7 @@ describe("Database Layer", () => {
       insertEvent(makeEvent({
         market,
         signature: "fill_sig_2",
-        data: JSON.stringify({
-          taker: "OtherWallet",
-          maker: wallet,
-          takerSide: 1,
-          makerSide: 0,
-          price: 65,
-          quantity: 1000000,
-          makerOrderId: "200",
-        }),
+        data: makeFillData({ taker: "OtherWallet", maker: wallet, takerSide: 1, price: 65, makerOrderId: "200" }),
       }));
 
       const fills = queryFillsWithIntent(wallet);
@@ -385,15 +383,7 @@ describe("Database Layer", () => {
       insertEvent(makeEvent({
         market,
         signature: "fill_sig_3",
-        data: JSON.stringify({
-          taker: "OtherWallet",
-          maker,
-          takerSide: 0,
-          makerSide: 0,
-          price: 65,
-          quantity: 1000000,
-          makerOrderId: "300",
-        }),
+        data: makeFillData({ taker: "OtherWallet", maker, price: 65, makerOrderId: "300" }),
       }));
 
       const fills = queryFillsWithIntent(maker);
@@ -406,15 +396,7 @@ describe("Database Layer", () => {
       insertEvent(makeEvent({
         market,
         signature: "fill_sig_4",
-        data: JSON.stringify({
-          taker: wallet,
-          maker: "OtherWallet",
-          takerSide: 1,
-          makerSide: 0,
-          price: 65,
-          quantity: 1000000,
-          makerOrderId: "400",
-        }),
+        data: makeFillData({ taker: wallet, maker: "OtherWallet", takerSide: 1, price: 65, makerOrderId: "400" }),
       }));
 
       const fills = queryFillsWithIntent(wallet);
@@ -426,15 +408,7 @@ describe("Database Layer", () => {
       insertEvent(makeEvent({
         market,
         signature: "fill_sig_5",
-        data: JSON.stringify({
-          taker: wallet,
-          maker: "OtherWallet",
-          takerSide: 2,
-          makerSide: 1,
-          price: 40,
-          quantity: 500000,
-          makerOrderId: "500",
-        }),
+        data: makeFillData({ taker: wallet, maker: "OtherWallet", takerSide: 2, makerSide: 1, price: 40, quantity: 500000, makerOrderId: "500" }),
       }));
 
       const fills = queryFillsWithIntent(wallet);
@@ -446,15 +420,7 @@ describe("Database Layer", () => {
       insertEvent(makeEvent({
         market,
         signature: "fill_sig_unknown_taker",
-        data: JSON.stringify({
-          taker: wallet,
-          maker: "OtherWallet",
-          takerSide: 99,
-          makerSide: 0,
-          price: 50,
-          quantity: 1000000,
-          makerOrderId: "998",
-        }),
+        data: makeFillData({ taker: wallet, maker: "OtherWallet", takerSide: 99, makerOrderId: "998" }),
       }));
 
       const fills = queryFillsWithIntent(wallet);
@@ -467,15 +433,7 @@ describe("Database Layer", () => {
       insertEvent(makeEvent({
         market,
         signature: "fill_sig_unknown_maker",
-        data: JSON.stringify({
-          taker: "OtherWallet",
-          maker,
-          takerSide: 0,
-          makerSide: 99,
-          price: 50,
-          quantity: 1000000,
-          makerOrderId: "999",
-        }),
+        data: makeFillData({ taker: "OtherWallet", maker, makerSide: 99, makerOrderId: "999" }),
       }));
 
       const fills = queryFillsWithIntent(maker);
@@ -489,18 +447,12 @@ describe("Database Layer", () => {
       insertEvent(makeEvent({
         market,
         signature: "fill_sig_w1",
-        data: JSON.stringify({
-          taker: wallet, maker: otherWallet, takerSide: 0, makerSide: 0,
-          price: 50, quantity: 1000000, makerOrderId: "800",
-        }),
+        data: makeFillData({ taker: wallet, maker: otherWallet, makerOrderId: "800" }),
       }));
       insertEvent(makeEvent({
         market,
         signature: "fill_sig_w2",
-        data: JSON.stringify({
-          taker: otherWallet, maker: "ThirdWallet",  takerSide: 0, makerSide: 0,
-          price: 60, quantity: 2000000, makerOrderId: "801",
-        }),
+        data: makeFillData({ taker: otherWallet, maker: "ThirdWallet", price: 60, quantity: 2000000, makerOrderId: "801" }),
       }));
 
       const walletFills = queryFillsWithIntent(wallet);
@@ -515,16 +467,7 @@ describe("Database Layer", () => {
       insertEvent(makeEvent({
         market,
         signature: "fill_sig_6",
-        data: JSON.stringify({
-          taker: "OtherWallet",
-          maker,
-          takerSide: 1,
-          makerSide: 2,
-          price: 65,
-          quantity: 1000000,
-          makerOrderId: "600",
-          isMerge: true,
-        }),
+        data: makeFillData({ taker: "OtherWallet", maker, takerSide: 1, makerSide: 2, price: 65, makerOrderId: "600", isMerge: true }),
       }));
 
       const fills = queryFillsWithIntent(maker);
@@ -544,7 +487,7 @@ describe("Database Layer", () => {
       insertEvent(makeEvent({
         market,
         signature: "cb_1",
-        data: JSON.stringify({ taker: wallet, maker: "Other", takerSide: 0, makerSide: 0, price: 60, quantity: 2000000, makerOrderId: "1" }),
+        data: makeFillData({ taker: wallet, maker: "Other", price: 60, quantity: 2000000 }),
       }));
       const rows = queryCostBasis(wallet);
       expect(rows).toHaveLength(1);
@@ -557,7 +500,7 @@ describe("Database Layer", () => {
       insertEvent(makeEvent({
         market,
         signature: "cb_2",
-        data: JSON.stringify({ taker: wallet, maker: "Other", takerSide: 2, makerSide: 1, price: 40, quantity: 1000000, makerOrderId: "2" }),
+        data: makeFillData({ taker: wallet, maker: "Other", takerSide: 2, makerSide: 1, price: 40, makerOrderId: "2" }),
       }));
       const rows = queryCostBasis(wallet);
       expect(rows).toHaveLength(1);
@@ -569,7 +512,7 @@ describe("Database Layer", () => {
       insertEvent(makeEvent({
         market,
         signature: "cb_3",
-        data: JSON.stringify({ taker: "Other", maker: wallet, takerSide: 1, makerSide: 0, price: 55, quantity: 3000000, makerOrderId: "3" }),
+        data: makeFillData({ taker: "Other", maker: wallet, takerSide: 1, price: 55, quantity: 3000000, makerOrderId: "3" }),
       }));
       const rows = queryCostBasis(wallet);
       expect(rows).toHaveLength(1);
@@ -580,7 +523,7 @@ describe("Database Layer", () => {
       insertEvent(makeEvent({
         market,
         signature: "cb_4",
-        data: JSON.stringify({ taker: "Other", maker: wallet, takerSide: 1, makerSide: 2, price: 35, quantity: 1500000, makerOrderId: "4" }),
+        data: makeFillData({ taker: "Other", maker: wallet, takerSide: 1, makerSide: 2, price: 35, quantity: 1500000, makerOrderId: "4" }),
       }));
       const rows = queryCostBasis(wallet);
       expect(rows).toHaveLength(1);
@@ -592,7 +535,7 @@ describe("Database Layer", () => {
       insertEvent(makeEvent({
         market,
         signature: "cb_5",
-        data: JSON.stringify({ taker: wallet, maker: "Other", takerSide: 1, makerSide: 0, price: 60, quantity: 1000000, makerOrderId: "5" }),
+        data: makeFillData({ taker: wallet, maker: "Other", takerSide: 1, price: 60, makerOrderId: "5" }),
       }));
       const rows = queryCostBasis(wallet);
       expect(rows).toHaveLength(0);

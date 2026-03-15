@@ -49,6 +49,7 @@ describe("Place Order", () => {
   let feeVault: PublicKey;
   let oracleFeed: PublicKey;
   let ma: MarketAccounts; // market accounts
+  let provider: BankrunProvider;
 
   const TICKER = "AAPL";
   const STRIKE_PRICE = 200_000_000;
@@ -91,7 +92,7 @@ describe("Place Order", () => {
     userNoAta = getAssociatedTokenAddressSync(ma.noMint, ctx.admin.publicKey);
 
     // Mint 100 pairs so user has Yes + No tokens to trade
-    const provider = new BankrunProvider(ctx.context);
+    provider = new BankrunProvider(ctx.context);
     const mintIx = buildMintPairIx({
       user: ctx.admin.publicKey,
       config,
@@ -150,29 +151,9 @@ describe("Place Order", () => {
     // Let's use a fresh user that only has USDC.
     const { user: buyer, userUsdcAta: buyerUsdcAta, userYesAta: buyerYesAta, userNoAta: buyerNoAta } =
       await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 100_000_000);
-    const provider = new BankrunProvider(ctx.context);
 
-    const ix = buildPlaceOrderIx({
-      user: buyer.publicKey,
-      config,
-      market: ma.market,
-      orderBook: ma.orderBook,
-      usdcVault: ma.usdcVault,
-      escrowVault: ma.escrowVault,
-      yesEscrow: ma.yesEscrow,
-      noEscrow: ma.noEscrow,
-      yesMint: ma.yesMint,
-      noMint: ma.noMint,
-      userUsdcAta: buyerUsdcAta,
-      userYesAta: buyerYesAta,
-      userNoAta: buyerNoAta,
-      feeVault,
-      side: SIDE_USDC_BID,
-      price: 50,
-      quantity: new BN(TEN_TOKENS),
-      orderType: ORDER_TYPE_LIMIT,
-      maxFills: 10,
-    });
+
+    const ix = placeOrderIx(SIDE_USDC_BID, 50, TEN_TOKENS, ORDER_TYPE_LIMIT, 10, undefined, buyer);
 
     await provider.sendAndConfirm!(new Transaction().add(ix), [buyer]);
 
@@ -197,7 +178,7 @@ describe("Place Order", () => {
   it("places a Yes ask (Sell Yes) limit order on the book", async () => {
     // Admin has Yes tokens from minting. Place a sell order.
     // But admin also has No tokens, which is fine for side=1 (no position constraint).
-    const provider = new BankrunProvider(ctx.context);
+
 
     const ix = placeOrderIx(SIDE_YES_ASK, 60, TEN_TOKENS, ORDER_TYPE_LIMIT, 10);
     await provider.sendAndConfirm!(new Transaction().add(ix), [ctx.admin]);
@@ -217,7 +198,7 @@ describe("Place Order", () => {
   });
 
   it("rejects price outside [1, 99]", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
     const ix = placeOrderIx(SIDE_YES_ASK, 0, TEN_TOKENS, ORDER_TYPE_LIMIT, 10);
 
     try {
@@ -229,7 +210,7 @@ describe("Place Order", () => {
   });
 
   it("rejects quantity below minimum (1 token)", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
     const ix = placeOrderIx(SIDE_YES_ASK, 50, 500_000, ORDER_TYPE_LIMIT, 10);
 
     try {
@@ -243,7 +224,7 @@ describe("Place Order", () => {
   it("rejects Buy Yes when user holds No tokens (ConflictingPosition)", async () => {
     // Admin holds both Yes and No from minting → has No balance > 0
     // Trying to place a USDC bid (Buy Yes) should fail
-    const provider = new BankrunProvider(ctx.context);
+
     const ix = placeOrderIx(SIDE_USDC_BID, 50, ONE_TOKEN, ORDER_TYPE_LIMIT, 10);
 
     try {
@@ -259,34 +240,13 @@ describe("Place Order", () => {
     // the Yes ask at price 60 placed earlier by admin.
     const { user: taker, userUsdcAta: takerUsdcAta, userYesAta: takerYesAta, userNoAta: takerNoAta } =
       await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 100_000_000);
-    const provider = new BankrunProvider(ctx.context);
+
 
     // Maker (admin) needs a USDC ATA to receive payment
     // Admin already has userUsdcAta
     const makerUsdcBefore = await getTokenBalance(ctx, userUsdcAta);
 
-    const ix = buildPlaceOrderIx({
-      user: taker.publicKey,
-      config,
-      market: ma.market,
-      orderBook: ma.orderBook,
-      usdcVault: ma.usdcVault,
-      escrowVault: ma.escrowVault,
-      yesEscrow: ma.yesEscrow,
-      noEscrow: ma.noEscrow,
-      yesMint: ma.yesMint,
-      noMint: ma.noMint,
-      userUsdcAta: takerUsdcAta,
-      userYesAta: takerYesAta,
-      userNoAta: takerNoAta,
-      feeVault,
-      side: SIDE_USDC_BID,
-      price: 60,
-      quantity: new BN(5 * ONE_TOKEN),
-      orderType: ORDER_TYPE_MARKET,
-      maxFills: 10,
-      makerAccounts: [userUsdcAta], // admin's USDC ATA receives payment
-    });
+    const ix = placeOrderIx(SIDE_USDC_BID, 60, 5 * ONE_TOKEN, ORDER_TYPE_MARKET, 10, [userUsdcAta], taker);
 
     await provider.sendAndConfirm!(new Transaction().add(ix), [taker]);
 
@@ -303,30 +263,10 @@ describe("Place Order", () => {
     // Place a USDC bid order with a fresh user, then cancel it
     const { user, userUsdcAta: uAta, userYesAta: yAta, userNoAta: nAta } =
       await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 50_000_000);
-    const provider = new BankrunProvider(ctx.context);
+
 
     // Place limit bid at price 40
-    const placeIx = buildPlaceOrderIx({
-      user: user.publicKey,
-      config,
-      market: ma.market,
-      orderBook: ma.orderBook,
-      usdcVault: ma.usdcVault,
-      escrowVault: ma.escrowVault,
-      yesEscrow: ma.yesEscrow,
-      noEscrow: ma.noEscrow,
-      yesMint: ma.yesMint,
-      noMint: ma.noMint,
-      userUsdcAta: uAta,
-      userYesAta: yAta,
-      userNoAta: nAta,
-      feeVault,
-      side: SIDE_USDC_BID,
-      price: 40,
-      quantity: new BN(TEN_TOKENS),
-      orderType: ORDER_TYPE_LIMIT,
-      maxFills: 0,
-    });
+    const placeIx = placeOrderIx(SIDE_USDC_BID, 40, TEN_TOKENS, ORDER_TYPE_LIMIT, 0, undefined, user);
 
     await provider.sendAndConfirm!(new Transaction().add(placeIx), [user]);
 
@@ -371,7 +311,7 @@ describe("Place Order", () => {
 
   it("rejects cancel from non-owner", async () => {
     // Place an order as admin, try to cancel as different user
-    const provider = new BankrunProvider(ctx.context);
+
 
     // Admin places a Yes ask
     const placeIx = placeOrderIx(SIDE_YES_ASK, 70, ONE_TOKEN, ORDER_TYPE_LIMIT, 0);
@@ -421,7 +361,7 @@ describe("Place Order", () => {
     // Admin holds both Yes and No tokens from mint_pair.
     // The ConflictingPosition constraint requires user_yes_ata.amount == 0
     // to place a No-backed bid. First sell all Yes tokens via a Yes Ask.
-    const provider = new BankrunProvider(ctx.context);
+
 
     // Check remaining Yes balance and sell it all via Yes Ask (side=1)
     const yesBal = await getTokenBalance(ctx, userYesAta);
@@ -452,31 +392,11 @@ describe("Place Order", () => {
     // Use fresh users — admin's Yes tokens were consumed by prior tests
     const { user: buyer, userUsdcAta: buyerUsdcAta, userYesAta: buyerYesAta, userNoAta: buyerNoAta } =
       await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 100_000_000);
-    const provider = new BankrunProvider(ctx.context);
+
 
     // Buyer places resting USDC bid at price 75 (limit, no fills)
     // Use price 75 to avoid matching stale bids at 50 from earlier tests
-    const bidIx = buildPlaceOrderIx({
-      user: buyer.publicKey,
-      config,
-      market: ma.market,
-      orderBook: ma.orderBook,
-      usdcVault: ma.usdcVault,
-      escrowVault: ma.escrowVault,
-      yesEscrow: ma.yesEscrow,
-      noEscrow: ma.noEscrow,
-      yesMint: ma.yesMint,
-      noMint: ma.noMint,
-      userUsdcAta: buyerUsdcAta,
-      userYesAta: buyerYesAta,
-      userNoAta: buyerNoAta,
-      feeVault,
-      side: SIDE_USDC_BID,
-      price: 75,
-      quantity: new BN(3 * ONE_TOKEN),
-      orderType: ORDER_TYPE_LIMIT,
-      maxFills: 0,
-    });
+    const bidIx = placeOrderIx(SIDE_USDC_BID, 75, 3 * ONE_TOKEN, ORDER_TYPE_LIMIT, 0, undefined, buyer);
     await provider.sendAndConfirm!(new Transaction().add(bidIx), [buyer]);
 
     // Fund seller — mint pairs to get Yes tokens
@@ -501,28 +421,7 @@ describe("Place Order", () => {
     // This avoids sweeping stale bids at lower prices from earlier tests
     // Maker (buyer) receives Yes tokens, so we pass buyer's Yes ATA
     const sellerUsdcBefore = await getTokenBalance(ctx, sellerUsdcAta);
-    const sellIx = buildPlaceOrderIx({
-      user: seller.publicKey,
-      config,
-      market: ma.market,
-      orderBook: ma.orderBook,
-      usdcVault: ma.usdcVault,
-      escrowVault: ma.escrowVault,
-      yesEscrow: ma.yesEscrow,
-      noEscrow: ma.noEscrow,
-      yesMint: ma.yesMint,
-      noMint: ma.noMint,
-      userUsdcAta: sellerUsdcAta,
-      userYesAta: sellerYesAta,
-      userNoAta: sellerNoAta,
-      feeVault,
-      side: SIDE_YES_ASK,
-      price: 75,
-      quantity: new BN(3 * ONE_TOKEN),
-      orderType: ORDER_TYPE_MARKET,
-      maxFills: 10,
-      makerAccounts: [buyerYesAta],
-    });
+    const sellIx = placeOrderIx(SIDE_YES_ASK, 75, 3 * ONE_TOKEN, ORDER_TYPE_MARKET, 10, [buyerYesAta], seller);
     await provider.sendAndConfirm!(new Transaction().add(sellIx), [seller]);
 
     // Seller should have received USDC: 3 tokens * 75/100 = 2.25 USDC = 2_250_000
@@ -541,7 +440,7 @@ describe("Place Order", () => {
     // Setup: fresh maker places a resting Yes ask, then a No holder sells into it
     const { user: maker, userUsdcAta: makerUsdcAta, userYesAta: makerYesAta, userNoAta: makerNoAta } =
       await createFundedUserWithMarketAtas(ctx.context, ctx.admin, usdcMint, ma, 100_000_000);
-    const provider = new BankrunProvider(ctx.context);
+
 
     // Maker mints pairs and lists Yes ask at price 40
     const mintIx = buildMintPairIx({
@@ -558,27 +457,7 @@ describe("Place Order", () => {
     });
     await provider.sendAndConfirm!(new Transaction().add(mintIx), [maker]);
 
-    const askIx = buildPlaceOrderIx({
-      user: maker.publicKey,
-      config,
-      market: ma.market,
-      orderBook: ma.orderBook,
-      usdcVault: ma.usdcVault,
-      escrowVault: ma.escrowVault,
-      yesEscrow: ma.yesEscrow,
-      noEscrow: ma.noEscrow,
-      yesMint: ma.yesMint,
-      noMint: ma.noMint,
-      userUsdcAta: makerUsdcAta,
-      userYesAta: makerYesAta,
-      userNoAta: makerNoAta,
-      feeVault,
-      side: SIDE_YES_ASK,
-      price: 40,
-      quantity: new BN(5 * ONE_TOKEN),
-      orderType: ORDER_TYPE_LIMIT,
-      maxFills: 0,
-    });
+    const askIx = placeOrderIx(SIDE_YES_ASK, 40, 5 * ONE_TOKEN, ORDER_TYPE_LIMIT, 0, undefined, maker);
     await provider.sendAndConfirm!(new Transaction().add(askIx), [maker]);
 
     // Fund seller — needs No tokens but NOT Yes tokens (ConflictingPosition constraint)
@@ -601,27 +480,7 @@ describe("Place Order", () => {
     await provider.sendAndConfirm!(new Transaction().add(sellerMintIx), [seller]);
 
     // Sell all Yes tokens first to clear the position constraint
-    const clearYesIx = buildPlaceOrderIx({
-      user: seller.publicKey,
-      config,
-      market: ma.market,
-      orderBook: ma.orderBook,
-      usdcVault: ma.usdcVault,
-      escrowVault: ma.escrowVault,
-      yesEscrow: ma.yesEscrow,
-      noEscrow: ma.noEscrow,
-      yesMint: ma.yesMint,
-      noMint: ma.noMint,
-      userUsdcAta: sellerUsdcAta,
-      userYesAta: sellerYesAta,
-      userNoAta: sellerNoAta,
-      feeVault,
-      side: SIDE_YES_ASK,
-      price: 99,
-      quantity: new BN(5 * ONE_TOKEN),
-      orderType: ORDER_TYPE_LIMIT,
-      maxFills: 0,
-    });
+    const clearYesIx = placeOrderIx(SIDE_YES_ASK, 99, 5 * ONE_TOKEN, ORDER_TYPE_LIMIT, 0, undefined, seller);
     await provider.sendAndConfirm!(new Transaction().add(clearYesIx), [seller]);
 
     // Verify seller has 0 Yes, 5 No
@@ -635,28 +494,7 @@ describe("Place Order", () => {
     // Maker's USDC ATA receives the USDC payout from merge/burn
     const makerUsdcBefore = await getTokenBalance(ctx, makerUsdcAta);
     const sellerUsdcBefore = await getTokenBalance(ctx, sellerUsdcAta);
-    const sellNoIx = buildPlaceOrderIx({
-      user: seller.publicKey,
-      config,
-      market: ma.market,
-      orderBook: ma.orderBook,
-      usdcVault: ma.usdcVault,
-      escrowVault: ma.escrowVault,
-      yesEscrow: ma.yesEscrow,
-      noEscrow: ma.noEscrow,
-      yesMint: ma.yesMint,
-      noMint: ma.noMint,
-      userUsdcAta: sellerUsdcAta,
-      userYesAta: sellerYesAta,
-      userNoAta: sellerNoAta,
-      feeVault,
-      side: SIDE_NO_BID,
-      price: 1,
-      quantity: new BN(5 * ONE_TOKEN),
-      orderType: ORDER_TYPE_MARKET,
-      maxFills: 10,
-      makerAccounts: [makerUsdcAta], // maker receives USDC from merge
-    });
+    const sellNoIx = placeOrderIx(SIDE_NO_BID, 1, 5 * ONE_TOKEN, ORDER_TYPE_MARKET, 10, [makerUsdcAta], seller);
     await provider.sendAndConfirm!(new Transaction().add(sellNoIx), [seller]);
 
     // Seller's No tokens should be consumed (burned in merge)
@@ -687,6 +525,7 @@ describe("FIFO Priority (timestamp-based matching)", () => {
   let feeVault: PublicKey;
   let oracleFeed: PublicKey;
   let ma: MarketAccounts;
+  let provider: BankrunProvider;
 
   const TICKER = "MSFT";
   const STRIKE_PRICE = 400_000_000;
@@ -712,10 +551,11 @@ describe("FIFO Priority (timestamp-based matching)", () => {
       STRIKE_PRICE, marketCloseUnix, PREVIOUS_CLOSE,
       oracleFeed, usdcMint,
     );
+
+    provider = new BankrunProvider(ctx.context);
   });
 
   it("fills older order first when two asks exist at the same price", async () => {
-    const provider = new BankrunProvider(ctx.context);
 
     // Create two sellers with Yes tokens
     const { user: sellerA, userUsdcAta: sellerAUsdcAta, userYesAta: sellerAYesAta, userNoAta: sellerANoAta } =
@@ -882,7 +722,7 @@ describe("FIFO Priority (timestamp-based matching)", () => {
   });
 
   it("fills original older order before a newer order placed in a cancelled slot", async () => {
-    const provider = new BankrunProvider(ctx.context);
+
 
     // Create a SEPARATE market to avoid interference from the first FIFO test's
     // leftover orders. The USDC BID sweep walks all ask levels from 1 to bid price,

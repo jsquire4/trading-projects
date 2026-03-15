@@ -36,6 +36,7 @@ describe("set_market_alt", () => {
   let config: PublicKey;
   let oracleFeed: PublicKey;
   let marketAccounts: MarketAccounts;
+  let provider: BankrunProvider;
 
   const TICKER = "GOOGL";
   const STRIKE_PRICE = 150_000_000;
@@ -61,11 +62,13 @@ describe("set_market_alt", () => {
       oracleFeed,
       usdcMint,
     );
+
+    provider = new BankrunProvider(ctx.context);
   });
 
   it("sets ALT address on market", async () => {
     const altPubkey = Keypair.generate().publicKey;
-    const provider = new BankrunProvider(ctx.context);
+
 
     const ix = buildSetMarketAltIx({
       admin: ctx.admin.publicKey,
@@ -88,7 +91,7 @@ describe("set_market_alt", () => {
   it("rejects if ALT already set", async () => {
     // ALT was already set in the previous test, so setting again should fail
     const anotherAlt = Keypair.generate().publicKey;
-    const provider = new BankrunProvider(ctx.context);
+
 
     const ix = buildSetMarketAltIx({
       admin: ctx.admin.publicKey,
@@ -130,7 +133,7 @@ describe("set_market_alt", () => {
 
     // Create a non-admin keypair and fund it via bankrun
     const nonAdmin = Keypair.generate();
-    const provider = new BankrunProvider(ctx.context);
+
 
     // Fund the non-admin account with SOL so it can sign transactions
     ctx.context.setAccount(nonAdmin.publicKey, {

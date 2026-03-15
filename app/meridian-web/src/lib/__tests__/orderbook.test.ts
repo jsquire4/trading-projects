@@ -207,23 +207,24 @@ describe("deserializeOrderBook (sparse)", () => {
   });
 });
 
-describe("buildYesView", () => {
-  function makeOrder(
-    priceLevel: number,
-    side: number,
-    quantity: bigint = 100n,
-  ): ActiveOrder {
-    return {
-      owner: PublicKey.unique(),
-      orderId: 1n,
-      quantity,
-      originalQuantity: quantity,
-      side: side as any,
-      timestamp: 0n,
-      priceLevel,
-    };
-  }
+/** Shared helper for buildYesView / buildNoView tests. */
+function makeOrder(
+  priceLevel: number,
+  side: number,
+  quantity: bigint = 100n,
+): ActiveOrder {
+  return {
+    owner: PublicKey.unique(),
+    orderId: 1n,
+    quantity,
+    originalQuantity: quantity,
+    side: side as any,
+    timestamp: 0n,
+    priceLevel,
+  };
+}
 
+describe("buildYesView", () => {
   it("separates USDC bids and Yes asks correctly", () => {
     const orders: ActiveOrder[] = [
       makeOrder(40, Side.UsdcBid, 200n),
@@ -283,22 +284,6 @@ describe("buildYesView", () => {
 });
 
 describe("buildNoView", () => {
-  function makeOrder(
-    priceLevel: number,
-    side: number,
-    quantity: bigint = 100n,
-  ): ActiveOrder {
-    return {
-      owner: PublicKey.unique(),
-      orderId: 1n,
-      quantity,
-      originalQuantity: quantity,
-      side: side as any,
-      timestamp: 0n,
-      priceLevel,
-    };
-  }
-
   it("inverts USDC bid at price 60 to No ask at price 40", () => {
     const orders: ActiveOrder[] = [makeOrder(60, Side.UsdcBid, 200n)];
     const view = buildNoView(orders);

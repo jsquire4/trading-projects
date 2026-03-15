@@ -275,6 +275,11 @@ export async function sendTx(
   throw new Error("unreachable");
 }
 
+/** Sleep for the given number of milliseconds. */
+export function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 /** Batch items into groups of batchSize. */
 export function batch<T>(items: T[], batchSize: number): T[][] {
   const result: T[][] = [];

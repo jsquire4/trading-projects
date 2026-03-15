@@ -51,7 +51,7 @@ import {
   findOrderBook,
   findTickerRegistry,
 } from "../../services/shared/src/pda";
-import { sendTx, parseOrderBook, readMarketState, findPriceFeed } from "./helpers";
+import { sendTx, parseOrderBook, readMarketState, findPriceFeed, sleep } from "./helpers";
 import type { SharedContext, ActResult, ErrorEntry, MarketContext } from "./types";
 import { BASE_PRICES } from "../../services/shared/src/synthetic-config";
 import {
@@ -63,10 +63,6 @@ import {
 } from "./config";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
 
 function bn(val: bigint): BN {
   return new BN(val.toString());

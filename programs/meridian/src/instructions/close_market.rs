@@ -103,50 +103,17 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
     let no_supply = ctx.accounts.no_mint.supply;
     let all_redeemed = yes_supply == 0 && no_supply == 0;
 
+    // Build signer seeds once (needed for both paths)
+    market_signer_seeds!(market => strike_bytes, expiry_bytes, bump_byte, seeds, signer_seeds);
+
     if all_redeemed {
         // ── Standard close: all tokens redeemed, close all 8 accounts ──
-        market_signer_seeds!(market => strike_bytes, expiry_bytes, bump_byte, seeds, signer_seeds);
 
-        // Sweep any dust remaining in escrow_vault to treasury before closing.
-        // Dust accumulates from ceiling/floor rounding asymmetry between escrow and refund.
-        let escrow_dust = ctx.accounts.escrow_vault.amount;
-        if escrow_dust > 0 {
-            token::transfer(
-                CpiContext::new_with_signer(
-                    ctx.accounts.token_program.to_account_info(),
-                    anchor_spl::token::Transfer {
-                        from: ctx.accounts.escrow_vault.to_account_info(),
-                        to: ctx.accounts.treasury.to_account_info(),
-                        authority: ctx.accounts.market.to_account_info(),
-                    },
-                    signer_seeds,
-                ),
-                escrow_dust,
-            )?;
-        }
+        // Sweep escrow dust to treasury
+        sweep_escrow_dust(&ctx, signer_seeds)?;
 
         // Close token accounts (vault, escrow, yes_escrow, no_escrow)
-        let token_accounts: Vec<(
-            AccountInfo<'_>,
-            AccountInfo<'_>,
-        )> = vec![
-            (ctx.accounts.usdc_vault.to_account_info(), ctx.accounts.admin.to_account_info()),
-            (ctx.accounts.escrow_vault.to_account_info(), ctx.accounts.admin.to_account_info()),
-            (ctx.accounts.yes_escrow.to_account_info(), ctx.accounts.admin.to_account_info()),
-            (ctx.accounts.no_escrow.to_account_info(), ctx.accounts.admin.to_account_info()),
-        ];
-
-        for (account, destination) in token_accounts {
-            token::close_account(CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                CloseAccount {
-                    account: account.clone(),
-                    destination,
-                    authority: ctx.accounts.market.to_account_info(),
-                },
-                signer_seeds,
-            ))?;
-        }
+        close_token_accounts(&ctx, signer_seeds)?;
 
         // Close OrderBook (program-owned, drain lamports)
         drain_lamports(&ctx.accounts.order_book.to_account_info(), &ctx.accounts.admin.to_account_info())?;
@@ -172,8 +139,6 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
                 .ok_or(MeridianError::ArithmeticOverflow)?,
             MeridianError::CloseMarketGracePeriodActive,
         );
-
-        market_signer_seeds!(market => strike_bytes, expiry_bytes, bump_byte, seeds, signer_seeds);
 
         // Transfer remaining vault USDC to treasury
         let vault_balance = ctx.accounts.usdc_vault.amount;
@@ -219,45 +184,11 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
             None,
         )?;
 
-        // Sweep any dust remaining in escrow_vault to treasury before closing.
-        let escrow_dust = ctx.accounts.escrow_vault.amount;
-        if escrow_dust > 0 {
-            token::transfer(
-                CpiContext::new_with_signer(
-                    ctx.accounts.token_program.to_account_info(),
-                    anchor_spl::token::Transfer {
-                        from: ctx.accounts.escrow_vault.to_account_info(),
-                        to: ctx.accounts.treasury.to_account_info(),
-                        authority: ctx.accounts.market.to_account_info(),
-                    },
-                    signer_seeds,
-                ),
-                escrow_dust,
-            )?;
-        }
+        // Sweep escrow dust to treasury
+        sweep_escrow_dust(&ctx, signer_seeds)?;
 
-        // Close 5 accounts: OrderBook, UsdcVault, EscrowVault, YesEscrow, NoEscrow
-        let closeable_token_accounts: Vec<(
-            AccountInfo<'_>,
-            AccountInfo<'_>,
-        )> = vec![
-            (ctx.accounts.usdc_vault.to_account_info(), ctx.accounts.admin.to_account_info()),
-            (ctx.accounts.escrow_vault.to_account_info(), ctx.accounts.admin.to_account_info()),
-            (ctx.accounts.yes_escrow.to_account_info(), ctx.accounts.admin.to_account_info()),
-            (ctx.accounts.no_escrow.to_account_info(), ctx.accounts.admin.to_account_info()),
-        ];
-
-        for (account, destination) in closeable_token_accounts {
-            token::close_account(CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                CloseAccount {
-                    account: account.clone(),
-                    destination,
-                    authority: ctx.accounts.market.to_account_info(),
-                },
-                signer_seeds,
-            ))?;
-        }
+        // Close token accounts (vault, escrow, yes_escrow, no_escrow) + OrderBook
+        close_token_accounts(&ctx, signer_seeds)?;
 
         // Close OrderBook (drain lamports)
         drain_lamports(&ctx.accounts.order_book.to_account_info(), &ctx.accounts.admin.to_account_info())?;
@@ -282,6 +213,51 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+/// Sweep any dust remaining in escrow_vault to treasury.
+/// Dust accumulates from ceiling/floor rounding asymmetry between escrow and refund.
+fn sweep_escrow_dust(ctx: &Context<CloseMarket>, signer_seeds: &[&[&[u8]]]) -> Result<()> {
+    let escrow_dust = ctx.accounts.escrow_vault.amount;
+    if escrow_dust > 0 {
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                anchor_spl::token::Transfer {
+                    from: ctx.accounts.escrow_vault.to_account_info(),
+                    to: ctx.accounts.treasury.to_account_info(),
+                    authority: ctx.accounts.market.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            escrow_dust,
+        )?;
+    }
+    Ok(())
+}
+
+/// Close the four token accounts (usdc_vault, escrow_vault, yes_escrow, no_escrow)
+/// by transferring remaining balances and rent to the admin.
+fn close_token_accounts(ctx: &Context<CloseMarket>, signer_seeds: &[&[&[u8]]]) -> Result<()> {
+    let accounts_to_close: Vec<(AccountInfo<'_>, AccountInfo<'_>)> = vec![
+        (ctx.accounts.usdc_vault.to_account_info(), ctx.accounts.admin.to_account_info()),
+        (ctx.accounts.escrow_vault.to_account_info(), ctx.accounts.admin.to_account_info()),
+        (ctx.accounts.yes_escrow.to_account_info(), ctx.accounts.admin.to_account_info()),
+        (ctx.accounts.no_escrow.to_account_info(), ctx.accounts.admin.to_account_info()),
+    ];
+
+    for (account, destination) in accounts_to_close {
+        token::close_account(CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            CloseAccount {
+                account: account.clone(),
+                destination,
+                authority: ctx.accounts.market.to_account_info(),
+            },
+            signer_seeds,
+        ))?;
+    }
     Ok(())
 }
 

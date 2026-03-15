@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token;
 
 use crate::error::MeridianError;
+use crate::helpers::parse_token_account_fields;
 use crate::state::order_book::*;
 use super::PlaceOrder;
 
@@ -38,7 +39,10 @@ pub fn validate_maker_account(maker_account: &AccountInfo, expected_maker: Pubke
     require!(
         maker_account.owner == &token::ID && {
             let data = maker_account.try_borrow_data()?;
-            data.len() >= 64 && Pubkey::new_from_array(data[32..64].try_into().unwrap()) == expected_maker
+            match parse_token_account_fields(&data) {
+                Some(fields) => fields.owner == expected_maker,
+                None => false,
+            }
         },
         MeridianError::InvalidMakerAccount
     );

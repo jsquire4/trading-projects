@@ -77,9 +77,25 @@ pub const SLOT_ORDER_ID: usize = 32;   // [32..40] u64
 pub const SLOT_QUANTITY: usize = 40;   // [40..48] u64
 pub const SLOT_ORIG_QTY: usize = 48;   // [48..56] u64
 pub const SLOT_SIDE: usize = 56;       // [56] u8
+/// Padding after SLOT_SIDE (1 byte) to align SLOT_TIMESTAMP at offset 64.
+/// Range: [SLOT_SIDE + 1 .. SLOT_TIMESTAMP) = [57..64)
+pub const SLOT_PAD1_START: usize = SLOT_SIDE + 1;       // 57
+pub const SLOT_PAD1_END: usize = 64;                    // exclusive
 pub const SLOT_TIMESTAMP: usize = 64;  // [64..72] i64
 pub const SLOT_IS_ACTIVE: usize = 72;  // [72] u8
+/// Padding after SLOT_IS_ACTIVE (1 byte) to align SLOT_RENT_DEPOSITOR at offset 80.
+/// Range: [SLOT_IS_ACTIVE + 1 .. SLOT_RENT_DEPOSITOR) = [73..80)
+pub const SLOT_PAD2_START: usize = SLOT_IS_ACTIVE + 1;  // 73
+pub const SLOT_PAD2_END: usize = 80;                    // exclusive
 pub const SLOT_RENT_DEPOSITOR: usize = 80; // [80..112] Pubkey
+
+// Compile-time assertions to guard against layout drift.
+// If any offset constant changes, these will fail to compile.
+const _: () = assert!(SLOT_PAD1_START == SLOT_SIDE + 1, "SLOT_PAD1_START must follow SLOT_SIDE");
+const _: () = assert!(SLOT_PAD1_END == SLOT_TIMESTAMP, "SLOT_PAD1_END must equal SLOT_TIMESTAMP");
+const _: () = assert!(SLOT_PAD2_START == SLOT_IS_ACTIVE + 1, "SLOT_PAD2_START must follow SLOT_IS_ACTIVE");
+const _: () = assert!(SLOT_PAD2_END == SLOT_RENT_DEPOSITOR, "SLOT_PAD2_END must equal SLOT_RENT_DEPOSITOR");
+const _: () = assert!(SLOT_RENT_DEPOSITOR + 32 == ORDER_SLOT_SIZE, "SLOT_RENT_DEPOSITOR + Pubkey(32) must equal ORDER_SLOT_SIZE");
 
 /// OrderBook PDA seed prefix
 pub const ORDER_BOOK_SEED: &[u8] = b"order_book";
@@ -279,12 +295,12 @@ pub fn write_order_slot(
     write_u64(data, base + SLOT_QUANTITY, quantity);
     write_u64(data, base + SLOT_ORIG_QTY, original_quantity);
     data[base + SLOT_SIDE] = side;
-    // Zero padding bytes [57..64]
-    data[base + 57..base + 64].fill(0);
+    // Zero padding between SLOT_SIDE and SLOT_TIMESTAMP
+    data[base + SLOT_PAD1_START..base + SLOT_PAD1_END].fill(0);
     write_i64(data, base + SLOT_TIMESTAMP, timestamp);
     data[base + SLOT_IS_ACTIVE] = 1;
-    // Zero padding bytes [73..80]
-    data[base + 73..base + 80].fill(0);
+    // Zero padding between SLOT_IS_ACTIVE and SLOT_RENT_DEPOSITOR
+    data[base + SLOT_PAD2_START..base + SLOT_PAD2_END].fill(0);
     write_pubkey(data, base + SLOT_RENT_DEPOSITOR, rent_depositor);
 }
 

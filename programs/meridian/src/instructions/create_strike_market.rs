@@ -3,6 +3,7 @@ use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::solana_program::system_instruction;
 use anchor_spl::token::{self, spl_token, Mint, Token, TokenAccount, Transfer};
 use crate::error::MeridianError;
+use crate::helpers::parse_token_account_fields;
 use crate::state::order_book::{HEADER_SIZE, ORDER_BOOK_SEED, init_sparse_book};
 use crate::state::{GlobalConfig, StrikeMarket, TickerRegistry};
 
@@ -207,13 +208,15 @@ pub fn handle_create_strike_market(
             creator_ata.owner == &spl_token::ID,
             MeridianError::InvalidMint
         );
-        let ata_data = creator_ata.try_borrow_data()?;
-        require!(ata_data.len() >= 72, MeridianError::InvalidMint);
-        let ata_mint = Pubkey::new_from_array(ata_data[0..32].try_into().unwrap());
-        let ata_owner = Pubkey::new_from_array(ata_data[32..64].try_into().unwrap());
-        drop(ata_data);
-        require!(ata_mint == config.usdc_mint, MeridianError::InvalidMint);
-        require!(ata_owner == creator_key, MeridianError::SignerMismatch);
+        let ata_fields = {
+            let data = creator_ata.try_borrow_data()?;
+            let fields = parse_token_account_fields(&data);
+            drop(data);
+            fields
+        };
+        let ata_fields = ata_fields.ok_or(MeridianError::InvalidMint)?;
+        require!(ata_fields.mint == config.usdc_mint, MeridianError::InvalidMint);
+        require!(ata_fields.owner == creator_key, MeridianError::SignerMismatch);
 
         // Validate fee_vault is the correct PDA and is an SPL token account
         let (expected_fee_vault, _) = Pubkey::find_program_address(

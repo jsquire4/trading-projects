@@ -5,7 +5,7 @@ mod stats;
 
 use validate::{validate_order_params, validate_market_time};
 use escrow::{escrow_taker_assets, refund_unfilled};
-use fill_processor::process_fills;
+use fill_processor::{process_fills, FillContext};
 use stats::update_market_stats;
 
 use anchor_lang::prelude::*;
@@ -184,6 +184,23 @@ pub fn handle_place_order<'info>(
     let fee_vault_ai = ctx.accounts.fee_vault.to_account_info();
     let fee_bps = ctx.accounts.config.fee_bps;
 
+    let fctx = FillContext {
+        tp: &tp,
+        market_ai: &market_ai,
+        escrow_ai: &escrow_ai,
+        yes_escrow_ai: &yes_escrow_ai,
+        no_escrow_ai: &no_escrow_ai,
+        vault_ai: &vault_ai,
+        yes_mint_ai: &yes_mint_ai,
+        no_mint_ai: &no_mint_ai,
+        user_usdc_ai: &user_usdc_ai,
+        user_yes_ai: &user_yes_ai,
+        fee_vault_ai: &fee_vault_ai,
+        remaining_accounts: ctx.remaining_accounts,
+        fee_bps,
+        signer_seeds,
+    };
+
     let price_improvement_refund = process_fills(
         &match_result,
         side,
@@ -191,20 +208,7 @@ pub fn handle_place_order<'info>(
         market_key,
         ctx.accounts.user.key(),
         clock.unix_timestamp,
-        ctx.remaining_accounts,
-        &tp,
-        &market_ai,
-        &escrow_ai,
-        &yes_escrow_ai,
-        &no_escrow_ai,
-        &vault_ai,
-        &yes_mint_ai,
-        &no_mint_ai,
-        &user_usdc_ai,
-        &user_yes_ai,
-        &fee_vault_ai,
-        fee_bps,
-        signer_seeds,
+        &fctx,
     )?;
 
     // --- Price improvement refund ---
@@ -285,13 +289,8 @@ pub fn handle_place_order<'info>(
         )?;
     }
 
-    // --- Update market stats ---
-    let stats_result = MatchResult {
-        fills: match_result.fills.clone(),
-        remaining_quantity: match_result.remaining_quantity,
-        resting_failed,
-    };
-    update_market_stats(&mut ctx.accounts.market, &stats_result, order_type)?;
+    // --- Update market stats (after all signer_seeds usage, avoids clone) ---
+    update_market_stats(&mut ctx.accounts.market, &match_result, order_type)?;
 
     let unfilled = match_result.remaining_quantity;
     let was_rested = order_type == ORDER_TYPE_LIMIT && unfilled >= MIN_ORDER_SIZE && !resting_failed;

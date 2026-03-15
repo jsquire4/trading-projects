@@ -80,7 +80,7 @@ pub fn match_against_book(
     match taker_side {
         // USDC bid (Buy Yes) — matches against Yes asks (side=1)
         SIDE_USDC_BID => {
-            match_against_asks(data, taker_side, price, &mut result, max_fills);
+            match_against_asks_with_cap(data, taker_side, price, &mut result, max_fills, false);
         }
         // Yes ask (Sell Yes) — matches against USDC bids (side=0) AND No-backed bids (side=2)
         SIDE_YES_ASK => {
@@ -88,7 +88,8 @@ pub fn match_against_book(
         }
         // No-backed bid (Sell No) — matches against Yes asks (side=1)
         SIDE_NO_BID => {
-            match_against_asks_merge(data, taker_side, price, &mut result, max_fills);
+            let max_yes_ask = MERGE_TOTAL_CENTS.saturating_sub(price);
+            match_against_asks_with_cap(data, taker_side, max_yes_ask, &mut result, max_fills, true);
         }
         _ => {}
     }
@@ -96,53 +97,30 @@ pub fn match_against_book(
     result
 }
 
-/// Match a USDC bid against Yes asks (standard swap).
-fn match_against_asks(
+/// Match against Yes asks, walking prices from 1 upward up to `price_cap`.
+/// Used for both standard swap (USDC bid, is_merge=false) and merge/burn
+/// (No-backed bid, is_merge=true). The only difference between the two
+/// callers was the price cap calculation and the is_merge flag.
+fn match_against_asks_with_cap(
     data: &mut [u8],
     taker_side: u8,
-    max_price: u8,
+    price_cap: u8,
     result: &mut MatchResult,
     max_fills: u8,
+    is_merge: bool,
 ) {
-    // Walk prices from 1 upward via price_map
     for price_idx in 0..MAX_PRICE_LEVELS {
         if result.remaining_quantity < MIN_ORDER_SIZE { break; }
         if result.fills.len() >= max_fills as usize { break; }
 
         let ask_price = (price_idx + 1) as u8;
-        if ask_price > max_price { break; }
+        if ask_price > price_cap { break; }
 
         let level_idx = data[HDR_PRICE_MAP + price_idx];
         if level_idx == PRICE_UNALLOCATED { continue; }
 
         match_at_level_for_side(
-            data, taker_side, SIDE_YES_ASK, ask_price, level_idx, result, max_fills, false,
-        );
-    }
-}
-
-/// Match a No-backed bid against Yes asks (merge/burn).
-fn match_against_asks_merge(
-    data: &mut [u8],
-    taker_side: u8,
-    no_bid_price: u8,
-    result: &mut MatchResult,
-    max_fills: u8,
-) {
-    let max_yes_ask = MERGE_TOTAL_CENTS.saturating_sub(no_bid_price);
-
-    for price_idx in 0..MAX_PRICE_LEVELS {
-        if result.remaining_quantity < MIN_ORDER_SIZE { break; }
-        if result.fills.len() >= max_fills as usize { break; }
-
-        let ask_price = (price_idx + 1) as u8;
-        if ask_price > max_yes_ask { break; }
-
-        let level_idx = data[HDR_PRICE_MAP + price_idx];
-        if level_idx == PRICE_UNALLOCATED { continue; }
-
-        match_at_level_for_side(
-            data, taker_side, SIDE_YES_ASK, ask_price, level_idx, result, max_fills, true,
+            data, taker_side, SIDE_YES_ASK, ask_price, level_idx, result, max_fills, is_merge,
         );
     }
 }
@@ -423,4 +401,30 @@ pub fn has_active_orders(data: &[u8]) -> bool {
         }
     }
     false
+}
+
+/// Deactivate all active order slots across all price levels.
+/// Returns the number of orders deactivated.
+/// Used by circuit_breaker to mass-cancel without collecting CancelledOrder details.
+pub fn deactivate_all_orders(data: &mut [u8]) -> u32 {
+    let opl = data[HDR_ORDERS_PER_LEVEL];
+    let mut count = 0u32;
+
+    for price_idx in 0..MAX_PRICE_LEVELS {
+        let level_idx = data[HDR_PRICE_MAP + price_idx];
+        if level_idx == PRICE_UNALLOCATED { continue; }
+
+        for s in 0..opl {
+            if slot_is_active(data, level_idx, s) {
+                deactivate_slot(data, level_idx, s);
+                let cnt = level_count(data, level_idx);
+                if cnt > 0 {
+                    set_level_count(data, level_idx, cnt - 1);
+                }
+                count += 1;
+            }
+        }
+    }
+
+    count
 }

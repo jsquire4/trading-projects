@@ -1,9 +1,9 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "yarn install --frozen-lockfile"
+buildCommand = "npm install"
 
 [deploy]
-startCommand = "yarn start"
+startCommand = "npx tsx src/index.ts"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"

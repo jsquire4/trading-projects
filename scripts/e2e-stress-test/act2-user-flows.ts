@@ -50,6 +50,7 @@ import {
   findNoEscrow,
   findOrderBook,
   findTickerRegistry,
+  findSolTreasury,
 } from "../../services/shared/src/pda";
 import { sendTx, parseOrderBook, readMarketState, findPriceFeed, sleep } from "./helpers";
 import type { SharedContext, ActResult, ErrorEntry, MarketContext } from "./types";
@@ -192,6 +193,7 @@ async function createAct2Market(
   const [oracleFeed] = findPriceFeed(ticker);
 
   // Create strike market
+  const [solTreasuryPda] = findSolTreasury();
   const createIx = buildCreateStrikeMarketIx({
     admin: admin.publicKey,
     config: configPda,
@@ -202,6 +204,7 @@ async function createAct2Market(
     expiryDay,
     marketCloseUnix: new BN(marketCloseUnix),
     previousClose: new BN(previousCloseLamports.toString()),
+    solTreasury: solTreasuryPda,
   });
   await sendTx(connection, new Transaction().add(createIx), [admin]);
 

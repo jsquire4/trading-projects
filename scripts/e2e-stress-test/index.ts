@@ -218,8 +218,8 @@ function buildAcceptanceCriteria(
     {
       id: "AC-11",
       description: "Zero rent accounting violations",
-      passed: verification?.rentViolations === 0 || verification?.rentViolations === undefined,
-      actual: `${verification?.rentViolations ?? 0} violations`,
+      passed: act3 ? act3.errors.filter((e) => e.instruction === "rent_violation").length === 0 : true,
+      actual: act3 ? `${act3.errors.filter((e) => e.instruction === "rent_violation").length} violations` : "N/A (skipped)",
     },
   ];
 }

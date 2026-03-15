@@ -151,6 +151,7 @@ export interface SharedContext {
   configPda: PublicKey;
   feeVault: PublicKey;
   treasury: PublicKey;
+  solTreasury: PublicKey;
   tickerRegistry: PublicKey;
   markets: MarketContext[];
   agents: AgentState[];

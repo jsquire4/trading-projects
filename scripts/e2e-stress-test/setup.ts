@@ -272,6 +272,7 @@ export async function setupTestEnvironment(config: RunConfig): Promise<SharedCon
     config,
     metrics,
     tickerRegistry,
+    solTreasury,
   };
 }
 

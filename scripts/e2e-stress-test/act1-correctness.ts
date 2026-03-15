@@ -79,6 +79,7 @@ import {
   ALT_WARMUP_SLEEP_MS,
   MAX_FILLS,
   STRESS_OVERRIDE_WINDOW_S,
+  STRESS_ADMIN_SETTLE_DELAY_S,
   CONFIDENCE_BPS_OF_PRICE,
   DEFAULT_MINT_QUANTITY,
   CRANK_CANCEL_BATCH_SIZE,
@@ -152,6 +153,7 @@ async function createMarket(
 
   // 2. Create strike market
   const expiryDay = Math.floor(marketCloseUnix / 86400);
+  const [solTreasuryPda] = findSolTreasury();
   const createIx = buildCreateStrikeMarketIx({
     admin: admin.publicKey,
     config: configPda,
@@ -170,6 +172,7 @@ async function createMarket(
     expiryDay,
     marketCloseUnix: new BN(marketCloseUnix),
     previousClose: new BN(previousCloseLamports.toString()),
+    solTreasury: solTreasuryPda,
   });
   const createTx = new Transaction().add(createIx);
   await sendTx(connection, createTx, [admin]);
@@ -900,8 +903,8 @@ async function act1Settle(
     const m = ctx.markets[i];
 
     if (i === 0) {
-      logStep(`  ${m.ticker}: admin_settle (waiting 5s for delay)...`);
-      await sleep(5000);
+      logStep(`  ${m.ticker}: admin_settle (waiting ${STRESS_ADMIN_SETTLE_DELAY_S}s for delay)...`);
+      await sleep(STRESS_ADMIN_SETTLE_DELAY_S * 1000);
       try {
         const adminSettleIx = buildAdminSettleIx({
           admin: admin.publicKey,

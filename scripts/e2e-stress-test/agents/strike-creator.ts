@@ -31,6 +31,8 @@ import {
   findNoEscrow,
   findOrderBook,
   findPriceFeed,
+  findSolTreasury,
+  findTickerRegistry,
 } from "../../../services/shared/src/pda";
 import {
   ALT_WARMUP_SLEEP_MS,
@@ -90,6 +92,8 @@ export class StrikeCreator extends BaseAgent {
       const expiryDay = Math.floor(marketCloseUnix / 86400);
       const previousCloseLamports = oraclePrice; // use current price as previous close
 
+      const [solTreasuryPda] = findSolTreasury();
+      const [tickerRegistryPda] = findTickerRegistry();
       const createIx = buildCreateStrikeMarketIx({
         admin: admin.publicKey,
         config: this.ctx.configPda,
@@ -105,6 +109,8 @@ export class StrikeCreator extends BaseAgent {
         usdcMint: this.ctx.usdcMint,
         creatorUsdcAta: getAssociatedTokenAddressSync(this.ctx.usdcMint, admin.publicKey),
         feeVault: this.ctx.feeVault,
+        tickerRegistry: tickerRegistryPda,
+        solTreasury: solTreasuryPda,
         ticker: padTicker(ticker),
         strikePrice: new BN(strikeLamports.toString()),
         expiryDay,

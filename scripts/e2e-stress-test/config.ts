@@ -23,7 +23,7 @@ export const DEFAULT_CONFIG: RunConfig = {
 
 // Order book is now created inline by create_strike_market (sparse layout)
 export const STRESS_ADMIN_SETTLE_DELAY_S = 5;
-export const STRESS_OVERRIDE_WINDOW_S = 5;
+export const STRESS_OVERRIDE_WINDOW_S = 1; // matches on-chain OVERRIDE_WINDOW_SECS (both cfg branches)
 export const STRESS_GRACE_PERIOD_S = 5;
 export const USDC_DECIMALS = 6;
 export const MIN_MINT_QUANTITY = 1_000_000n;

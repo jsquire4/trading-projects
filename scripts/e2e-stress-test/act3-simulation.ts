@@ -75,6 +75,7 @@ import {
   findYesEscrow,
   findNoEscrow,
   findOrderBook,
+  findSolTreasury,
 } from "../../services/shared/src/pda";
 import { BASE_PRICES, SeededRng, hashSeed } from "../../services/shared/src/synthetic-config";
 
@@ -144,6 +145,7 @@ async function createMarket(
   const [oracleFeed] = findPriceFeed(ticker);
 
   // 1. Create strike market (also creates order book inline)
+  const [solTreasuryPda] = findSolTreasury();
   const createIx = buildCreateStrikeMarketIx({
     admin: ctx.admin.publicKey,
     config: ctx.configPda,
@@ -162,6 +164,7 @@ async function createMarket(
     expiryDay,
     marketCloseUnix: new BN(marketCloseUnix),
     previousClose: new BN(previousCloseLamports.toString()),
+    solTreasury: solTreasuryPda,
   });
   const createTx = new Transaction().add(createIx);
   await sendTx(ctx.connection, createTx, [ctx.admin]);

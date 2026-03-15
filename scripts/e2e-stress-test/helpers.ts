@@ -167,22 +167,22 @@ export interface ParsedOrder {
 /**
  * Parse the on-chain OrderBook sparse binary data to find active orders.
  *
- * Sparse layout — Header (168 bytes):
+ * Sparse layout — Header (270 bytes):
  *   [0..8]     discriminator
  *   [8..40]    market: Pubkey
  *   [40..48]   next_order_id: u64
- *   [48..147]  price_map: [u8; 99]   — price → level_index (0xFF = unallocated)
- *   [147]      level_count: u8
- *   [148]      max_levels: u8
- *   [149]      orders_per_level: u8
- *   [150]      bump: u8
- *   [151..168] _reserved
+ *   [48..246]  price_map: [u16 LE; 99] — byte offsets into level data, 0xFFFF = unallocated
+ *   [246]      level_count: u8
+ *   [247]      max_levels: u8
+ *   [248]      bump: u8
+ *   [249..270] _reserved
  *
- * Level entry (8 + orders_per_level × 112 bytes):
+ * Level entry (variable size: 8 + slot_count × 112 bytes):
  *   [0]   price: u8
- *   [1]   count: u8       — active orders in this level
- *   [2..8] _padding
- *   [8..] orders: [OrderSlot; orders_per_level]
+ *   [1]   active_count: u8
+ *   [2]   slot_count: u8
+ *   [3..8] _padding
+ *   [8..] orders: [OrderSlot; slot_count]
  *
  * OrderSlot (112 bytes):
  *   owner(32) + order_id(8) + quantity(8) + original_quantity(8)
@@ -191,25 +191,30 @@ export interface ParsedOrder {
  */
 export function parseOrderBook(data: Buffer): ParsedOrder[] {
   const orders: ParsedOrder[] = [];
-  const HEADER_SIZE = 168;
+  const HEADER_SIZE = 270;
   const SLOT_SIZE = 112;
+  const LEVEL_HEADER_SIZE = 8;
   const PRICE_MAP_OFFSET = 48;
   const PRICE_MAP_LEN = 99;
-  const UNALLOCATED = 0xff;
-
-  const ordersPerLevel = data[149];
-  const entrySize = 8 + ordersPerLevel * SLOT_SIZE; // level header + slots
+  const UNALLOCATED = 0xffff;
 
   for (let priceIdx = 0; priceIdx < PRICE_MAP_LEN; priceIdx++) {
-    const levelIdx = data[PRICE_MAP_OFFSET + priceIdx];
-    if (levelIdx === UNALLOCATED) continue;
+    // Price map entries are u16 LE — byte offsets relative to end of header
+    const byteOffset = data.readUInt16LE(PRICE_MAP_OFFSET + priceIdx * 2);
+    if (byteOffset === UNALLOCATED) continue;
 
-    const levelOffset = HEADER_SIZE + levelIdx * entrySize;
-    const count = data[levelOffset + 1];
-    if (count === 0) continue;
+    const levelOffset = HEADER_SIZE + byteOffset;
+    if (levelOffset + LEVEL_HEADER_SIZE > data.length) continue;
 
-    for (let s = 0; s < ordersPerLevel; s++) {
-      const slotOffset = levelOffset + 8 + s * SLOT_SIZE;
+    const activeCount = data[levelOffset + 1];
+    if (activeCount === 0) continue;
+
+    const slotCount = data[levelOffset + 2];
+
+    for (let s = 0; s < slotCount; s++) {
+      const slotOffset = levelOffset + LEVEL_HEADER_SIZE + s * SLOT_SIZE;
+      if (slotOffset + SLOT_SIZE > data.length) break;
+
       const isActive = data[slotOffset + 72] !== 0;
       if (!isActive) continue;
 

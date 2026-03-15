@@ -11,6 +11,7 @@ import { useTransaction } from "@/hooks/useTransaction";
 import { USDC_MINT } from "@/hooks/useWalletState";
 import {
   findGlobalConfig,
+  findTreasury,
   findYesMint,
   findNoMint,
   findUsdcVault,
@@ -48,6 +49,9 @@ export function RedeemPanel({ market, yesBal, noBal, onSuccess }: RedeemPanelPro
 
   const hasValidOutcome = market.outcome === 1 || market.outcome === 2;
   const canWinnerRedeem = market.isSettled && hasValidOutcome && !inOverrideWindow && winnerBal > BigInt(0) && !market.isPaused;
+
+  // Treasury redeem: available after market is CLOSED (USDC moved to treasury)
+  const canTreasuryRedeem = market.isClosed && (yesBal > BigInt(0) || noBal > BigInt(0));
 
   const invalidateAll = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["positions"] });
@@ -120,10 +124,50 @@ export function RedeemPanel({ market, yesBal, noBal, onSuccess }: RedeemPanelPro
     }
   }, [canWinnerRedeem, winnerBal, winnerTokens, winnerLabel, buildRedeemTx, sendTransaction, invalidateAll, onSuccess]);
 
+  const handleTreasuryRedeem = useCallback(async () => {
+    if (!canTreasuryRedeem || !program || !publicKey) return;
+    setSubmitting(true);
+    try {
+      const [config] = findGlobalConfig();
+      const [treasury] = findTreasury();
+      const [yesMint] = findYesMint(market.publicKey);
+      const [noMint] = findNoMint(market.publicKey);
+
+      const userUsdcAta = await getAssociatedTokenAddress(USDC_MINT, publicKey);
+      const userYesAta = await getAssociatedTokenAddress(yesMint, publicKey);
+      const userNoAta = await getAssociatedTokenAddress(noMint, publicKey);
+
+      const tx = await program.methods
+        .treasuryRedeem()
+        .accountsPartial({
+          user: publicKey,
+          config,
+          market: market.publicKey,
+          yesMint,
+          noMint,
+          treasury,
+          userUsdcAta,
+          userYesAta,
+          userNoAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .transaction();
+
+      const totalTokens = Number(yesBal + noBal) / 1_000_000;
+      await sendTransaction(tx, { description: `Treasury redeem ${totalTokens.toFixed(0)} tokens` });
+      invalidateAll();
+      onSuccess?.();
+    } catch {
+      // Error handled by useTransaction toast
+    } finally {
+      setSubmitting(false);
+    }
+  }, [canTreasuryRedeem, program, publicKey, market, yesBal, noBal, sendTransaction, invalidateAll, onSuccess]);
+
   if (!publicKey) return null;
 
   // Show nothing if no actions available
-  if (!canPairBurn && !canWinnerRedeem) {
+  if (!canPairBurn && !canWinnerRedeem && !canTreasuryRedeem) {
     if (market.isSettled && !inOverrideWindow && hasValidOutcome) {
       return (
         <div className="rounded-lg border border-white/10 bg-white/5 p-4 space-y-2">
@@ -189,6 +233,30 @@ export function RedeemPanel({ market, yesBal, noBal, onSuccess }: RedeemPanelPro
             className="w-full rounded-md py-2.5 text-sm font-semibold text-white bg-green-500/20 hover:bg-green-500/30 disabled:bg-white/5 disabled:text-white/20 transition-colors"
           >
             {submitting ? "Redeeming..." : `Redeem $${winnerTokens.toFixed(2)} USDC`}
+          </button>
+        </div>
+      )}
+
+      {/* Treasury Redeem section — after market is CLOSED */}
+      {canTreasuryRedeem && (
+        <div className="rounded-lg border border-purple-500/20 bg-purple-500/5 p-4 space-y-3">
+          <h3 className="text-sm font-semibold text-purple-400">
+            Treasury Redeem
+          </h3>
+          <p className="text-xs text-white/50">
+            Market is closed. Burn your remaining tokens and receive USDC from the treasury.
+            Pairs redeem at $1 each, winning tokens at $1, losing tokens at $0.
+          </p>
+          <div className="grid grid-cols-2 gap-2 text-xs text-white/40">
+            <div>Yes tokens: {(Number(yesBal) / 1_000_000).toFixed(0)}</div>
+            <div>No tokens: {(Number(noBal) / 1_000_000).toFixed(0)}</div>
+          </div>
+          <button
+            onClick={handleTreasuryRedeem}
+            disabled={submitting}
+            className="w-full rounded-md py-2.5 text-sm font-semibold text-white bg-purple-500/20 hover:bg-purple-500/30 disabled:bg-white/5 disabled:text-white/20 transition-colors"
+          >
+            {submitting ? "Redeeming..." : "Redeem from Treasury"}
           </button>
         </div>
       )}

@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 
 use crate::error::MeridianError;
-use crate::state::{GlobalConfig, StrikeMarket, ADMIN_SETTLE_DELAY_SECS, OVERRIDE_WINDOW_SECS};
+use crate::state::{GlobalConfig, StrikeMarket};
 
 #[derive(Accounts)]
 pub struct AdminSettle<'info> {
@@ -29,10 +29,12 @@ pub fn handle_admin_settle(ctx: Context<AdminSettle>, settlement_price: u64) -> 
     let clock = Clock::get()?;
     let market = &mut ctx.accounts.market;
 
-    // Admin settle requires delay after market close
+    let config = &ctx.accounts.config;
+
+    // Admin settle delay: 0 for Mock oracle (admin IS the oracle), 1hr for Pyth
     let earliest_admin_settle = market
         .market_close_unix
-        .checked_add(ADMIN_SETTLE_DELAY_SECS)
+        .checked_add(config.admin_settle_delay())
         .ok_or(MeridianError::ArithmeticOverflow)?;
 
     require!(
@@ -49,7 +51,7 @@ pub fn handle_admin_settle(ctx: Context<AdminSettle>, settlement_price: u64) -> 
 
     let settled_at = clock.unix_timestamp;
     let override_deadline = settled_at
-        .checked_add(OVERRIDE_WINDOW_SECS)
+        .checked_add(config.override_window())
         .ok_or(MeridianError::ArithmeticOverflow)?;
 
     market.is_settled = true;

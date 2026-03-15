@@ -3,7 +3,7 @@ use anchor_spl::token::{self, Token, TokenAccount, Mint, SetAuthority, CloseAcco
 use crate::error::MeridianError;
 use crate::matching::engine::has_active_orders;
 use crate::state::order_book::verify_discriminator;
-use crate::state::{GlobalConfig, StrikeMarket, CLOSE_GRACE_PERIOD_SECS};
+use crate::state::{GlobalConfig, StrikeMarket};
 
 #[derive(Accounts)]
 pub struct CloseMarket<'info> {
@@ -168,7 +168,7 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
         // ── Partial close: tokens remain, need 90-day grace period ──
         require!(
             clock.unix_timestamp >= market.settled_at
-                .checked_add(CLOSE_GRACE_PERIOD_SECS)
+                .checked_add(ctx.accounts.config.close_grace_period())
                 .ok_or(MeridianError::ArithmeticOverflow)?,
             MeridianError::CloseMarketGracePeriodActive,
         );

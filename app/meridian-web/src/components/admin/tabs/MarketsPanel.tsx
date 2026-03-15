@@ -8,6 +8,7 @@ import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { SystemProgram } from "@solana/web3.js";
 import { useAnchorProgram } from "@/hooks/useAnchorProgram";
 import { useTransaction } from "@/hooks/useTransaction";
+import { useGlobalConfig } from "@/hooks/useGlobalConfig";
 import { useMarkets, type ParsedMarket } from "@/hooks/useMarkets";
 import {
   findGlobalConfig,
@@ -31,18 +32,24 @@ function MarketRow({ market }: { market: ParsedMarket }) {
   const { sendTransaction } = useTransaction();
   const { publicKey } = useWallet();
   const queryClient = useQueryClient();
+  const { data: config } = useGlobalConfig();
   const [settlePriceInput, setSettlePriceInput] = useState("");
   const [overridePriceInput, setOverridePriceInput] = useState("");
   const [submitting, setSubmitting] = useState<string | null>(null);
 
+  const isMock = config?.oracleType === 0;
   const strikeDollars = Number(market.strikePrice) / 1_000_000;
   const now = Math.floor(Date.now() / 1000);
   const closeUnix = Number(market.marketCloseUnix);
+  // Oracle settle: available after market close
   const canSettle = !market.isSettled && now > closeUnix;
-  const canAdminSettle = !market.isSettled && now > closeUnix + 3600;
+  // Admin settle: immediate for Mock oracle, 1hr delay for Pyth
+  const canAdminSettle = !market.isSettled && now > closeUnix + (isMock ? 0 : 3600);
   const overrideDeadline = Number(market.overrideDeadline);
-  const canOverride = market.isSettled && now < overrideDeadline && market.overrideCount < 3;
-  const canClose = market.isSettled && now > overrideDeadline;
+  // Override: for Mock, deadline is settled_at+0 so skip the window check
+  const canOverride = market.isSettled && (isMock || now < overrideDeadline) && market.overrideCount < 3;
+  // Close: for Mock, available immediately after settlement
+  const canClose = market.isSettled && (isMock || now > overrideDeadline);
   const canCrankCancel = market.isSettled;
   const canCrankRedeem = market.isSettled;
   const canCleanup = market.isClosed;

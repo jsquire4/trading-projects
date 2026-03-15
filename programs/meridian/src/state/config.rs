@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use super::order_book::{ADMIN_SETTLE_DELAY_SECS, OVERRIDE_WINDOW_SECS, CLOSE_GRACE_PERIOD_SECS};
 
 #[account]
 pub struct GlobalConfig {
@@ -59,5 +60,20 @@ impl GlobalConfig {
         self.tickers[..(self.ticker_count as usize).min(self.tickers.len())]
             .iter()
             .any(|t| t == ticker)
+    }
+
+    /// Admin settle delay: 0 for Mock oracle (admin IS the oracle), 1hr for Pyth.
+    pub fn admin_settle_delay(&self) -> i64 {
+        if self.oracle_type == 0 { 0 } else { ADMIN_SETTLE_DELAY_SECS }
+    }
+
+    /// Override window: 0 for Mock (instant finality), 1hr for Pyth.
+    pub fn override_window(&self) -> i64 {
+        if self.oracle_type == 0 { 0 } else { OVERRIDE_WINDOW_SECS }
+    }
+
+    /// Close grace period: 0 for Mock, 90 days for Pyth.
+    pub fn close_grace_period(&self) -> i64 {
+        if self.oracle_type == 0 { 0 } else { CLOSE_GRACE_PERIOD_SECS }
     }
 }

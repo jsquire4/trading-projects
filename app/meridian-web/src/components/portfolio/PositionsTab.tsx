@@ -11,7 +11,7 @@ import { InsightTooltip } from "@/components/InsightTooltip";
 import { interpretPosition } from "@/lib/insights";
 import { calcPositionValue } from "@/lib/positions";
 
-function PositionCard({ position, totalCost, now }: { position: Position; totalCost: number; now: number }) {
+function PositionCard({ position, totalCost, avgPriceCents, now }: { position: Position; totalCost: number; avgPriceCents: number | null; now: number }) {
   const { data: book } = useOrderBook(position.market.publicKey.toBase58());
   const { publicKey } = useWallet();
   const { redeem, submitting } = useRedeem();
@@ -120,7 +120,7 @@ function PositionCard({ position, totalCost, now }: { position: Position; totalC
         )}
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs mb-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs mb-3">
         {yesBal > 0 && (
           <div>
             <span className="text-white/40">Yes</span>
@@ -131,6 +131,12 @@ function PositionCard({ position, totalCost, now }: { position: Position; totalC
           <div>
             <span className="text-white/40">No</span>
             <div className="text-red-400 font-medium tabular-nums">{noBal.toFixed(0)}</div>
+          </div>
+        )}
+        {avgPriceCents !== null && (
+          <div>
+            <span className="text-white/40">Entry Price</span>
+            <div className="text-white/80 font-medium font-mono tabular-nums">{avgPriceCents.toFixed(1)}¢</div>
           </div>
         )}
         <div>
@@ -268,6 +274,7 @@ export function PositionsTab() {
             key={pos.market.publicKey.toBase58()}
             position={pos}
             totalCost={cb?.totalCostUsdc ?? 0}
+            avgPriceCents={cb?.avgPrice ?? null}
             now={now}
           />
         );

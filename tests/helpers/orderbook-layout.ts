@@ -3,6 +3,8 @@
  * for reading on-chain OrderBook data in tests.
  *
  * Matches the Rust sparse layout in state/order_book.rs.
+ * Variable-size levels: price_map stores u16 byte offsets, each level
+ * has its own slot_count.
  */
 
 import { PublicKey } from "@solana/web3.js";
@@ -15,19 +17,23 @@ import BN from "bn.js";
 export const OB_DISCRIMINATOR_SIZE = 8;
 export const ORDER_SLOT_SIZE = 112;
 export const LEVEL_HEADER_SIZE = 8;
-export const INITIAL_ORDERS_PER_LEVEL = 4;
 export const MAX_PRICE_LEVELS = 99;
-export const PRICE_UNALLOCATED = 0xFF;
+export const PRICE_UNALLOCATED = 0xFFFF;
 
 // Header byte offsets (including 8-byte Anchor discriminator)
+// Price map is [u16; 99] = 198 bytes (stores byte offsets, 0xFFFF = unallocated)
 export const HDR_MARKET = 8;           // [8..40]  Pubkey
 export const HDR_NEXT_ORDER_ID = 40;   // [40..48] u64
-export const HDR_PRICE_MAP = 48;       // [48..147] [u8; 99]
-export const HDR_LEVEL_COUNT = 147;    // [147] u8
-export const HDR_MAX_LEVELS = 148;     // [148] u8
-export const HDR_ORDERS_PER_LEVEL = 149; // [149] u8
-export const HDR_BUMP = 150;           // [150] u8
-export const HEADER_SIZE = 168;        // Total header including discriminator
+export const HDR_PRICE_MAP = 48;       // [48..246] [u16 LE; 99]
+export const HDR_LEVEL_COUNT = 246;    // [246] u8
+export const HDR_MAX_LEVELS = 247;     // [247] u8
+export const HDR_BUMP = 248;           // [248] u8
+export const HEADER_SIZE = 270;        // Total header including discriminator
+
+// Level header offsets (relative to level start)
+export const LVL_PRICE = 0;
+export const LVL_ACTIVE_COUNT = 1;
+export const LVL_SLOT_COUNT = 2;
 
 // Order slot field offsets within a slot
 export const SLOT_OWNER = 0;           // [0..32]  Pubkey
@@ -60,24 +66,28 @@ export function sparseBookDiscriminator(): Buffer {
 }
 
 // ---------------------------------------------------------------------------
-// Size helpers
+// Price map helpers (u16 byte offsets)
 // ---------------------------------------------------------------------------
 
-/** Compute the byte offset of level `idx` within account data. */
-export function levelOffset(ordersPerLevel: number, idx: number): number {
-  const entrySize = LEVEL_HEADER_SIZE + ordersPerLevel * ORDER_SLOT_SIZE;
-  return HEADER_SIZE + idx * entrySize;
+/** Read the byte offset for a price (1-99) from the price map. Returns PRICE_UNALLOCATED if not set. */
+export function priceLevelOffset(data: Buffer, price: number): number {
+  const idx = HDR_PRICE_MAP + (price - 1) * 2;
+  return data.readUInt16LE(idx);
 }
 
-/** Compute the byte offset of a specific order slot. */
-export function slotOffset(ordersPerLevel: number, levelIdx: number, slotIdx: number): number {
-  return levelOffset(ordersPerLevel, levelIdx) + LEVEL_HEADER_SIZE + slotIdx * ORDER_SLOT_SIZE;
+/** Read the slot_count for a level at the given byte offset. */
+export function levelSlotCount(data: Buffer, loff: number): number {
+  return data[loff + LVL_SLOT_COUNT];
 }
 
-/** Compute total account size for given level count and orders per level. */
-export function accountSize(levelCount: number, ordersPerLevel: number): number {
-  const entrySize = LEVEL_HEADER_SIZE + ordersPerLevel * ORDER_SLOT_SIZE;
-  return HEADER_SIZE + levelCount * entrySize;
+/** Read the active order count at a level byte offset. */
+export function readLevelCount(data: Buffer, loff: number): number {
+  return data[loff + LVL_ACTIVE_COUNT];
+}
+
+/** Compute the byte offset of a specific slot within a level. */
+export function slotOffsetAt(loff: number, slotIdx: number): number {
+  return loff + LEVEL_HEADER_SIZE + slotIdx * ORDER_SLOT_SIZE;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,11 +110,10 @@ export interface OrderSlot {
  */
 export function readOrderSlot(
   data: Buffer,
-  levelIdx: number,
+  loff: number,
   slotIdx: number,
 ): OrderSlot {
-  const opl = data[HDR_ORDERS_PER_LEVEL];
-  const offset = slotOffset(opl, levelIdx, slotIdx);
+  const offset = slotOffsetAt(loff, slotIdx);
   const owner = new PublicKey(data.subarray(offset + SLOT_OWNER, offset + SLOT_OWNER + 32));
   const orderId = new BN(data.subarray(offset + SLOT_ORDER_ID, offset + SLOT_ORDER_ID + 8), "le").toNumber();
   const quantity = new BN(data.subarray(offset + SLOT_QUANTITY, offset + SLOT_QUANTITY + 8), "le").toNumber();
@@ -117,37 +126,12 @@ export function readOrderSlot(
 }
 
 // ---------------------------------------------------------------------------
-// Price map lookup
-// ---------------------------------------------------------------------------
-
-/**
- * Look up the level index for a given price (1-99) from the sparse price_map.
- * Returns the level index, or PRICE_UNALLOCATED (0xFF) if not allocated.
- */
-export function priceLevelIdx(data: Buffer, price: number): number {
-  return data[HDR_PRICE_MAP + (price - 1)];
-}
-
-// ---------------------------------------------------------------------------
-// Level count reader
-// ---------------------------------------------------------------------------
-
-/**
- * Read the active order count at a level index.
- */
-export function readLevelCount(data: Buffer, levelIdx: number): number {
-  const opl = data[HDR_ORDERS_PER_LEVEL];
-  const off = levelOffset(opl, levelIdx) + 1; // price(1) + count(1)
-  return data[off];
-}
-
-// ---------------------------------------------------------------------------
 // Sparse book initialization helper (for bankrun tests)
 // ---------------------------------------------------------------------------
 
 /**
  * Create a pre-initialized sparse order book buffer for bankrun tests.
- * Returns a Buffer of HEADER_SIZE (168) bytes with discriminator and price_map set.
+ * Returns a Buffer of HEADER_SIZE (270) bytes with discriminator and price_map set.
  */
 export function createSparseBookBuffer(marketKey: PublicKey, bump: number): Buffer {
   const buf = Buffer.alloc(HEADER_SIZE, 0);
@@ -156,14 +140,14 @@ export function createSparseBookBuffer(marketKey: PublicKey, bump: number): Buff
   // Market key
   marketKey.toBuffer().copy(buf, HDR_MARKET);
   // next_order_id = 0 (already zeroed)
-  // price_map: all unallocated
-  buf.fill(PRICE_UNALLOCATED, HDR_PRICE_MAP, HDR_PRICE_MAP + MAX_PRICE_LEVELS);
+  // price_map: all unallocated (u16 0xFFFF each)
+  for (let p = 0; p < MAX_PRICE_LEVELS; p++) {
+    buf.writeUInt16LE(PRICE_UNALLOCATED, HDR_PRICE_MAP + p * 2);
+  }
   // level_count = 0
   buf[HDR_LEVEL_COUNT] = 0;
   // max_levels = 0
   buf[HDR_MAX_LEVELS] = 0;
-  // orders_per_level = INITIAL_ORDERS_PER_LEVEL
-  buf[HDR_ORDERS_PER_LEVEL] = INITIAL_ORDERS_PER_LEVEL;
   // bump
   buf[HDR_BUMP] = bump;
   return buf;
@@ -175,32 +159,42 @@ export function createSparseBookBuffer(marketKey: PublicKey, bump: number): Buff
 
 /**
  * Scan the sparse order book for all active orders.
- * Returns an array of { levelIdx, slotIdx, slot } objects.
+ * Returns an array of { price, slotIdx, slot } objects.
  */
 export function findActiveOrders(data: Buffer): Array<{
-  levelIdx: number;
+  price: number;
   slotIdx: number;
   slot: OrderSlot;
 }> {
-  const result: Array<{ levelIdx: number; slotIdx: number; slot: OrderSlot }> = [];
-  const opl = data[HDR_ORDERS_PER_LEVEL];
+  const result: Array<{ price: number; slotIdx: number; slot: OrderSlot }> = [];
 
   for (let priceIdx = 0; priceIdx < MAX_PRICE_LEVELS; priceIdx++) {
-    const levelIdx = data[HDR_PRICE_MAP + priceIdx];
-    if (levelIdx === PRICE_UNALLOCATED) continue;
+    const price = priceIdx + 1;
+    const loff = priceLevelOffset(data, price);
+    if (loff === PRICE_UNALLOCATED) continue;
 
-    for (let s = 0; s < opl; s++) {
-      const off = slotOffset(opl, levelIdx, s);
+    const slotCnt = levelSlotCount(data, loff);
+    for (let s = 0; s < slotCnt; s++) {
+      const off = slotOffsetAt(loff, s);
       if (off + ORDER_SLOT_SIZE > data.length) break;
       if (data[off + SLOT_IS_ACTIVE] !== 0) {
         result.push({
-          levelIdx,
+          price,
           slotIdx: s,
-          slot: readOrderSlot(data, levelIdx, s),
+          slot: readOrderSlot(data, loff, s),
         });
       }
     }
   }
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Backward-compat aliases (deprecated — use new names)
+// ---------------------------------------------------------------------------
+
+/** @deprecated Use priceLevelOffset instead */
+export function priceLevelIdx(data: Buffer, price: number): number {
+  return priceLevelOffset(data, price);
 }

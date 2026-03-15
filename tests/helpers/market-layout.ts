@@ -28,9 +28,7 @@ export const OFF_OVERRIDE_DEADLINE = OFF_SETTLED_AT + 8; // 352
 // alt_address(32) at 360, ticker(8) at 392
 export const OFF_IS_SETTLED = 400;
 export const OFF_OUTCOME = 401;
-export const OFF_IS_PAUSED = 402;
-export const OFF_IS_CLOSED = 403;
-export const OFF_OVERRIDE_COUNT = 404;
+export const OFF_OVERRIDE_COUNT = 402;
 
 // ---------------------------------------------------------------------------
 // StrikeMarket field reader
@@ -47,8 +45,6 @@ export interface MarketFields {
   overrideDeadline: number;
   isSettled: boolean;
   outcome: number;
-  isPaused: boolean;
-  isClosed: boolean;
   overrideCount: number;
 }
 
@@ -67,8 +63,6 @@ export function readMarketFields(data: Buffer): MarketFields {
     overrideDeadline: new BN(data.subarray(OFF_OVERRIDE_DEADLINE, OFF_OVERRIDE_DEADLINE + 8), "le").toNumber(),
     isSettled: data[OFF_IS_SETTLED] !== 0,
     outcome: data[OFF_OUTCOME],
-    isPaused: data[OFF_IS_PAUSED] !== 0,
-    isClosed: data[OFF_IS_CLOSED] !== 0,
     overrideCount: data[OFF_OVERRIDE_COUNT],
   };
 }

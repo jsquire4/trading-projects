@@ -41,6 +41,7 @@ import {
 import {
   findGlobalConfig as _findGlobalConfig,
   findTreasury as _findTreasury,
+  findSolTreasury as _findSolTreasury,
   findStrikeMarket as _findStrikeMarketBigint,
   findYesMint as _findYesMint,
   findNoMint as _findNoMint,
@@ -98,6 +99,7 @@ export const findYesEscrow = _findYesEscrow;
 export const findNoEscrow = _findNoEscrow;
 export const findOrderBook = _findOrderBook;
 export const findFeeVault = _findFeeVault;
+export const findSolTreasury = _findSolTreasury;
 export const findPriceFeed = _findPriceFeed;
 
 /**
@@ -219,6 +221,7 @@ export async function initializeConfig(
   const [config] = findGlobalConfig();
   const [treasury] = findTreasury();
   const [feeVault] = findFeeVault();
+  const [solTreasury] = findSolTreasury();
 
   const ix = buildInitializeConfigIx({
     admin: admin.publicKey,
@@ -226,6 +229,7 @@ export async function initializeConfig(
     usdcMint,
     treasury,
     feeVault,
+    solTreasury,
     oracleProgram,
     tickers: MAG7_TICKERS,
     tickerCount: MAG7_TICKERS.length,
@@ -338,7 +342,7 @@ export async function createTestMarket(
   const [noEscrow] = findNoEscrow(market);
   const [orderBook] = findOrderBook(market);
 
-  // Order book is created inline by create_strike_market (sparse layout, 168 bytes).
+  // Order book is created inline by create_strike_market (sparse layout, 270 bytes header).
   // No pre-allocation needed.
 
   const ix = buildCreateStrikeMarketIx({

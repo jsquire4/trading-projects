@@ -129,36 +129,5 @@ describe("Pause / Unpause", () => {
     }
   });
 
-  it("pauses and unpauses a specific market", async () => {
-
-
-    // Pause market
-    const pauseIx = buildPauseIx({
-      admin: ctx.admin.publicKey,
-      config,
-      market: ma.market,
-    });
-    await provider.sendAndConfirm!(new Transaction().add(pauseIx), [ctx.admin]);
-
-    // Verify market is paused
-    const marketAcct = await ctx.context.banksClient.getAccount(ma.market);
-    const mData = Buffer.from(marketAcct!.data);
-    // StrikeMarket Borsh layout: disc(8) + 9 pubkeys(288) + 8 u64/i64(64) + alt_address(32) + ticker(8) + is_settled(1) + outcome(1) + is_paused(1)
-    // is_paused at offset = 8 + 288 + 64 + 32 + 8 + 1 + 1 = 402
-    const isPaused = mData[402] !== 0;
-    expect(isPaused).to.be.true;
-
-    // Unpause market
-    const unpauseIx = buildUnpauseIx({
-      admin: ctx.admin.publicKey,
-      config,
-      market: ma.market,
-    });
-    await provider.sendAndConfirm!(new Transaction().add(unpauseIx), [ctx.admin]);
-
-    const marketAcct2 = await ctx.context.banksClient.getAccount(ma.market);
-    const mData2 = Buffer.from(marketAcct2!.data);
-    const isPaused2 = mData2[402] !== 0;
-    expect(isPaused2).to.be.false;
-  });
+  // Per-market pause test removed — only global pause is supported now.
 });

@@ -1,8 +1,8 @@
 /**
  * admin-v2.test.ts — Tests for Phase 6A admin instructions.
  *
- * Covers all 10 new instructions:
- *   expand_config, initialize_ticker_registry, transfer_admin, accept_admin,
+ * Covers admin V2 instructions:
+ *   initialize_ticker_registry, transfer_admin, accept_admin,
  *   withdraw_fees, withdraw_treasury, update_config, add_ticker,
  *   deactivate_ticker, circuit_breaker
  *
@@ -40,7 +40,6 @@ import {
 } from "../helpers";
 
 import {
-  buildExpandConfigIx,
   buildInitializeTickerRegistryIx,
   buildTransferAdminIx,
   buildAcceptAdminIx,
@@ -79,7 +78,6 @@ const OFF_BUMP = OFF_TICKER_COUNT + 1;     // 187
 const OFF_FEE_BPS = OFF_BUMP + 1;          // 188
 const OFF_PADDING = OFF_FEE_BPS + 2;       // 190
 const OFF_STRIKE_CREATION_FEE = OFF_PADDING + 2; // 192
-// v2 fields (after expand_config)
 const OFF_PENDING_ADMIN = OFF_STRIKE_CREATION_FEE + 8; // 200
 const OFF_OPERATING_RESERVE = OFF_PENDING_ADMIN + 32;   // 232
 const OFF_OBLIGATIONS = OFF_OPERATING_RESERVE + 8;      // 240
@@ -176,15 +174,14 @@ describe("Admin V2 — Phase 6A", () => {
   });
 
   // =========================================================================
-  // expand_config
+  // config v2 fields verification (expand_config removed — v2 fields initialized directly)
   // =========================================================================
 
-  describe("expand_config", () => {
-    it("v2 config is 256 bytes with zero-initialized v2 fields", async () => {
-      // New deployments create the config at v2 size (256 bytes) directly.
-      // expand_config is only needed for migrating existing v1 configs.
+  describe("config v2 fields", () => {
+    it("config has all v2 fields initialized at creation", async () => {
       const data = await readConfigRaw(ctx, config);
-      expect(data.length).to.equal(256, "Config should be v2 size (256 bytes)");
+      // GlobalConfig LEN = 288, account = 8 disc + 288 = 296
+      expect(data.length).to.equal(296, "Config should be full size (296 bytes)");
 
       // pending_admin = Pubkey::default()
       const pendingAdmin = new PublicKey(data.subarray(OFF_PENDING_ADMIN, OFF_PENDING_ADMIN + 32));
@@ -201,60 +198,6 @@ describe("Admin V2 — Phase 6A", () => {
       // settlement_blackout_minutes = 0
       const blackout = data.readUInt16LE(OFF_BLACKOUT_MINUTES);
       expect(blackout).to.equal(0);
-    });
-
-    it("rejects expand on already-v2 config (ConfigAlreadyExpanded)", async () => {
-
-      const ix = buildExpandConfigIx({ admin: ctx.admin.publicKey, config });
-      try {
-        await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), ix), [ctx.admin]);
-        expect.fail("Should reject");
-      } catch (err: any) {
-        expect(String(err)).to.match(/ConfigAlreadyExpanded|0x180C|custom program error/i);
-      }
-    });
-
-    it("expands a v1 config to v2 (migration scenario)", async () => {
-
-
-      // Simulate a v1 config by shrinking to 200 bytes
-      const fullData = await readConfigRaw(ctx, config);
-      const v1Data = Buffer.alloc(200, 0);
-      fullData.copy(v1Data, 0, 0, 200);
-
-      const acct = await ctx.context.banksClient.getAccount(config);
-      ctx.context.setAccount(config, {
-        lamports: acct!.lamports,
-        data: v1Data,
-        owner: MERIDIAN_PROGRAM_ID,
-        executable: false,
-      });
-
-      const ix = buildExpandConfigIx({ admin: ctx.admin.publicKey, config });
-      await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), ix), [ctx.admin]);
-
-      const after = await readConfigRaw(ctx, config);
-      expect(after.length).to.equal(256, "Should be expanded to 256 bytes");
-
-      // v2 fields should be zero-initialized
-      const pendingAdmin = new PublicKey(after.subarray(OFF_PENDING_ADMIN, OFF_PENDING_ADMIN + 32));
-      expect(pendingAdmin.equals(PublicKey.default)).to.be.true;
-      expect(Number(after.readBigUInt64LE(OFF_OPERATING_RESERVE))).to.equal(0);
-      expect(Number(after.readBigUInt64LE(OFF_OBLIGATIONS))).to.equal(0);
-      expect(after.readUInt16LE(OFF_BLACKOUT_MINUTES)).to.equal(0);
-    });
-
-    it("rejects non-admin caller", async () => {
-
-      const { user } = await createFundedUser(ctx.context, ctx.admin, usdcMint, 0);
-      const ix = buildExpandConfigIx({ admin: user.publicKey, config });
-      try {
-        await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), ix), [user]);
-        expect.fail("Should reject non-admin");
-      } catch (err: any) {
-        // Config is already expanded, so error will be ConfigAlreadyExpanded, not Unauthorized
-        expect(String(err)).to.match(/ConfigAlreadyExpanded|Unauthorized|0x1770|0x180C|custom program error/i);
-      }
     });
   });
 
@@ -1074,35 +1017,7 @@ describe("Admin V2 — Phase 6A", () => {
       );
     });
 
-    it("activates global pause and pauses markets", async () => {
-
-
-      const ix = buildCircuitBreakerIx({
-        admin: ctx.admin.publicKey,
-        config,
-        marketBookPairs: [
-          { market: ma.market, orderBook: ma.orderBook },
-          { market: ma2.market, orderBook: ma2.orderBook },
-        ],
-      });
-      await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), ix), [ctx.admin]);
-
-      // Config should be paused
-      const configData = await readConfigRaw(ctx, config);
-      expect(configData[OFF_IS_PAUSED]).to.equal(1, "Config should be globally paused");
-
-      // Both markets should be paused
-      const m1 = await readMarket(ctx, ma.market);
-      expect(m1.isPaused).to.be.true;
-
-      const m2 = await readMarket(ctx, ma2.market);
-      expect(m2.isPaused).to.be.true;
-    });
-
-    it("works without any markets (global pause only)", async () => {
-
-
-      // Already paused, but should succeed without error
+    it("activates global pause", async () => {
       const ix = buildCircuitBreakerIx({
         admin: ctx.admin.publicKey,
         config,

@@ -529,32 +529,20 @@ export function buildCancelOrderIx(
 export interface PauseParams {
   admin: PublicKey;
   config: PublicKey;
-  /** If pausing a specific market, provide its key */
-  market?: PublicKey;
 }
 
 export function buildPauseIx(params: PauseParams): TransactionInstruction {
   const disc = anchorDiscriminator("pause");
 
-  // Data: disc(8) + Option<Pubkey> (1 byte tag + 32 bytes if Some)
-  let data: Buffer;
-  if (params.market) {
-    data = Buffer.concat([disc, Buffer.from([1]), params.market.toBuffer()]);
-  } else {
-    data = Buffer.concat([disc, Buffer.from([0])]);
-  }
-
   const keys = [
     { pubkey: params.admin, isSigner: true, isWritable: false },
     { pubkey: params.config, isSigner: false, isWritable: true },
-    // Option<Account> in Anchor: pass program ID as sentinel for None
-    { pubkey: params.market || MERIDIAN_PROGRAM_ID, isSigner: false, isWritable: params.market ? true : false },
   ];
 
   return new TransactionInstruction({
     programId: MERIDIAN_PROGRAM_ID,
     keys,
-    data,
+    data: disc,
   });
 }
 
@@ -565,30 +553,20 @@ export function buildPauseIx(params: PauseParams): TransactionInstruction {
 export interface UnpauseParams {
   admin: PublicKey;
   config: PublicKey;
-  market?: PublicKey;
 }
 
 export function buildUnpauseIx(params: UnpauseParams): TransactionInstruction {
   const disc = anchorDiscriminator("unpause");
 
-  let data: Buffer;
-  if (params.market) {
-    data = Buffer.concat([disc, Buffer.from([1]), params.market.toBuffer()]);
-  } else {
-    data = Buffer.concat([disc, Buffer.from([0])]);
-  }
-
   const keys = [
     { pubkey: params.admin, isSigner: true, isWritable: false },
     { pubkey: params.config, isSigner: false, isWritable: true },
-    // Option<Account> in Anchor: pass program ID as sentinel for None
-    { pubkey: params.market || MERIDIAN_PROGRAM_ID, isSigner: false, isWritable: params.market ? true : false },
   ];
 
   return new TransactionInstruction({
     programId: MERIDIAN_PROGRAM_ID,
     keys,
-    data,
+    data: disc,
   });
 }
 
@@ -803,6 +781,7 @@ export interface CloseMarketParams {
   yesMint: PublicKey;
   noMint: PublicKey;
   treasury: PublicKey;
+  solTreasury: PublicKey;
 }
 
 export function buildCloseMarketIx(
@@ -812,7 +791,7 @@ export function buildCloseMarketIx(
 
   // Account order matches CloseMarket struct:
   //   admin, config, market, order_book, usdc_vault, escrow_vault,
-  //   yes_escrow, no_escrow, yes_mint, no_mint, treasury,
+  //   yes_escrow, no_escrow, yes_mint, no_mint, treasury, sol_treasury,
   //   token_program, system_program
   const keys = [
     { pubkey: params.admin, isSigner: true, isWritable: true },
@@ -826,6 +805,7 @@ export function buildCloseMarketIx(
     { pubkey: params.yesMint, isSigner: false, isWritable: true },
     { pubkey: params.noMint, isSigner: false, isWritable: true },
     { pubkey: params.treasury, isSigner: false, isWritable: true },
+    { pubkey: params.solTreasury, isSigner: false, isWritable: true },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
   ];
@@ -1192,8 +1172,6 @@ export function buildDeactivateTickerIx(
 export interface CircuitBreakerParams {
   admin: PublicKey;
   config: PublicKey;
-  /** Pairs of (market, orderBook) accounts to pause + cancel */
-  marketBookPairs?: Array<{ market: PublicKey; orderBook: PublicKey }>;
 }
 
 export function buildCircuitBreakerIx(
@@ -1206,14 +1184,9 @@ export function buildCircuitBreakerIx(
     { pubkey: params.config, isSigner: false, isWritable: true },
   ];
 
-  const remainingAccounts = (params.marketBookPairs ?? []).flatMap((pair) => [
-    { pubkey: pair.market, isSigner: false, isWritable: true },
-    { pubkey: pair.orderBook, isSigner: false, isWritable: true },
-  ]);
-
   return new TransactionInstruction({
     programId: MERIDIAN_PROGRAM_ID,
-    keys: [...keys, ...remainingAccounts],
+    keys,
     data: disc,
   });
 }

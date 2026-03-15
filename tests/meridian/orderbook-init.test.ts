@@ -19,11 +19,9 @@ import {
   HDR_PRICE_MAP,
   HDR_LEVEL_COUNT,
   HDR_MAX_LEVELS,
-  HDR_ORDERS_PER_LEVEL,
   HDR_BUMP,
   MAX_PRICE_LEVELS,
   PRICE_UNALLOCATED,
-  INITIAL_ORDERS_PER_LEVEL,
   sparseBookDiscriminator,
 } from "../helpers";
 
@@ -87,7 +85,9 @@ describe("OrderBook Initialization (Sparse)", () => {
     const acctInfo = await ctx.context.banksClient.getAccount(marketAccounts.orderBook);
     const data = Buffer.from(acctInfo!.data);
     for (let i = 0; i < MAX_PRICE_LEVELS; i++) {
-      expect(data[HDR_PRICE_MAP + i], `price_map[${i}] should be 0xFF`).to.equal(PRICE_UNALLOCATED);
+      const offset = HDR_PRICE_MAP + i * 2;
+      const val = data.readUInt16LE(offset);
+      expect(val, `price_map[${i}] should be 0xFFFF`).to.equal(PRICE_UNALLOCATED);
     }
   });
 
@@ -98,10 +98,10 @@ describe("OrderBook Initialization (Sparse)", () => {
     expect(data[HDR_MAX_LEVELS]).to.equal(0);
   });
 
-  it("sets orders_per_level to INITIAL_ORDERS_PER_LEVEL (4)", async () => {
+  it("header size is 270 bytes (no levels allocated yet)", async () => {
     const acctInfo = await ctx.context.banksClient.getAccount(marketAccounts.orderBook);
     const data = Buffer.from(acctInfo!.data);
-    expect(data[HDR_ORDERS_PER_LEVEL]).to.equal(INITIAL_ORDERS_PER_LEVEL);
+    expect(data.length).to.equal(HEADER_SIZE);
   });
 
   it("stores market pubkey in order book header", async () => {

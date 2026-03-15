@@ -1958,10 +1958,9 @@ describe("Settlement Lifecycle", () => {
     });
 
     // ---------------------------------------------------------------------------
-    // Test 10: pause blocks settlement
+    // Test 10: settlement succeeds even when globally paused
     // ---------------------------------------------------------------------------
-    it("pause blocks settle_market", async () => {
-
+    it("settle_market succeeds during global pause (settlement exempt)", async () => {
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
       const closeUnix = now + 5;
@@ -1991,45 +1990,35 @@ describe("Settlement Lifecycle", () => {
         [ctx.admin],
       );
 
-      // Pause this specific market
+      // Global pause
       const pauseIx = buildPauseIx({
         admin: ctx.admin.publicKey,
         config,
-        market: ma.market,
       });
       await provider.sendAndConfirm!(
         new Transaction().add(uniqueCuIx(), pauseIx),
         [ctx.admin],
       );
 
-      // Verify market is paused
-      const mPaused = await readMarket(ctx, ma.market);
-      expect(mPaused.isPaused).to.be.true;
-
-      // Attempt to settle — should fail
+      // Settlement should still succeed (exempt from pause)
       const settleIx = buildSettleMarketIx({
         caller: ctx.admin.publicKey,
         config,
         market: ma.market,
         oracleFeed,
       });
+      await provider.sendAndConfirm!(
+        new Transaction().add(uniqueCuIx(), settleIx),
+        [ctx.admin],
+      );
 
-      try {
-        await provider.sendAndConfirm!(
-          new Transaction().add(uniqueCuIx(), settleIx),
-          [ctx.admin],
-        );
-        expect.fail("Expected MarketPaused error");
-      } catch (err: any) {
-        // MarketPaused = 22, on-chain = 6022 = 0x1786
-        expect(String(err)).to.match(/0x1786|MarketPaused|6022/i);
-      }
+      const m = await readMarket(ctx, ma.market);
+      expect(m.isSettled).to.be.true;
 
-      // Unpause so subsequent tests aren't affected
+      // Unpause for subsequent tests
       const unpauseIx = buildUnpauseIx({
         admin: ctx.admin.publicKey,
         config,
-        market: ma.market,
       });
       await provider.sendAndConfirm!(
         new Transaction().add(uniqueCuIx(), unpauseIx),
@@ -2105,18 +2094,17 @@ describe("Settlement Lifecycle", () => {
       expect(m.outcome).to.equal(1); // Yes wins
       await advanceClock(ctx, m.overrideDeadline + 10);
 
-      // Pause the market
+      // Global pause
       const pauseIx = buildPauseIx({
         admin: ctx.admin.publicKey,
         config,
-        market: ma.market,
       });
       await provider.sendAndConfirm!(
         new Transaction().add(uniqueCuIx(), pauseIx),
         [ctx.admin],
       );
 
-      // Attempt winner redeem — should fail due to pause
+      // Attempt winner redeem — should fail due to global pause
       const redeemIx = buildRedeemIx({
         user: ctx.admin.publicKey,
         config,
@@ -2146,7 +2134,6 @@ describe("Settlement Lifecycle", () => {
       const unpauseIx = buildUnpauseIx({
         admin: ctx.admin.publicKey,
         config,
-        market: ma.market,
       });
       await provider.sendAndConfirm!(
         new Transaction().add(uniqueCuIx(), unpauseIx),

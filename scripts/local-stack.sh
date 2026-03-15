@@ -17,8 +17,8 @@ LOCAL_RPC="http://localhost:8899"
 VALIDATOR_LOG="${REPO_ROOT}/local-validator.log"
 MERIDIAN_SO="${REPO_ROOT}/target/deploy/meridian.so"
 MOCK_ORACLE_SO="${REPO_ROOT}/target/deploy/mock_oracle.so"
-MERIDIAN_ID="7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth"
-MOCK_ORACLE_ID="HJpHCfz1mqFFNa4ANfU8mMAZ5WoNRfo7EV1sZfEV2vZ"
+MERIDIAN_ID="G5zZw1GMzqwjfbRMjTi2qUXDwoUwLw83hjEuwLfVCZvy"
+MOCK_ORACLE_ID="Az6BVaQwfoSqDyyn3TyvgfavoVKN4Qm8wLbMWm5EceFC"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'

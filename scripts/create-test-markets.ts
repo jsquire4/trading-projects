@@ -170,6 +170,9 @@ async function createMarket(
   const expiryDay = expiryDayFromUnix(marketCloseUnix);
   const disc = anchorDiscriminator("create_strike_market");
 
+  const [tickerRegistryPda] = PublicKey.findProgramAddressSync([Buffer.from("tickers")], MERIDIAN_PROGRAM_ID);
+  const [solTreasuryPda] = PublicKey.findProgramAddressSync([Buffer.from("sol_treasury")], MERIDIAN_PROGRAM_ID);
+
   const data = Buffer.concat([
     disc,
     tBytes,
@@ -192,6 +195,11 @@ async function createMarket(
     { pubkey: addrs.orderBook, isSigner: false, isWritable: true },
     { pubkey: addrs.oracleFeed, isSigner: false, isWritable: false },
     { pubkey: addrs.usdcMint, isSigner: false, isWritable: false },
+    // Optional accounts: creator_usdc_ata, fee_vault (None for admin), ticker_registry, sol_treasury
+    { pubkey: MERIDIAN_PROGRAM_ID, isSigner: false, isWritable: false }, // creator_usdc_ata = None
+    { pubkey: MERIDIAN_PROGRAM_ID, isSigner: false, isWritable: false }, // fee_vault = None
+    { pubkey: tickerRegistryPda, isSigner: false, isWritable: false },   // ticker_registry
+    { pubkey: solTreasuryPda, isSigner: false, isWritable: true },        // sol_treasury
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },

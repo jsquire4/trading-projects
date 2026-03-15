@@ -116,7 +116,7 @@ describe("OrderBook Initialization (Sparse)", () => {
     const data = Buffer.from(acctInfo!.data);
     const [, expectedBump] = PublicKey.findProgramAddressSync(
       [Buffer.from("order_book"), marketAccounts.market.toBuffer()],
-      new PublicKey("7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth"),
+      new PublicKey("G5zZw1GMzqwjfbRMjTi2qUXDwoUwLw83hjEuwLfVCZvy"),
     );
     expect(data[HDR_BUMP]).to.equal(expectedBump);
   });

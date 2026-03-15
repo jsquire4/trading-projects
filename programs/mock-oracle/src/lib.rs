@@ -10,7 +10,7 @@ pub mod instructions;
 pub use instructions::initialize_feed::*;
 pub use instructions::update_price::*;
 
-declare_id!("HJpHCfz1mqFFNa4ANfU8mMAZ5WoNRfo7EV1sZfEV2vZ");
+declare_id!("Az6BVaQwfoSqDyyn3TyvgfavoVKN4Qm8wLbMWm5EceFC");
 
 #[program]
 pub mod mock_oracle {

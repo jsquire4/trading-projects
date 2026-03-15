@@ -6,12 +6,12 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-meridian = "7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth"
-mock_oracle = "HJpHCfz1mqFFNa4ANfU8mMAZ5WoNRfo7EV1sZfEV2vZ"
+meridian = "G5zZw1GMzqwjfbRMjTi2qUXDwoUwLw83hjEuwLfVCZvy"
+mock_oracle = "Az6BVaQwfoSqDyyn3TyvgfavoVKN4Qm8wLbMWm5EceFC"
 
 [programs.devnet]
-meridian = "7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth"
-mock_oracle = "HJpHCfz1mqFFNa4ANfU8mMAZ5WoNRfo7EV1sZfEV2vZ"
+meridian = "G5zZw1GMzqwjfbRMjTi2qUXDwoUwLw83hjEuwLfVCZvy"
+mock_oracle = "Az6BVaQwfoSqDyyn3TyvgfavoVKN4Qm8wLbMWm5EceFC"
 
 [registry]
 url = "https://api.apr.dev"

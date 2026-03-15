@@ -4,8 +4,8 @@
 # Make executable before first run:  chmod +x scripts/deploy-devnet.sh
 set -euo pipefail
 
-MERIDIAN_ID="7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth"
-MOCK_ORACLE_ID="HJpHCfz1mqFFNa4ANfU8mMAZ5WoNRfo7EV1sZfEV2vZ"
+MERIDIAN_ID="G5zZw1GMzqwjfbRMjTi2qUXDwoUwLw83hjEuwLfVCZvy"
+MOCK_ORACLE_ID="Az6BVaQwfoSqDyyn3TyvgfavoVKN4Qm8wLbMWm5EceFC"
 CLUSTER="devnet"
 
 # Resolve repo root (the directory containing this script's parent)

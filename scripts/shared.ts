@@ -24,11 +24,11 @@ import { findFeeVault } from "../services/shared/src/pda";
 // ---------------------------------------------------------------------------
 
 export const MERIDIAN_PROGRAM_ID = new PublicKey(
-  "7WuivPB111pMKvTUQy32p6w5Gt85PcjhvEkTg8UkMbth",
+  "G5zZw1GMzqwjfbRMjTi2qUXDwoUwLw83hjEuwLfVCZvy",
 );
 
 export const MOCK_ORACLE_PROGRAM_ID = new PublicKey(
-  "HJpHCfz1mqFFNa4ANfU8mMAZ5WoNRfo7EV1sZfEV2vZ",
+  "Az6BVaQwfoSqDyyn3TyvgfavoVKN4Qm8wLbMWm5EceFC",
 );
 
 // ---------------------------------------------------------------------------

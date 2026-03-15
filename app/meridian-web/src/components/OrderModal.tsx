@@ -23,7 +23,7 @@ import { Side, type ActiveOrder } from "@/lib/orderbook";
 // Types
 // ---------------------------------------------------------------------------
 
-export type OrderModalSide = "buy-yes" | "buy-no";
+export type OrderModalSide = "buy-yes" | "buy-no" | "sell-yes" | "sell-no";
 
 export interface OrderModalProps {
   open: boolean;
@@ -79,20 +79,24 @@ export function OrderModal({
   const [quantity, setQuantity] = useState("");
   const [orderType, setOrderType] = useState<"limit" | "market">("limit");
   const [submitting, setSubmitting] = useState(false);
+  const [activeSide, setActiveSide] = useState<OrderModalSide>(side);
 
-  // Reset state when modal opens
+  // Reset state when modal opens or side changes
   useEffect(() => {
     if (open) {
       setQuantity("");
       setOrderType("limit");
       setSubmitting(false);
+      setActiveSide(side);
     }
-  }, [open]);
+  }, [open, side]);
 
   // Derived values
   const noPrice = 100 - yesPrice;
-  const displayPrice = side === "buy-yes" ? yesPrice : noPrice;
-  const impliedProbability = side === "buy-yes" ? yesPrice : noPrice;
+  const isBuy = activeSide === "buy-yes" || activeSide === "buy-no";
+  const isYesSide = activeSide === "buy-yes" || activeSide === "sell-yes";
+  const displayPrice = isYesSide ? yesPrice : noPrice;
+  const impliedProbability = isYesSide ? yesPrice : noPrice;
   const quantityNum = parseInt(quantity, 10) || 0;
   const quantityLamports = quantityNum * USDC_LAMPORTS;
 
@@ -103,16 +107,25 @@ export function OrderModal({
     const orders = orderBookData.raw.orders;
     let matchable: ActiveOrder[] = [];
 
-    if (side === "buy-yes") {
+    if (activeSide === "buy-yes") {
       // Buying Yes = matching against Yes asks at or below our price
       matchable = orders
         .filter((o) => o.side === Side.YesAsk && o.priceLevel <= yesPrice)
         .sort((a, b) => a.priceLevel - b.priceLevel);
-    } else {
-      // Buying No = matching against Yes asks at or above (100 - noPrice) = yesPrice
-      // Actually: Buy No is sell-yes under the hood. Matches USDC bids >= yesPrice
-      // and No-backed bids. For simplicity, show matchable orders.
+    } else if (activeSide === "sell-yes") {
+      // Selling Yes = matching against USDC bids at or above our price
+      matchable = orders
+        .filter((o) => o.side === Side.UsdcBid && o.priceLevel >= yesPrice)
+        .sort((a, b) => b.priceLevel - a.priceLevel); // best (highest) bid first
+    } else if (activeSide === "sell-no") {
+      // Selling No = matching against Yes asks (merge) at complementary prices
       const maxYesAsk = 100 - noPrice; // = yesPrice
+      matchable = orders
+        .filter((o) => o.side === Side.YesAsk && o.priceLevel <= maxYesAsk)
+        .sort((a, b) => a.priceLevel - b.priceLevel);
+    } else {
+      // buy-no: matches against Yes asks
+      const maxYesAsk = 100 - noPrice;
       matchable = orders
         .filter((o) => o.side === Side.YesAsk && o.priceLevel <= maxYesAsk)
         .sort((a, b) => a.priceLevel - b.priceLevel);
@@ -137,7 +150,7 @@ export function OrderModal({
     const total = levels.reduce((sum, l) => sum + l.quantity, 0);
 
     return { availableAtLevel: atLevel, sweepLevels: levels, totalAvailable: total };
-  }, [orderBookData, side, yesPrice, noPrice]);
+  }, [orderBookData, activeSide, yesPrice, noPrice]);
 
   // Cost calculation
   const totalCostUSDC = useMemo(() => {
@@ -154,7 +167,7 @@ export function OrderModal({
     for (const level of sweepLevels) {
       if (remaining <= 0) break;
       const fillQty = Math.min(remaining, level.quantity);
-      const levelPrice = side === "buy-yes" ? level.price : 100 - level.price;
+      const levelPrice = isYesSide ? level.price : 100 - level.price;
       cost += (fillQty * levelPrice) / 100;
       remaining -= fillQty;
     }
@@ -165,7 +178,7 @@ export function OrderModal({
     }
 
     return cost;
-  }, [quantityNum, displayPrice, orderType, availableAtLevel, sweepLevels, side]);
+  }, [quantityNum, displayPrice, orderType, availableAtLevel, sweepLevels, activeSide]);
 
   // Weighted average price for sweeps
   const weightedAvgPrice = useMemo(() => {
@@ -179,7 +192,7 @@ export function OrderModal({
     for (const level of sweepLevels) {
       if (remaining <= 0) break;
       const fillQty = Math.min(remaining, level.quantity);
-      const levelPrice = side === "buy-yes" ? level.price : 100 - level.price;
+      const levelPrice = isYesSide ? level.price : 100 - level.price;
       totalWeighted += fillQty * levelPrice;
       totalFilled += fillQty;
       remaining -= fillQty;
@@ -187,7 +200,7 @@ export function OrderModal({
 
     if (totalFilled === 0) return displayPrice;
     return Math.round(totalWeighted / totalFilled);
-  }, [quantityNum, displayPrice, availableAtLevel, sweepLevels, side]);
+  }, [quantityNum, displayPrice, availableAtLevel, sweepLevels, activeSide]);
 
   // How much fills immediately vs. rests
   const fillsImmediately = Math.min(quantityNum, Math.floor(totalAvailable));
@@ -206,10 +219,20 @@ export function OrderModal({
 
     setSubmitting(true);
     try {
+      // Map OrderModalSide to PlaceOrderParams side
+      const placeOrderSide = (() => {
+        switch (activeSide) {
+          case "buy-yes": return "buy-yes" as const;
+          case "sell-yes": return "sell-yes" as const;
+          case "sell-no": return "sell-no" as const;
+          case "buy-no": return "buy-no" as const;
+        }
+      })();
+
       const params: PlaceOrderParams = {
         marketPubkey,
         marketKey: marketPubkey.toBase58(),
-        side: side === "buy-yes" ? "buy-yes" : "buy-no",
+        side: placeOrderSide,
         orderType,
         effectivePrice: yesPrice,
         quantityLamports,
@@ -225,14 +248,20 @@ export function OrderModal({
     } finally {
       setSubmitting(false);
     }
-  }, [publicKey, marketPubkey, quantityNum, side, orderType, yesPrice, quantityLamports, orderBookData, altAddress, placeOrder, onSuccess, onClose]);
+  }, [publicKey, marketPubkey, quantityNum, activeSide, orderType, yesPrice, quantityLamports, orderBookData, altAddress, placeOrder, onSuccess, onClose]);
 
   if (!open) return null;
 
   const strikeDollars = (strikePrice / USDC_LAMPORTS).toFixed(0);
-  const sideLabel = side === "buy-yes" ? "Buy Yes" : "Buy No";
-  const sideColor = side === "buy-yes" ? "text-green-400" : "text-red-400";
-  const sideBgColor = side === "buy-yes" ? "bg-green-500/20 border-green-500/30" : "bg-red-500/20 border-red-500/30";
+  const sideLabels: Record<OrderModalSide, string> = {
+    "buy-yes": "Buy Yes",
+    "sell-yes": "Sell Yes",
+    "buy-no": "Buy No",
+    "sell-no": "Sell No",
+  };
+  const sideLabel = sideLabels[activeSide];
+  const sideColor = isYesSide ? "text-green-400" : "text-red-400";
+  const sideBgColor = isYesSide ? "bg-green-500/20 border-green-500/30" : "bg-red-500/20 border-red-500/30";
 
   // Market doesn't exist yet — show creation flow
   const isNewMarket = !marketPubkey;
@@ -264,6 +293,25 @@ export function OrderModal({
 
         {/* Body */}
         <div className="px-6 py-5 space-y-4">
+          {/* Buy/Sell toggle */}
+          <div className="grid grid-cols-4 gap-1 bg-white/5 rounded-lg p-1">
+            {(["buy-yes", "sell-yes", "buy-no", "sell-no"] as OrderModalSide[]).map((s) => (
+              <button
+                key={s}
+                onClick={() => setActiveSide(s)}
+                className={`py-1.5 rounded-md text-[11px] font-medium transition-colors ${
+                  activeSide === s
+                    ? s.includes("yes")
+                      ? "bg-green-500/20 text-green-400"
+                      : "bg-red-500/20 text-red-400"
+                    : "text-white/40 hover:text-white/60"
+                }`}
+              >
+                {sideLabels[s]}
+              </button>
+            ))}
+          </div>
+
           {/* Available liquidity */}
           {!isNewMarket && totalAvailable > 0 && (
             <div className="rounded-lg bg-white/5 border border-white/10 px-4 py-3 space-y-2">
@@ -274,7 +322,7 @@ export function OrderModal({
               {sweepLevels.length > 1 && quantityNum > availableAtLevel && (
                 <div className="space-y-1">
                   {sweepLevels.slice(0, 5).map((level) => {
-                    const levelDisplay = side === "buy-yes" ? level.price : 100 - level.price;
+                    const levelDisplay = isYesSide ? level.price : 100 - level.price;
                     return (
                       <div key={level.price} className="flex items-center justify-between text-xs text-white/40">
                         <span>{level.orderCount} order{level.orderCount !== 1 ? "s" : ""} @ {levelDisplay}¢</span>

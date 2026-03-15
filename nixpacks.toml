@@ -1,0 +1,7 @@
+# Force Nixpacks to use Node.js provider instead of auto-detecting Rust
+# from Cargo.toml at repo root. Each service uses NIXPACKS_BUILD_CMD
+# and NIXPACKS_START_CMD env vars to cd into their subdirectory.
+providers = ["node"]
+
+[phases.setup]
+nixPkgs = ["nodejs_18", "npm-9_x"]

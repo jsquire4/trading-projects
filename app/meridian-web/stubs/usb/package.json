@@ -1,0 +1,6 @@
+{
+  "name": "usb",
+  "version": "2.17.0",
+  "description": "Stub for usb package — native addon not needed for web-only usage",
+  "main": "index.js"
+}

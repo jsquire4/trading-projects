@@ -592,7 +592,18 @@ async function injectCircuitBreaker(
     await sendTx(ctx.connection, tx, [ctx.admin]);
     ctx.metrics.instructionTypes.add("circuit_breaker");
 
-    // Unpause all markets to resume trading
+    // Unpause global config first (circuit breaker sets config.is_paused = true)
+    try {
+      const unpauseGlobalIx = buildUnpauseIx({
+        admin: ctx.admin.publicKey,
+        config: ctx.configPda,
+      });
+      await sendTx(ctx.connection, new Transaction().add(unpauseGlobalIx), [ctx.admin]);
+    } catch {
+      // May already be unpaused
+    }
+
+    // Unpause all individual markets
     for (const m of dayMarkets) {
       try {
         const unpauseIx = buildUnpauseIx({

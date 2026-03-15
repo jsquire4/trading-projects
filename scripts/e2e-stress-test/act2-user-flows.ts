@@ -800,13 +800,20 @@ async function test12(ctx: SharedContext, m: MarketContext): Promise<TestResult>
   const orders = await readBook(ctx, m);
   const myOrders = orders.filter((o) => o.owner.equals(agent.publicKey));
 
-  // Unpause for subsequent tests
-  const unpauseIx = buildUnpauseIx({
+  // Unpause global config (circuit breaker sets config.is_paused = true)
+  const unpauseGlobalIx = buildUnpauseIx({
+    admin: ctx.admin.publicKey,
+    config: ctx.configPda,
+  });
+  await sendTx(ctx.connection, new Transaction().add(unpauseGlobalIx), [ctx.admin]);
+
+  // Unpause the individual market
+  const unpauseMarketIx = buildUnpauseIx({
     admin: ctx.admin.publicKey,
     config: ctx.configPda,
     market: m.market,
   });
-  await sendTx(ctx.connection, new Transaction().add(unpauseIx), [ctx.admin]);
+  await sendTx(ctx.connection, new Transaction().add(unpauseMarketIx), [ctx.admin]);
 
   if (myOrders.length === 0) {
     return { passed: true, detail: "Circuit breaker paused market and cancelled orders" };
@@ -869,16 +876,18 @@ export async function runAct2(ctx: SharedContext): Promise<ActResult> {
   const errors: ErrorEntry[] = [];
   let allPassed = true;
 
-  // Create 3 fresh markets for Act 2 (Act 1 cleaned up its own)
+  // Create 4 fresh markets for Act 2 (Act 1 cleaned up its own)
   // market[0]: general trading tests (T1-T6) — standard close time
   // market[1]: winner redeem test (T7) — LATER close time (runs after T8's wait)
   // market[2]: admin override test (T8) — standard close time (runs first, waits for close)
+  // market[3]: admin v2 tests (T9-T13) — long close time (must survive settlement waits)
   if (ctx.markets.length === 0) {
     console.log("  Creating fresh markets for Act 2...");
     details.push("Creating fresh markets for Act 2...");
-    const tickers = ctx.config.tickers.slice(0, 3);
+    const tickers = ctx.config.tickers.slice(0, 4);
     // market[1] gets extra 90s so it's still open after T8's close wait
-    const closeOffsets = [300, 390, 300];
+    // market[3] gets extra 300s for admin tests that run after settlement waits
+    const closeOffsets = [300, 390, 300, 600];
     for (let ti = 0; ti < tickers.length; ti++) {
       const ticker = tickers[ti];
       console.log(`    ${ti + 1}/${tickers.length}: ${ticker} (close +${closeOffsets[ti]}s)...`);
@@ -897,7 +906,7 @@ export async function runAct2(ctx: SharedContext): Promise<ActResult> {
       }
     }
     console.log(`  ${ctx.markets.length}/${tickers.length} markets created`);
-    details.push(`Created ${ctx.markets.length} markets for Act 2`);
+    details.push(`Created ${ctx.markets.length} markets for Act 2 (market[3] for admin tests)`);
     if (ctx.markets.length === 0) {
       return {
         name: "Act 2: User Flows",
@@ -910,13 +919,17 @@ export async function runAct2(ctx: SharedContext): Promise<ActResult> {
   }
 
   const m = ctx.markets[0];
+  // Admin v2 tests (T9-T13) use market[3] which has a longer close time
+  const adminMarket = ctx.markets.length > 3 ? ctx.markets[3] : m;
 
   for (let i = 0; i < TESTS.length; i++) {
     const test = TESTS[i];
+    // Tests 9-13 (index 8-12) use the admin market with longer close time
+    const testMarket = i >= 8 ? adminMarket : m;
     process.stdout.write(`  T${i + 1}/${TESTS.length}: ${test.name}...`);
     const testStart = Date.now();
     try {
-      const result = await test.fn(ctx, m);
+      const result = await test.fn(ctx, testMarket);
       const elapsed = Date.now() - testStart;
       const status = result.passed ? "PASS" : "FAIL";
       const icon = result.passed ? "✓" : "✗";

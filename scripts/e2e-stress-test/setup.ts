@@ -173,17 +173,23 @@ export async function setupTestEnvironment(config: RunConfig): Promise<SharedCon
     await sendTx(connection, new Transaction().add(initTrIx), [admin]);
     console.log(`  TickerRegistry initialized at ${tickerRegistry.toBase58()}`);
 
-    // Add all tickers
+    // Add all tickers (idempotent — skip duplicates)
+    let added = 0;
     for (const ticker of config.tickers) {
-      const addIx = buildAddTickerIx({
-        payer: admin.publicKey,
-        config: configPda,
-        tickerRegistry,
-        ticker: padTicker(ticker),
-      });
-      await sendTx(connection, new Transaction().add(addIx), [admin]);
+      try {
+        const addIx = buildAddTickerIx({
+          payer: admin.publicKey,
+          config: configPda,
+          tickerRegistry,
+          ticker: padTicker(ticker),
+        });
+        await sendTx(connection, new Transaction().add(addIx), [admin]);
+        added++;
+      } catch {
+        // TickerAlreadyExists — skip
+      }
     }
-    console.log(`  Added ${config.tickers.length} tickers to registry`);
+    if (added > 0) console.log(`  Added ${added} tickers to registry`);
   }
 
   // 5. Initialize oracle feeds for each ticker (idempotent)

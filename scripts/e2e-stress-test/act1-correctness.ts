@@ -823,13 +823,20 @@ async function act1AdminV2(
       track(ctx, "circuit_breaker");
       details.push(`Circuit breaker on ${cbMarket.ticker}`);
 
-      // Unpause for subsequent phases
-      const unpauseIx = buildUnpauseIx({
+      // Unpause global config (circuit breaker sets config.is_paused = true)
+      const unpauseGlobalIx = buildUnpauseIx({
+        admin: admin.publicKey,
+        config: configPda,
+      });
+      await sendTx(connection, new Transaction().add(unpauseGlobalIx), [admin]);
+
+      // Unpause the individual market
+      const unpauseMarketIx = buildUnpauseIx({
         admin: admin.publicKey,
         config: configPda,
         market: cbMarket.market,
       });
-      await sendTx(connection, new Transaction().add(unpauseIx), [admin]);
+      await sendTx(connection, new Transaction().add(unpauseMarketIx), [admin]);
     } catch (e: any) {
       recordError(errors, -1, "circuit_breaker", e.message, cbMarket.ticker);
     }

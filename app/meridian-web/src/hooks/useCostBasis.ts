@@ -2,6 +2,7 @@
 
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useQuery } from "@tanstack/react-query";
+import { EVENT_INDEXER_URL } from "@/lib/constants";
 
 export interface CostBasisEntry {
   market: string;         // market pubkey
@@ -9,8 +10,6 @@ export interface CostBasisEntry {
   totalQuantity: number;  // total tokens acquired (in token units, not micro)
   totalCostUsdc: number;  // total USDC spent
 }
-
-const EVENT_INDEXER_URL = process.env.NEXT_PUBLIC_EVENT_INDEXER_URL ?? "http://localhost:3001";
 
 /**
  * Derives cost basis per market from fill events for the connected wallet.

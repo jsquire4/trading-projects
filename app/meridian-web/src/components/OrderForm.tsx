@@ -1,30 +1,14 @@
 "use client";
 
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { PublicKey, Transaction, AccountMeta, SystemProgram } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddress, getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction } from "@solana/spl-token";
-import { BN } from "@coral-xyz/anchor";
+import { PublicKey } from "@solana/web3.js";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { useQueryClient } from "@tanstack/react-query";
 
-import { useAnchorProgram } from "@/hooks/useAnchorProgram";
-import { useTransaction } from "@/hooks/useTransaction";
 import { useNetwork } from "@/hooks/useNetwork";
 import { usePositions } from "@/hooks/usePositions";
 import { useOrderBook } from "@/hooks/useMarkets";
-import { Side, type ActiveOrder } from "@/lib/orderbook";
-import { USDC_MINT } from "@/hooks/useWalletState";
+import { usePlaceOrder } from "@/hooks/usePlaceOrder";
 import { TradeConfirmationModal } from "@/components/TradeConfirmationModal";
-import {
-  findGlobalConfig,
-  findOrderBook,
-  findUsdcVault,
-  findEscrowVault,
-  findYesEscrow,
-  findNoEscrow,
-  findYesMint,
-  findNoMint,
-} from "@/lib/pda";
 
 // Side encoding (on-chain has only 3 sides):
 //   0 = Buy Yes (bid on yes tokens, spends USDC)
@@ -46,20 +30,6 @@ interface OrderFormProps {
 
 const LAMPORTS_PER_TOKEN = 1_000_000;
 
-function sideToU8(side: OrderSide): number {
-  switch (side) {
-    case "buy-yes":
-      return 0;
-    case "sell-yes":
-    case "buy-no":
-      // Buy No is implemented as: mint pair + sell Yes (side=1)
-      return 1;
-    case "sell-no":
-      // Sell No = No-backed bid (side 2) — user offers No tokens at stated price
-      return 2;
-  }
-}
-
 export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTransactionSuccess }: OrderFormProps) {
   const [side, setSide] = useState<OrderSide>("buy-yes");
   const [orderType, setOrderType] = useState<"limit" | "market">("limit");
@@ -76,12 +46,10 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
     }
   }, [initialPrice]);
 
-  const { program } = useAnchorProgram();
-  const { sendTransaction } = useTransaction();
   const { publicKey: walletPublicKey } = useWallet();
   const { isMainnet } = useNetwork();
   const { data: positions = [] } = usePositions();
-  const queryClient = useQueryClient();
+  const { placeOrder } = usePlaceOrder();
 
   const marketPubkey = useMemo(() => new PublicKey(marketKey), [marketKey]);
   const { data: orderBookData } = useOrderBook(marketKey);
@@ -198,260 +166,23 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
   }, [quantityLamports, effectivePrice, orderType, walletPublicKey]);
 
   const handleSubmitDirect = useCallback(async () => {
-    if (!isValid || !program || !walletPublicKey || submitting) return;
+    if (!isValid || !walletPublicKey || submitting) return;
     setSubmitting(true);
 
     try {
-      const user = walletPublicKey;
-      const [config] = findGlobalConfig();
-      const [orderBookPda] = findOrderBook(marketPubkey);
-      const [usdcVault] = findUsdcVault(marketPubkey);
-      const [escrowVault] = findEscrowVault(marketPubkey);
-      const [yesEscrow] = findYesEscrow(marketPubkey);
-      const [noEscrow] = findNoEscrow(marketPubkey);
-      const [yesMint] = findYesMint(marketPubkey);
-      const [noMint] = findNoMint(marketPubkey);
-
-      // Derive user ATAs
-      const userUsdcAta = await getAssociatedTokenAddress(USDC_MINT, user);
-      const userYesAta = await getAssociatedTokenAddress(yesMint, user);
-      const userNoAta = await getAssociatedTokenAddress(noMint, user);
-
-      // Idempotent ATA creation — no-ops if accounts already exist, creates if missing
-      const tx = new Transaction();
-      tx.add(createAssociatedTokenAccountIdempotentInstruction(user, userUsdcAta, user, USDC_MINT));
-      tx.add(createAssociatedTokenAccountIdempotentInstruction(user, userYesAta, user, yesMint));
-      tx.add(createAssociatedTokenAccountIdempotentInstruction(user, userNoAta, user, noMint));
-
-      if (side === "buy-no") {
-        // Atomic Buy No: mint pair + sell Yes + (optional) redeem cleanup
-        // Step 1: Mint pair — gives user Yes + No tokens
-        const mintPairIx = await program.methods
-          .mintPair(new BN(quantityLamports!))
-          .accountsPartial({
-            user,
-            config,
-            market: marketPubkey,
-            yesMint,
-            noMint,
-            userUsdcAta,
-            userYesAta,
-            userNoAta,
-            usdcVault,
-            tokenProgram: TOKEN_PROGRAM_ID,
-            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-            systemProgram: SystemProgram.programId,
-          })
-          .instruction();
-        tx.add(mintPairIx);
-
-        // Step 2: Sell Yes on the order book
-        // For buy-no, user enters a No price. The Yes sell price = 100 - noPrice.
-        const noPrice = orderType === "market" ? 1 : effectivePrice!;
-        const yesSellPrice = orderType === "market" ? 1 : (100 - noPrice);
-        const orderTypeU8 = orderType === "limit" ? 1 : 0;
-        const maxFills = 10;
-
-        // Build remaining_accounts for Sell Yes: matches USDC bids + No-backed bids
-        const makerAccounts: AccountMeta[] = [];
-        if (orderBookData) {
-          const orders = orderBookData.raw.orders;
-          const usdcBids = orders
-            .filter((o) => o.side === Side.UsdcBid && o.priceLevel >= yesSellPrice);
-          const noBids = orders
-            .filter((o) => o.side === Side.NoBackedBid && o.priceLevel <= (100 - yesSellPrice));
-
-          const allBids: { order: ActiveOrder; isMerge: boolean }[] = [];
-          for (let level = 99; level >= 1; level--) {
-            for (const o of usdcBids.filter((b) => b.priceLevel === level)) {
-              allBids.push({ order: o, isMerge: false });
-            }
-            for (const o of noBids.filter((b) => b.priceLevel === level)) {
-              allBids.push({ order: o, isMerge: true });
-            }
-          }
-
-          for (const { order, isMerge } of allBids) {
-            if (makerAccounts.length >= maxFills) break;
-            let makerAta: PublicKey;
-            if (!isMerge) {
-              makerAta = getAssociatedTokenAddressSync(yesMint, order.owner);
-            } else {
-              makerAta = getAssociatedTokenAddressSync(USDC_MINT, order.owner);
-            }
-            makerAccounts.push({ pubkey: makerAta, isSigner: false, isWritable: true });
-          }
-        }
-
-        const sellYesIx = await program.methods
-          .placeOrder(1, yesSellPrice, new BN(quantityLamports!), orderTypeU8, maxFills)
-          .accountsPartial({
-            user,
-            config,
-            market: marketPubkey,
-            orderBook: orderBookPda,
-            usdcVault,
-            escrowVault,
-            yesEscrow,
-            noEscrow,
-            yesMint,
-            noMint,
-            userUsdcAta,
-            userYesAta,
-            userNoAta,
-            tokenProgram: TOKEN_PROGRAM_ID,
-          })
-          .remainingAccounts(makerAccounts)
-          .instruction();
-        tx.add(sellYesIx);
-
-        // Step 3: For market orders, add pair-burn cleanup to recover USDC from unfilled portion
-        // If sell Yes partially fills, user still holds Yes+No tokens for the unfilled qty.
-        // Redeem mode 0 = pair burn — burns min(yes, no) and returns USDC.
-        if (orderType === "market") {
-          const redeemIx = await program.methods
-            .redeem(0, new BN(quantityLamports!))
-            .accountsPartial({
-              user,
-              config,
-              market: marketPubkey,
-              yesMint,
-              noMint,
-              usdcVault,
-              userUsdcAta,
-              userYesAta,
-              userNoAta,
-              tokenProgram: TOKEN_PROGRAM_ID,
-            })
-            .instruction();
-          tx.add(redeemIx);
-        }
-
-        const signature = await sendTransaction(tx, { description: "Buy No (Atomic)" });
-        if (signature) {
-          // Optimistic updates: immediately refetch related queries
-          queryClient.invalidateQueries({ queryKey: ["positions"] });
-          queryClient.invalidateQueries({ queryKey: ["order-book", marketKey] });
-          queryClient.invalidateQueries({ queryKey: ["cost-basis"] });
-          onTransactionSuccess?.(signature);
-        }
-      } else {
-        // Standard order flow (buy-yes, sell-yes, sell-no)
-        const sideU8 = sideToU8(side);
-        // Market orders: use worst acceptable price
-        //   Buy Yes (side=0): price=99 (accept any ask up to 99c)
-        //   Sell Yes (side=1): price=1 (accept any bid down to 1c)
-        //   Sell No (side=2): price=1 (on-chain: max_yes_ask = 100-1 = 99, sweep all asks)
-        const priceU8 = orderType === "market"
-          ? (side === "buy-yes" ? 99 : 1)
-          : effectivePrice!;
-        const orderTypeU8 = orderType === "limit" ? 1 : 0;
-        const maxFills = 10;
-
-        // Build remaining_accounts: maker ATAs needed for fill settlement.
-        // One entry per matchable order slot (up to maxFills), NOT deduped by owner.
-        // The on-chain engine consumes one remaining_account per fill.
-        //   Buy Yes (side=0)  fills Yes asks  → maker's USDC ATA
-        //   Sell Yes (side=1) fills USDC bids → maker's Yes ATA
-        //                     AND No-backed bids (merge) → maker's USDC ATA
-        //   Sell No  (side=2) fills Yes asks (merge) → maker's USDC ATA
-        const makerAccounts: AccountMeta[] = [];
-        if (orderBookData) {
-          const orders = orderBookData.raw.orders;
-          let matchableOrders: { order: ActiveOrder; isMerge: boolean }[] = [];
-
-          if (sideU8 === Side.UsdcBid) {
-            // Buy Yes: matches against Yes asks at price <= our bid price (ascending)
-            matchableOrders = orders
-              .filter((o) => o.side === Side.YesAsk && o.priceLevel <= priceU8)
-              .sort((a, b) => a.priceLevel - b.priceLevel)
-              .map((o) => ({ order: o, isMerge: false }));
-          } else if (sideU8 === Side.YesAsk) {
-            // Sell Yes: matches against BOTH USDC bids AND No-backed bids
-            // Engine walks highest price downward, USDC bids before No-backed bids at each level
-            const usdcBids = orders
-              .filter((o) => o.side === Side.UsdcBid && o.priceLevel >= priceU8);
-            const noBids = orders
-              .filter((o) => o.side === Side.NoBackedBid && o.priceLevel <= (100 - priceU8));
-
-            // Interleave: at each price level (highest first), USDC bids then No-backed bids
-            const allBids: { order: ActiveOrder; isMerge: boolean }[] = [];
-            for (let level = 99; level >= 1; level--) {
-              // USDC bids at this level (standard swap)
-              for (const o of usdcBids.filter((b) => b.priceLevel === level)) {
-                allBids.push({ order: o, isMerge: false });
-              }
-              // No-backed bids at this level (merge/burn)
-              for (const o of noBids.filter((b) => b.priceLevel === level)) {
-                allBids.push({ order: o, isMerge: true });
-              }
-            }
-            matchableOrders = allBids;
-          } else if (sideU8 === Side.NoBackedBid) {
-            // Sell No: matches against Yes asks where ask_price <= (100 - our_price)
-            // Engine walks ascending (lowest ask first)
-            const maxYesAsk = 100 - priceU8;
-            matchableOrders = orders
-              .filter((o) => o.side === Side.YesAsk && o.priceLevel <= maxYesAsk)
-              .sort((a, b) => a.priceLevel - b.priceLevel)
-              .map((o) => ({ order: o, isMerge: true }));
-          }
-
-          // One ATA per matchable order slot (no dedup — engine consumes per fill)
-          for (const { order, isMerge } of matchableOrders) {
-            if (makerAccounts.length >= maxFills) break;
-
-            let makerAta: PublicKey;
-            if (sideU8 === Side.YesAsk && !isMerge) {
-              // Standard swap: Sell Yes fills USDC bid → maker receives Yes tokens
-              makerAta = getAssociatedTokenAddressSync(yesMint, order.owner);
-            } else {
-              // All other cases: maker receives USDC
-              // - Buy Yes fills Yes ask → maker gets USDC
-              // - Sell Yes fills No-backed bid (merge) → maker gets USDC
-              // - Sell No fills Yes ask (merge) → maker gets USDC
-              makerAta = getAssociatedTokenAddressSync(USDC_MINT, order.owner);
-            }
-            makerAccounts.push({ pubkey: makerAta, isSigner: false, isWritable: true });
-          }
-        }
-
-        const placeOrderIx = await program.methods
-          .placeOrder(sideU8, priceU8, new BN(quantityLamports!), orderTypeU8, maxFills)
-          .accountsPartial({
-            user,
-            config,
-            market: marketPubkey,
-            orderBook: orderBookPda,
-            usdcVault,
-            escrowVault,
-            yesEscrow,
-            noEscrow,
-            yesMint,
-            noMint,
-            userUsdcAta,
-            userYesAta,
-            userNoAta,
-            tokenProgram: TOKEN_PROGRAM_ID,
-          })
-          .remainingAccounts(makerAccounts)
-          .instruction();
-
-        tx.add(placeOrderIx);
-
-        const sideLabel = side.replace("-", " ").replace(/\b\w/g, (c) => c.toUpperCase());
-        const signature = await sendTransaction(tx, { description: `Place ${sideLabel} Order` });
-        if (signature) {
-          // Optimistic updates: immediately refetch related queries
-          queryClient.invalidateQueries({ queryKey: ["positions"] });
-          queryClient.invalidateQueries({ queryKey: ["order-book", marketKey] });
-          queryClient.invalidateQueries({ queryKey: ["cost-basis"] });
-          onTransactionSuccess?.(signature);
-        }
+      const signature = await placeOrder({
+        marketPubkey,
+        marketKey,
+        side,
+        orderType,
+        effectivePrice,
+        quantityLamports: quantityLamports!,
+        orderBookData,
+      });
+      if (signature) {
+        onTransactionSuccess?.(signature);
       }
     } catch (err) {
-      // Pre-sendTransaction errors (PDA derivation, ATA resolution) won't be
-      // caught by useTransaction's internal toast — surface them here.
       const msg = err instanceof Error ? err.message : "Order failed";
       const { toast } = await import("sonner");
       toast.error(msg);
@@ -460,19 +191,17 @@ export function OrderForm({ marketKey, ticker, strikePrice, initialPrice, onTran
     }
   }, [
     isValid,
-    program,
     walletPublicKey,
     submitting,
+    placeOrder,
     marketPubkey,
     marketKey,
     side,
     orderType,
     effectivePrice,
     quantityLamports,
-    sendTransaction,
     orderBookData,
     onTransactionSuccess,
-    queryClient,
   ]);
 
   const handleSubmit = useCallback(() => {

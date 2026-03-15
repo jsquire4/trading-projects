@@ -34,64 +34,58 @@ export function PlatformSettings() {
     queryClient.invalidateQueries({ queryKey: ["global-config"] });
   }, [queryClient]);
 
+  // Generic action executor — reduces boilerplate across 5 admin handlers
+  const handleAction = useCallback(
+    async (name: string, buildTx: () => Promise<import("@solana/web3.js").Transaction>, onSuccess?: () => void) => {
+      if (!program || !publicKey) return;
+      setSubmitting(name);
+      try {
+        const tx = await buildTx();
+        await sendTransaction(tx, { description: name });
+        invalidate();
+        onSuccess?.();
+      } catch { /* handled by toast */ }
+      finally { setSubmitting(null); }
+    },
+    [program, publicKey, sendTransaction, invalidate],
+  );
+
   // ---- Transfer Admin ----
   const handleTransferAdmin = useCallback(async () => {
-    if (!program || !publicKey || !newAdminInput) return;
+    if (!newAdminInput) return;
     let newAdmin: PublicKey;
     try { newAdmin = new PublicKey(newAdminInput); }
-    catch { return; } // invalid pubkey
-
-    setSubmitting("transfer");
-    try {
-      const tx = await program.methods
-        .transferAdmin(newAdmin)
-        .accountsPartial({ admin: publicKey, config: configAddr })
-        .transaction();
-      await sendTransaction(tx, { description: "Transfer Admin" });
-      invalidate();
-      setNewAdminInput("");
-    } catch { /* handled by toast */ }
-    finally { setSubmitting(null); }
-  }, [program, publicKey, newAdminInput, configAddr, sendTransaction, invalidate]);
+    catch { return; }
+    await handleAction("Transfer Admin", () =>
+      program!.methods.transferAdmin(newAdmin)
+        .accountsPartial({ admin: publicKey!, config: configAddr })
+        .transaction(),
+      () => setNewAdminInput(""),
+    );
+  }, [newAdminInput, handleAction, program, publicKey, configAddr]);
 
   // ---- Accept Admin ----
   const handleAcceptAdmin = useCallback(async () => {
-    if (!program || !publicKey) return;
-    setSubmitting("accept");
-    try {
-      const tx = await program.methods
-        .acceptAdmin()
-        .accountsPartial({ newAdmin: publicKey, config: configAddr })
-        .transaction();
-      await sendTransaction(tx, { description: "Accept Admin Transfer" });
-      invalidate();
-    } catch { /* handled by toast */ }
-    finally { setSubmitting(null); }
-  }, [program, publicKey, configAddr, sendTransaction, invalidate]);
+    await handleAction("Accept Admin Transfer", () =>
+      program!.methods.acceptAdmin()
+        .accountsPartial({ newAdmin: publicKey!, config: configAddr })
+        .transaction(),
+    );
+  }, [handleAction, program, publicKey, configAddr]);
 
   // ---- Global Pause/Unpause ----
   const handleGlobalPause = useCallback(async () => {
-    if (!program || !publicKey || !config) return;
+    if (!config) return;
     const isPaused = config.isPaused;
-    setSubmitting("pause");
-    try {
-      const tx = isPaused
-        ? await program.methods.unpause(null)
-            .accountsPartial({ admin: publicKey, config: configAddr })
-            .transaction()
-        : await program.methods.pause(null)
-            .accountsPartial({ admin: publicKey, config: configAddr })
-            .transaction();
-      await sendTransaction(tx, { description: isPaused ? "Unpause Platform" : "Pause Platform" });
-      invalidate();
-    } catch { /* handled by toast */ }
-    finally { setSubmitting(null); }
-  }, [program, publicKey, config, configAddr, sendTransaction, invalidate]);
+    await handleAction(isPaused ? "Unpause Platform" : "Pause Platform", () =>
+      isPaused
+        ? program!.methods.unpause(null).accountsPartial({ admin: publicKey!, config: configAddr }).transaction()
+        : program!.methods.pause(null).accountsPartial({ admin: publicKey!, config: configAddr }).transaction(),
+    );
+  }, [config, handleAction, program, publicKey, configAddr]);
 
   // ---- Update Config ----
   const handleUpdateConfig = useCallback(async () => {
-    if (!program || !publicKey) return;
-
     const stalenessNum = parseInt(stalenessInput, 10);
     const settlementNum = parseInt(settlementStalenessInput, 10);
     const confidenceNum = parseInt(confidenceInput, 10);
@@ -104,37 +98,28 @@ export function PlatformSettings() {
     const reserve = reserveInput && !isNaN(reserveNum) && reserveNum >= 0 ? new BN(Math.round(reserveNum * 1_000_000)) : null;
     const blackout = blackoutInput && !isNaN(blackoutNum) && blackoutNum >= 0 ? blackoutNum : null;
 
-    setSubmitting("config");
-    try {
-      const tx = await program.methods
-        .updateConfig(staleness, settlementStal, confidence, reserve, blackout)
-        .accountsPartial({ admin: publicKey, config: configAddr })
-        .transaction();
-      await sendTransaction(tx, { description: "Update Config" });
-      invalidate();
-      setStalenessInput("");
-      setSettlementStalenessInput("");
-      setConfidenceInput("");
-      setReserveInput("");
-      setBlackoutInput("");
-    } catch { /* handled by toast */ }
-    finally { setSubmitting(null); }
-  }, [program, publicKey, configAddr, stalenessInput, settlementStalenessInput, confidenceInput, reserveInput, blackoutInput, sendTransaction, invalidate]);
+    await handleAction("Update Config", () =>
+      program!.methods.updateConfig(staleness, settlementStal, confidence, reserve, blackout)
+        .accountsPartial({ admin: publicKey!, config: configAddr })
+        .transaction(),
+      () => {
+        setStalenessInput("");
+        setSettlementStalenessInput("");
+        setConfidenceInput("");
+        setReserveInput("");
+        setBlackoutInput("");
+      },
+    );
+  }, [stalenessInput, settlementStalenessInput, confidenceInput, reserveInput, blackoutInput, handleAction, program, publicKey, configAddr]);
 
   // ---- Expand Config ----
   const handleExpandConfig = useCallback(async () => {
-    if (!program || !publicKey) return;
-    setSubmitting("expand");
-    try {
-      const tx = await program.methods
-        .expandConfig()
-        .accountsPartial({ admin: publicKey, config: configAddr, systemProgram: SystemProgram.programId })
-        .transaction();
-      await sendTransaction(tx, { description: "Expand Config" });
-      invalidate();
-    } catch { /* handled by toast */ }
-    finally { setSubmitting(null); }
-  }, [program, publicKey, configAddr, sendTransaction, invalidate]);
+    await handleAction("Expand Config", () =>
+      program!.methods.expandConfig()
+        .accountsPartial({ admin: publicKey!, config: configAddr, systemProgram: SystemProgram.programId })
+        .transaction(),
+    );
+  }, [handleAction, program, publicKey, configAddr]);
 
   const isPendingAdmin = config?.pendingAdmin && publicKey?.equals(config.pendingAdmin);
 
@@ -162,7 +147,7 @@ export function PlatformSettings() {
             disabled={submitting !== null}
             className="rounded-md px-4 py-2 text-sm font-medium bg-green-500/20 text-green-400 hover:bg-green-500/30 disabled:bg-white/5 disabled:text-white/20 transition-colors"
           >
-            {submitting === "accept" ? "..." : "Accept Admin Transfer"}
+            {submitting === "Accept Admin Transfer" ? "..." : "Accept Admin Transfer"}
           </button>
         ) : (
           <div className="flex gap-2">
@@ -178,7 +163,7 @@ export function PlatformSettings() {
               disabled={submitting !== null || !newAdminInput}
               className="rounded-md px-3 py-2 text-xs font-medium bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 disabled:bg-white/5 disabled:text-white/20 transition-colors"
             >
-              {submitting === "transfer" ? "..." : "Propose Transfer"}
+              {submitting === "Transfer Admin" ? "..." : "Propose Transfer"}
             </button>
           </div>
         )}
@@ -202,7 +187,7 @@ export function PlatformSettings() {
                 : "bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30"
             }`}
           >
-            {submitting === "pause" ? "..." : config?.isPaused ? "Unpause" : "Pause"}
+            {submitting?.includes("Platform") ? "..." : config?.isPaused ? "Unpause" : "Pause"}
           </button>
         </div>
       </div>
@@ -278,7 +263,7 @@ export function PlatformSettings() {
           disabled={submitting !== null || (!stalenessInput && !settlementStalenessInput && !confidenceInput && !reserveInput && !blackoutInput)}
           className="rounded-md px-4 py-2 text-sm font-medium bg-accent/20 text-accent hover:bg-accent/30 disabled:bg-white/5 disabled:text-white/20 transition-colors"
         >
-          {submitting === "config" ? "..." : "Update Configuration"}
+          {submitting === "Update Config" ? "..." : "Update Configuration"}
         </button>
       </div>
 
@@ -296,7 +281,7 @@ export function PlatformSettings() {
             disabled={submitting !== null}
             className="rounded-md px-3 py-2 text-xs font-medium bg-white/5 text-white/50 hover:text-white/80 border border-white/10 transition-colors disabled:opacity-50"
           >
-            {submitting === "expand" ? "..." : "Expand"}
+            {submitting === "Expand Config" ? "..." : "Expand"}
           </button>
         </div>
       </div>

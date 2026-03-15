@@ -1,20 +1,8 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { PublicKey } from "@solana/web3.js";
-import { BN } from "@coral-xyz/anchor";
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from "@solana/spl-token";
+import { useCallback } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { useQueryClient } from "@tanstack/react-query";
-import { useAnchorProgram } from "@/hooks/useAnchorProgram";
-import { useTransaction } from "@/hooks/useTransaction";
-import { USDC_MINT } from "@/hooks/useWalletState";
-import {
-  findGlobalConfig,
-  findYesMint,
-  findNoMint,
-  findUsdcVault,
-} from "@/lib/pda";
+import { useRedeem } from "@/hooks/useRedeem";
 import type { ParsedMarket } from "@/hooks/useMarkets";
 
 interface RedeemPanelProps {
@@ -25,11 +13,8 @@ interface RedeemPanelProps {
 }
 
 export function RedeemPanel({ market, yesBal, noBal, onSuccess }: RedeemPanelProps) {
-  const { program } = useAnchorProgram();
-  const { sendTransaction } = useTransaction();
   const { publicKey } = useWallet();
-  const queryClient = useQueryClient();
-  const [submitting, setSubmitting] = useState(false);
+  const { redeem, submitting } = useRedeem();
 
   const now = Math.floor(Date.now() / 1000);
   const overrideDeadline = Number(market.overrideDeadline);
@@ -49,76 +34,27 @@ export function RedeemPanel({ market, yesBal, noBal, onSuccess }: RedeemPanelPro
   const hasValidOutcome = market.outcome === 1 || market.outcome === 2;
   const canWinnerRedeem = market.isSettled && hasValidOutcome && !inOverrideWindow && winnerBal > BigInt(0) && !market.isPaused;
 
-  const invalidateAll = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ["positions"] });
-    queryClient.invalidateQueries({ queryKey: ["markets"] });
-    queryClient.invalidateQueries({ queryKey: ["walletState"] });
-    queryClient.invalidateQueries({ queryKey: ["walletBalance"] });
-  }, [queryClient]);
-
-  const buildRedeemTx = useCallback(
-    async (mode: number, amount: bigint) => {
-      if (!program || !publicKey) return null;
-
-      const [config] = findGlobalConfig();
-      const [yesMint] = findYesMint(market.publicKey);
-      const [noMint] = findNoMint(market.publicKey);
-      const [usdcVault] = findUsdcVault(market.publicKey);
-
-      const userUsdcAta = await getAssociatedTokenAddress(USDC_MINT, publicKey);
-      const userYesAta = await getAssociatedTokenAddress(yesMint, publicKey);
-      const userNoAta = await getAssociatedTokenAddress(noMint, publicKey);
-
-      return program.methods
-        .redeem(mode, new BN(amount.toString()))
-        .accountsPartial({
-          user: publicKey,
-          config,
-          market: market.publicKey,
-          yesMint,
-          noMint,
-          usdcVault,
-          userUsdcAta,
-          userYesAta,
-          userNoAta,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .transaction();
-    },
-    [program, publicKey, market],
-  );
-
   const handlePairBurn = useCallback(async () => {
     if (!canPairBurn) return;
-    setSubmitting(true);
-    try {
-      const tx = await buildRedeemTx(0, pairBurnQty);
-      if (!tx) return;
-      await sendTransaction(tx, { description: `Burn ${pairBurnTokens.toFixed(0)} pairs for $${pairBurnTokens.toFixed(2)} USDC` });
-      invalidateAll();
-      onSuccess?.();
-    } catch {
-      // Error handled by useTransaction toast
-    } finally {
-      setSubmitting(false);
-    }
-  }, [canPairBurn, pairBurnQty, pairBurnTokens, buildRedeemTx, sendTransaction, invalidateAll, onSuccess]);
+    const sig = await redeem({
+      mode: 0,
+      amount: pairBurnQty,
+      marketPublicKey: market.publicKey,
+      description: `Burn ${pairBurnTokens.toFixed(0)} pairs for $${pairBurnTokens.toFixed(2)} USDC`,
+    });
+    if (sig) onSuccess?.();
+  }, [canPairBurn, pairBurnQty, pairBurnTokens, market.publicKey, redeem, onSuccess]);
 
   const handleWinnerRedeem = useCallback(async () => {
     if (!canWinnerRedeem) return;
-    setSubmitting(true);
-    try {
-      const tx = await buildRedeemTx(1, winnerBal);
-      if (!tx) return;
-      await sendTransaction(tx, { description: `Redeem ${winnerTokens.toFixed(0)} ${winnerLabel} tokens` });
-      invalidateAll();
-      onSuccess?.();
-    } catch {
-      // Error handled by useTransaction toast
-    } finally {
-      setSubmitting(false);
-    }
-  }, [canWinnerRedeem, winnerBal, winnerTokens, winnerLabel, buildRedeemTx, sendTransaction, invalidateAll, onSuccess]);
+    const sig = await redeem({
+      mode: 1,
+      amount: winnerBal,
+      marketPublicKey: market.publicKey,
+      description: `Redeem ${winnerTokens.toFixed(0)} ${winnerLabel} tokens`,
+    });
+    if (sig) onSuccess?.();
+  }, [canWinnerRedeem, winnerBal, winnerTokens, winnerLabel, market.publicKey, redeem, onSuccess]);
 
   if (!publicKey) return null;
 

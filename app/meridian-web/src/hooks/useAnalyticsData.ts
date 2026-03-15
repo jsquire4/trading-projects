@@ -9,6 +9,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import type { OHLCVBar, Quote } from "@/lib/yahoo-proxy";
+import { EVENT_INDEXER_URL } from "@/lib/constants";
 
 // Re-export types for consumers
 export type { OHLCVBar, Quote };
@@ -79,8 +80,6 @@ export function useHistory(symbol: string | null, days: number = 365) {
 // ---------------------------------------------------------------------------
 // Event indexer hooks
 // ---------------------------------------------------------------------------
-
-const EVENT_INDEXER_URL = process.env.NEXT_PUBLIC_EVENT_INDEXER_URL ?? "http://localhost:3001";
 
 /**
  * Fetch events from the event indexer, optionally filtered by type and market.

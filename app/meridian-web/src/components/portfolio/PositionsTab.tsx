@@ -2,28 +2,18 @@
 
 import Link from "next/link";
 import { useMemo, useState, useCallback, useEffect } from "react";
-import { PublicKey } from "@solana/web3.js";
-import { BN } from "@coral-xyz/anchor";
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from "@solana/spl-token";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { useQueryClient } from "@tanstack/react-query";
 import { usePositions, type Position } from "@/hooks/usePositions";
 import { useOrderBook } from "@/hooks/useMarkets";
 import { useCostBasis } from "@/hooks/useCostBasis";
-import { useAnchorProgram } from "@/hooks/useAnchorProgram";
-import { useTransaction } from "@/hooks/useTransaction";
-import { USDC_MINT } from "@/hooks/useWalletState";
-import { findGlobalConfig, findYesMint, findNoMint, findUsdcVault } from "@/lib/pda";
+import { useRedeem } from "@/hooks/useRedeem";
 import { InsightTooltip } from "@/components/InsightTooltip";
 import { interpretPosition } from "@/lib/insights";
 
 function PositionCard({ position, totalCost, now }: { position: Position; totalCost: number; now: number }) {
   const { data: book } = useOrderBook(position.market.publicKey.toBase58());
-  const { program } = useAnchorProgram();
-  const { sendTransaction } = useTransaction();
   const { publicKey } = useWallet();
-  const queryClient = useQueryClient();
-  const [submitting, setSubmitting] = useState(false);
+  const { redeem, submitting } = useRedeem();
 
   const yesBal = Number(position.yesBal) / 1_000_000;
   const noBal = Number(position.noBal) / 1_000_000;
@@ -67,42 +57,14 @@ function PositionCard({ position, totalCost, now }: { position: Position; totalC
   const positionInsight = pnl !== null ? interpretPosition(side, pnl, minutesLeft) : null;
 
   const handleRedeem = useCallback(async () => {
-    if (!program || !publicKey || winnerBal <= BigInt(0)) return;
-    setSubmitting(true);
-    try {
-      const [config] = findGlobalConfig();
-      const [yesMint] = findYesMint(position.market.publicKey);
-      const [noMint] = findNoMint(position.market.publicKey);
-      const [usdcVault] = findUsdcVault(position.market.publicKey);
-      const userUsdcAta = await getAssociatedTokenAddress(USDC_MINT, publicKey);
-      const userYesAta = await getAssociatedTokenAddress(yesMint, publicKey);
-      const userNoAta = await getAssociatedTokenAddress(noMint, publicKey);
-
-      const tx = await program.methods
-        .redeem(1, new BN(winnerBal.toString()))
-        .accountsPartial({
-          user: publicKey,
-          config,
-          market: position.market.publicKey,
-          yesMint,
-          noMint,
-          usdcVault,
-          userUsdcAta,
-          userYesAta,
-          userNoAta,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .transaction();
-
-      await sendTransaction(tx, { description: `Redeem ${winnerTokens.toFixed(0)} ${winnerLabel} tokens` });
-      queryClient.invalidateQueries({ queryKey: ["positions"] });
-      queryClient.invalidateQueries({ queryKey: ["markets"] });
-    } catch {
-      // Error handled by useTransaction toast
-    } finally {
-      setSubmitting(false);
-    }
-  }, [program, publicKey, position.market, winnerBal, winnerTokens, winnerLabel, sendTransaction, queryClient]);
+    if (!publicKey || winnerBal <= BigInt(0)) return;
+    await redeem({
+      mode: 1,
+      amount: winnerBal,
+      marketPublicKey: position.market.publicKey,
+      description: `Redeem ${winnerTokens.toFixed(0)} ${winnerLabel} tokens`,
+    });
+  }, [publicKey, position.market.publicKey, winnerBal, winnerTokens, winnerLabel, redeem]);
 
   // Settled value: winners get $1 per token
   const settledValue = isSettled

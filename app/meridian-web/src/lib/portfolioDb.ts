@@ -39,34 +39,3 @@ export interface DailySummary {
   positionCount: number;
 }
 
-// ---------------------------------------------------------------------------
-// Stubs — no-ops for any remaining call sites
-// ---------------------------------------------------------------------------
-
-/** @deprecated No longer writes to IndexedDB. Data comes from event-indexer. */
-export async function writeSnapshot(_snapshot: PnlSnapshot): Promise<void> {
-  // no-op
-}
-
-/** @deprecated No longer needed. Data comes from event-indexer. */
-export async function consolidateOldSnapshots(_wallet: string): Promise<void> {
-  // no-op
-}
-
-/** @deprecated No longer reads from IndexedDB. Data comes from event-indexer. */
-export async function getIntradaySnapshots(
-  _wallet: string,
-  _dayStartMs: number,
-): Promise<PnlSnapshot[]> {
-  return [];
-}
-
-/** @deprecated No longer reads from IndexedDB. Data comes from event-indexer. */
-export async function getDailySummaries(_wallet: string): Promise<DailySummary[]> {
-  return [];
-}
-
-/** @deprecated No longer needed. */
-export async function clearAllData(): Promise<void> {
-  // no-op
-}

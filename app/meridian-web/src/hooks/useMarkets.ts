@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { PublicKey } from "@solana/web3.js";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { useAnchorProgram } from "./useAnchorProgram";
+import { toBigInt } from "@/lib/constants";
 import {
   deserializeOrderBook,
   buildYesView,
@@ -84,14 +85,14 @@ function parseMarketAccount(
     noEscrow: a.noEscrow as PublicKey,
     orderBook: a.orderBook as PublicKey,
     oracleFeed: a.oracleFeed as PublicKey,
-    strikePrice: BigInt((a.strikePrice ?? 0).toString()),
-    marketCloseUnix: BigInt((a.marketCloseUnix ?? 0).toString()),
-    totalMinted: BigInt((a.totalMinted ?? 0).toString()),
-    totalRedeemed: BigInt((a.totalRedeemed ?? 0).toString()),
-    settlementPrice: BigInt((a.settlementPrice ?? 0).toString()),
-    previousClose: BigInt((a.previousClose ?? 0).toString()),
-    settledAt: BigInt((a.settledAt ?? 0).toString()),
-    overrideDeadline: BigInt((a.overrideDeadline ?? 0).toString()),
+    strikePrice: toBigInt(a.strikePrice ?? 0),
+    marketCloseUnix: toBigInt(a.marketCloseUnix ?? 0),
+    totalMinted: toBigInt(a.totalMinted ?? 0),
+    totalRedeemed: toBigInt(a.totalRedeemed ?? 0),
+    settlementPrice: toBigInt(a.settlementPrice ?? 0),
+    previousClose: toBigInt(a.previousClose ?? 0),
+    settledAt: toBigInt(a.settledAt ?? 0),
+    overrideDeadline: toBigInt(a.overrideDeadline ?? 0),
     altAddress: a.altAddress as PublicKey,
     ticker,
     isSettled: a.isSettled as boolean,

@@ -1,0 +1,71 @@
+name: Deploy Programs to Devnet
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'programs/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'Anchor.toml'
+
+jobs:
+  deploy:
+    name: Build & Deploy Solana Programs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v2.1.21/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor CLI
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor --tag v0.31.1 anchor-cli --locked
+
+      - name: Write deploy keypair
+        run: |
+          echo '${{ secrets.DEPLOY_KEYPAIR }}' > /tmp/deploy-keypair.json
+          echo '${{ secrets.MERIDIAN_PROGRAM_KEYPAIR }}' > target/deploy/meridian-keypair.json
+          echo '${{ secrets.MOCK_ORACLE_PROGRAM_KEYPAIR }}' > target/deploy/mock_oracle-keypair.json
+          solana config set --url devnet --keypair /tmp/deploy-keypair.json
+
+      - name: Build programs
+        run: anchor build
+
+      - name: Deploy meridian
+        run: |
+          anchor deploy --provider.cluster devnet \
+            --program-name meridian \
+            --program-keypair target/deploy/meridian-keypair.json
+        continue-on-error: true  # May fail if bytecode unchanged
+
+      - name: Deploy mock_oracle
+        run: |
+          anchor deploy --provider.cluster devnet \
+            --program-name mock_oracle \
+            --program-keypair target/deploy/mock_oracle-keypair.json
+        continue-on-error: true
+
+      - name: Verify deployments
+        run: |
+          solana program show G5zZw1GMzqwjfbRMjTi2qUXDwoUwLw83hjEuwLfVCZvy --url devnet | head -3
+          solana program show Az6BVaQwfoSqDyyn3TyvgfavoVKN4Qm8wLbMWm5EceFC --url devnet | head -3

@@ -51,8 +51,11 @@ const log = createLogger("settlement");
 /** How often to poll for expired markets (ms) */
 const POLL_INTERVAL_MS = 60_000;
 
-/** Time between price confirmation polls (ms) */
-const PRICE_CONFIRM_INTERVAL_MS = 5 * 60 * 1000;
+/** Time between price confirmation polls (ms).
+ *  30 seconds — fast enough to settle quickly after close, but Yahoo's
+ *  unofficial API handles ~100-200 req/min. At 7 tickers per poll,
+ *  30s interval = 14 req/min — well within limits. */
+const PRICE_CONFIRM_INTERVAL_MS = 30_000;
 
 /** Maximum time to wait for price confirmation before admin_settle fallback (ms) */
 const PRICE_CONFIRM_TIMEOUT_MS = 30 * 60 * 1000;

@@ -1,15 +1,19 @@
 /**
- * Scheduler — simplified to a daily health check watchdog.
+ * Scheduler — daily health check watchdog.
  *
- * The settlement service now runs as a long-lived reactive poller, so the
- * scheduler no longer triggers settlement or market initialization. Its
- * only job is a morning health check that alerts if something is wrong.
+ * Market creation is intentionally triggered post-settlement (~4:05 PM ET),
+ * not at 8 AM. This is a deliberate design choice: binary markets for the
+ * next trading day open immediately after the previous day's settlement
+ * clears, allowing overnight/weekend trading against the next close.
  *
- * Runs at 8:30 AM ET daily:
- *   - Are there active unsettled markets for today?
- *   - Alert if not (market-initializer may have failed)
+ * The 8:30 AM morning job exists as a safety net — it verifies that markets
+ * were created successfully by the post-settlement initializer. If markets
+ * are missing (settlement pipeline failed overnight), it triggers creation
+ * as a fallback. Under normal operation, this job finds all markets already
+ * present and exits cleanly.
  *
- * This is observe-only — it never blocks or modifies on-chain state.
+ * This is observe-only unless markets are missing — it never blocks or
+ * modifies on-chain state during normal operation.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -134,10 +138,40 @@ export class Scheduler {
         });
       });
 
-      log.info("Morning health check passed");
+      log.info("Morning health check passed — markets verified");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log.critical(`Morning health check FAILED: ${msg}`, { date: todayET });
+      log.critical(`Morning health check FAILED: ${msg} — attempting fallback market creation`, { date: todayET });
+
+      // Fallback: if verification failed (markets missing), run market-initializer
+      try {
+        const initScript = resolve(SERVICES_ROOT, "market-initializer/src/index.ts");
+        const tsxPath2 = resolve(SERVICES_ROOT, "node_modules/.bin/tsx");
+        await new Promise<void>((resolveP, rejectP) => {
+          const child = spawn(tsxPath2, [initScript], {
+            env: { ...process.env },
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+          child.stdout?.on("data", (chunk: Buffer) => {
+            for (const line of chunk.toString().split("\n").filter(Boolean)) {
+              log.info(`[fallback-init] ${line}`);
+            }
+          });
+          const timeout = setTimeout(() => {
+            child.kill("SIGTERM");
+            rejectP(new Error("Fallback market creation timed out after 5 minutes"));
+          }, 5 * 60 * 1000);
+          child.on("close", (code) => {
+            clearTimeout(timeout);
+            if (code === 0) resolveP();
+            else rejectP(new Error(`Fallback init exited with code ${code}`));
+          });
+        });
+        log.info("Fallback market creation completed");
+      } catch (fallbackErr) {
+        const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+        log.critical(`Fallback market creation also failed: ${fbMsg}`, { date: todayET });
+      }
     }
 
     this.lastRunDate = todayET;

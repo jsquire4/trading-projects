@@ -163,10 +163,21 @@ pub fn handle_crank_redeem<'info>(
             continue; // No delegate set — user must redeem manually
         }
         let delegate_key = Pubkey::new_from_array(winning_data2[76..108].try_into().unwrap());
+
+        // Parse delegated_amount (u64 LE at offset 121) to ensure the delegate
+        // is approved for enough tokens; skip if insufficient to avoid reverting
+        // the entire batch.
+        let delegated_amount = u64::from_le_bytes(
+            winning_data2[121..129].try_into().unwrap(),
+        );
         drop(winning_data2);
 
         if delegate_key != market.key() {
             continue; // Delegate is not the market PDA — skip
+        }
+
+        if delegated_amount < winning_fields.amount {
+            continue; // Delegate approved for less than balance — skip, user must redeem manually
         }
 
         // Burn winning tokens (market PDA is the approved delegate)

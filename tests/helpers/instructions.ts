@@ -150,6 +150,8 @@ export interface CreateStrikeMarketParams {
   feeVault?: PublicKey;
   /** TickerRegistry PDA (pass null/program ID to skip for legacy mode) */
   tickerRegistry?: PublicKey;
+  /** SOL Treasury PDA (pass null/program ID to skip for non-admin creators) */
+  solTreasury?: PublicKey;
   /** 8-byte ticker (use padTicker) */
   ticker: Buffer;
   /** Strike price in USDC lamports */
@@ -186,6 +188,7 @@ export function buildCreateStrikeMarketIx(
   const creatorUsdcAta = params.creatorUsdcAta ?? MERIDIAN_PROGRAM_ID;
   const feeVault = params.feeVault ?? MERIDIAN_PROGRAM_ID;
   const tickerRegistry = params.tickerRegistry ?? MERIDIAN_PROGRAM_ID;
+  const solTreasury = params.solTreasury ?? MERIDIAN_PROGRAM_ID;
   const keys = [
     { pubkey: params.admin, isSigner: true, isWritable: true },
     { pubkey: params.config, isSigner: false, isWritable: false },
@@ -202,6 +205,7 @@ export function buildCreateStrikeMarketIx(
     { pubkey: creatorUsdcAta, isSigner: false, isWritable: true },
     { pubkey: feeVault, isSigner: false, isWritable: true },
     { pubkey: tickerRegistry, isSigner: false, isWritable: false },
+    { pubkey: solTreasury, isSigner: false, isWritable: true },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
@@ -1019,7 +1023,10 @@ export interface WithdrawTreasuryParams {
   config: PublicKey;
   treasury: PublicKey;
   adminUsdcAta: PublicKey;
+  solTreasury: PublicKey;
   amount: BN;
+  /** 0 = USDC, 1 = SOL */
+  mode?: number;
 }
 
 export function buildWithdrawTreasuryIx(
@@ -1027,14 +1034,17 @@ export function buildWithdrawTreasuryIx(
 ): TransactionInstruction {
   const disc = anchorDiscriminator("withdraw_treasury");
   const amountBuf = params.amount.toArrayLike(Buffer, "le", 8);
-  const data = Buffer.concat([disc, amountBuf]);
+  const modeBuf = Buffer.from([params.mode ?? 0]);
+  const data = Buffer.concat([disc, amountBuf, modeBuf]);
 
   const keys = [
-    { pubkey: params.admin, isSigner: true, isWritable: false },
+    { pubkey: params.admin, isSigner: true, isWritable: true },
     { pubkey: params.config, isSigner: false, isWritable: false },
     { pubkey: params.treasury, isSigner: false, isWritable: true },
     { pubkey: params.adminUsdcAta, isSigner: false, isWritable: true },
+    { pubkey: params.solTreasury, isSigner: false, isWritable: true },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
   ];
 
   return new TransactionInstruction({
@@ -1056,6 +1066,7 @@ export interface UpdateConfigParams {
   confidenceBps?: BN | null;
   operatingReserve?: BN | null;
   settlementBlackoutMinutes?: number | null;
+  slotRentMarkup?: BN | null;
 }
 
 /** Encode Anchor Option<u64>: 0x00 = None, 0x01 + le_bytes = Some */
@@ -1084,6 +1095,7 @@ export function buildUpdateConfigIx(
     optU64(params.confidenceBps),
     optU64(params.operatingReserve),
     optU16(params.settlementBlackoutMinutes),
+    optU64(params.slotRentMarkup),
   ]);
 
   const keys = [

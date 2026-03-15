@@ -45,12 +45,9 @@ describe("generateQuotes", () => {
       expect(long.askPrice).toBeLessThanOrEqual(neutral.askPrice);
     });
 
-    it("skew is negative (pushing quotes down)", () => {
+    it("skew is positive (subtracted from quotes to push them down)", () => {
       const q = generateQuotes(0.50, 500);
-      // Positive inventory → negative skew in the formula
-      // skew = (inventory / maxInventory) * skewFactor * halfSpread
-      // With positive inventory, skew > 0 in the formula, but it's subtracted
-      // Actually skew field = (500/1000)*0.5*halfSpread > 0
+      // Positive inventory → positive skew value, subtracted from bid/ask
       expect(q.skew).toBeGreaterThan(0);
     });
   });
@@ -68,7 +65,7 @@ describe("generateQuotes", () => {
       expect(short.askPrice).toBeGreaterThanOrEqual(neutral.askPrice);
     });
 
-    it("skew is negative (pushing quotes up)", () => {
+    it("skew is negative (subtracted from quotes to push them up)", () => {
       const q = generateQuotes(0.50, -500);
       expect(q.skew).toBeLessThan(0);
     });

@@ -27,6 +27,7 @@ import {
   MarketAccounts,
   findGlobalConfig,
   findTreasury,
+  findSolTreasury,
   findFeeVault,
   findOrderBook,
   findStrikeMarket,
@@ -137,6 +138,7 @@ describe("Admin V2 — Phase 6A", () => {
   let config: PublicKey;
   let feeVault: PublicKey;
   let treasury: PublicKey;
+  let solTreasury: PublicKey;
   let tickerRegistry: PublicKey;
   let oracleFeed: PublicKey;
   let ma: MarketAccounts;
@@ -160,6 +162,7 @@ describe("Admin V2 — Phase 6A", () => {
     [config] = findGlobalConfig();
     [feeVault] = findFeeVault();
     [treasury] = findTreasury();
+    [solTreasury] = findSolTreasury();
     [tickerRegistry] = findTickerRegistry();
     oracleFeed = await initializeOracleFeed(ctx.context, ctx.admin, TICKER);
     await updateOraclePrice(ctx.context, ctx.admin, oracleFeed, 198_000_000, 500_000);
@@ -782,6 +785,7 @@ describe("Admin V2 — Phase 6A", () => {
         config,
         treasury,
         adminUsdcAta,
+        solTreasury,
         amount: new BN(5_000_000), // withdraw 5 USDC (within limit)
       });
       await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), ix), [ctx.admin]);
@@ -795,13 +799,14 @@ describe("Admin V2 — Phase 6A", () => {
 
     it("rejects withdrawal exceeding available surplus", async () => {
 
-      // Treasury has 5 USDC, reserve is 2 USDC → available = 3 USDC
+      // Treasury has 5 USDC, 0 obligations → available = 5 USDC (USDC mode ignores reserve)
       const ix = buildWithdrawTreasuryIx({
         admin: ctx.admin.publicKey,
         config,
         treasury,
         adminUsdcAta,
-        amount: new BN(4_000_000), // 4 USDC > 3 available
+        solTreasury,
+        amount: new BN(6_000_000), // 6 USDC > 5 available
       });
       try {
         await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), ix), [ctx.admin]);
@@ -818,6 +823,7 @@ describe("Admin V2 — Phase 6A", () => {
         config,
         treasury,
         adminUsdcAta,
+        solTreasury,
         amount: new BN(0),
       });
       try {
@@ -836,6 +842,7 @@ describe("Admin V2 — Phase 6A", () => {
         config,
         treasury,
         adminUsdcAta: uAta,
+        solTreasury,
         amount: new BN(1_000_000),
       });
       try {

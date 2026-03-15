@@ -60,7 +60,7 @@ const JOB_CONFIGS: JobConfig[] = [
     minute: 5,
     servicePath: "settlement/src/index.ts",
     timeoutMs: 20 * 60 * 1000,
-    criticalOnFailure: false,
+    criticalOnFailure: true,
     label: "settlement",
   },
   {
@@ -271,8 +271,11 @@ export class Scheduler {
         log.critical(`${cfg.label.toUpperCase()} FAILED`, {
           date: getTodayET(),
         });
+      } else {
+        log.warn(`${cfg.label} failed (non-critical)`, {
+          date: getTodayET(),
+        });
       }
-      // Non-critical failures are already logged by spawnService
     }
   }
 

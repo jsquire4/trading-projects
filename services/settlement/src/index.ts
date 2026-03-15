@@ -414,6 +414,8 @@ function startTriggerServer(): void {
   const port = parseInt(process.env.TRIGGER_PORT ?? "4002", 10);
   let running = false;
 
+  const triggerToken = process.env.SETTLEMENT_TRIGGER_TOKEN ?? "";
+
   const server = http.createServer(async (req, res) => {
     if (req.url !== "/trigger") {
       res.writeHead(404, { "Content-Type": "application/json" });
@@ -425,6 +427,16 @@ function startTriggerServer(): void {
       res.writeHead(405, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Method not allowed — use POST" }));
       return;
+    }
+
+    // Require a shared secret when SETTLEMENT_TRIGGER_TOKEN is set
+    if (triggerToken) {
+      const auth = req.headers.authorization ?? "";
+      if (auth !== `Bearer ${triggerToken}`) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Unauthorized" }));
+        return;
+      }
     }
 
     if (running) {

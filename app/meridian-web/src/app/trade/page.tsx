@@ -302,7 +302,7 @@ export default function TradePage() {
         <div className="rounded-xl bg-white/5 border border-white/10 px-6 py-12 text-center">
           <p className="text-white/50 text-sm">No active markets found.</p>
           <p className="text-white/30 text-xs mt-1">
-            Markets are created by the admin. Check back soon.
+            Click any ticker above to create a market and start trading.
           </p>
         </div>
       ) : (

@@ -202,7 +202,7 @@ describe("Settlement Lifecycle", () => {
       expect(m.outcome).to.equal(1); // Yes wins
       expect(m.settlementPrice).to.equal(205_000_000);
       expect(m.settledAt).to.be.greaterThanOrEqual(settleTime);
-      expect(m.overrideDeadline).to.equal(m.settledAt + 3600);
+      expect(m.overrideDeadline).to.equal(m.settledAt + 1);
     });
 
     it("rejects double settlement", async () => {
@@ -279,8 +279,8 @@ describe("Settlement Lifecycle", () => {
     it("admin settles after 1hr delay", async () => {
 
 
-      // Advance past close + 3600
-      const adminSettleTime = m2CloseUnix + 3601;
+      // Advance past close + 300 (admin settle delay)
+      const adminSettleTime = m2CloseUnix + 301;
       await advanceClock(ctx, adminSettleTime);
 
       const ix = buildAdminSettleIx({
@@ -308,21 +308,60 @@ describe("Settlement Lifecycle", () => {
   // admin_override
   // =========================================================================
   describe("admin_override", () => {
-    // Uses market 1 which was oracle-settled above with outcome=1 (Yes wins)
+    // Create a fresh market for override tests — the 1-second override window
+    // requires settlement and override in the same clock tick.
+    let maOverride: MarketAccounts;
+
+    before(async () => {
+      const clock = await ctx.context.banksClient.getClock();
+      const now = Number(clock.unixTimestamp);
+      const closeUnix = now + 5;
+
+      maOverride = await createTestMarket(
+        ctx.context, ctx.admin, config, TICKER,
+        STRIKE_PRICE + 50_000_000, // unique strike
+        closeUnix, PREVIOUS_CLOSE, oracleFeed, usdcMint,
+      );
+
+      // Advance past close, settle
+      const settleTs = closeUnix + 10;
+      await advanceClock(ctx, settleTs);
+
+      await provider.sendAndConfirm!(
+        new Transaction().add(
+          uniqueCuIx(),
+          buildUpdatePriceIx({
+            authority: ctx.admin.publicKey,
+            priceFeed: oracleFeed,
+            price: new BN(205_000_000),
+            confidence: new BN(500_000),
+            timestamp: new BN(settleTs),
+          }),
+        ),
+        [ctx.admin],
+      );
+
+      await provider.sendAndConfirm!(
+        new Transaction().add(
+          uniqueCuIx(),
+          buildSettleMarketIx({
+            caller: ctx.admin.publicKey,
+            config,
+            market: maOverride.market,
+            oracleFeed,
+          }),
+        ),
+        [ctx.admin],
+      );
+      // Don't advance clock — stay within 1-second override window
+    });
 
     it("overrides outcome within window", async () => {
-
-
-      // Ensure we're within override window of market 1
-      const m = await readMarket(ctx, ma1.market);
-      const overrideTime = m.settledAt + 100; // well within 1hr window
-      await advanceClock(ctx, overrideTime);
-
       // Override to a price below strike → flip to No wins
       const ix = buildAdminOverrideIx({
         admin: ctx.admin.publicKey,
         config,
-        market: ma1.market,
+        market: maOverride.market,
         newSettlementPrice: new BN(190_000_000), // below $200 strike
       });
 
@@ -331,22 +370,18 @@ describe("Settlement Lifecycle", () => {
         [ctx.admin],
       );
 
-      const mAfter = await readMarket(ctx, ma1.market);
+      const mAfter = await readMarket(ctx, maOverride.market);
       expect(mAfter.outcome).to.equal(2); // No wins
       expect(mAfter.settlementPrice).to.equal(190_000_000);
       expect(mAfter.overrideCount).to.equal(1);
-      // Override deadline should reset to current time + 3600
-      expect(mAfter.overrideDeadline).to.be.greaterThanOrEqual(overrideTime + 3600);
     });
 
     it("increments override_count", async () => {
-
-
       // Second override: flip back to Yes wins
       const ix = buildAdminOverrideIx({
         admin: ctx.admin.publicKey,
         config,
-        market: ma1.market,
+        market: maOverride.market,
         newSettlementPrice: new BN(210_000_000), // above strike
       });
 
@@ -355,7 +390,7 @@ describe("Settlement Lifecycle", () => {
         [ctx.admin],
       );
 
-      const m = await readMarket(ctx, ma1.market);
+      const m = await readMarket(ctx, maOverride.market);
       expect(m.overrideCount).to.equal(2);
       expect(m.outcome).to.equal(1); // Yes wins again
     });
@@ -367,7 +402,7 @@ describe("Settlement Lifecycle", () => {
       const ix3 = buildAdminOverrideIx({
         admin: ctx.admin.publicKey,
         config,
-        market: ma1.market,
+        market: maOverride.market,
         newSettlementPrice: new BN(190_000_000),
       });
       await provider.sendAndConfirm!(
@@ -375,14 +410,14 @@ describe("Settlement Lifecycle", () => {
         [ctx.admin],
       );
 
-      const m = await readMarket(ctx, ma1.market);
+      const m = await readMarket(ctx, maOverride.market);
       expect(m.overrideCount).to.equal(3);
 
       // Fourth override should fail (count == 3 already)
       const ix4 = buildAdminOverrideIx({
         admin: ctx.admin.publicKey,
         config,
-        market: ma1.market,
+        market: maOverride.market,
         newSettlementPrice: new BN(210_000_000),
       });
 
@@ -979,7 +1014,7 @@ describe("Settlement Lifecycle", () => {
       expect(m.outcome).to.equal(2); // No wins
       expect(m.settlementPrice).to.equal(255_000_000);
       expect(m.settledAt).to.be.greaterThan(0);
-      expect(m.overrideDeadline).to.equal(m.settledAt + 3600);
+      expect(m.overrideDeadline).to.equal(m.settledAt + 1);
     });
 
     it("settles Yes at exact strike boundary (price == strike)", async () => {

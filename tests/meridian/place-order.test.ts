@@ -306,7 +306,7 @@ describe("Place Order", () => {
     const obData2 = Buffer.from(obAcct2!.data);
     const levelAfter = priceLevelIdx(obData2, 40);
     // Level should be freed (unallocated) since it was the only order
-    expect(levelAfter).to.equal(0xFF);
+    expect(levelAfter).to.equal(0xFFFF);
   });
 
   it("rejects cancel from non-owner", async () => {
@@ -945,7 +945,8 @@ describe("FIFO Priority (timestamp-based matching)", () => {
 
     // Find which slot the new order took (should be slot 1, the cancelled gap)
     let newSlotIdx = -1;
-    const opl = obData[149]; // HDR_ORDERS_PER_LEVEL
+    const loff = priceLevelIdx(obData, PRICE);
+    const opl = obData[loff + 2]; // per-level slot_count
     for (let i = 0; i < opl; i++) {
       const s = readOrderSlot(obData, priceLevelIdx(obData, PRICE), i);
       if (s.isActive && s.owner.toBase58() === s2.publicKey.toBase58()) {

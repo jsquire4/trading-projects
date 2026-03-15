@@ -9,6 +9,7 @@ import { useCostBasis } from "@/hooks/useCostBasis";
 import { useRedeem } from "@/hooks/useRedeem";
 import { InsightTooltip } from "@/components/InsightTooltip";
 import { interpretPosition } from "@/lib/insights";
+import { calcPositionValue } from "@/lib/positions";
 
 function PositionCard({ position, totalCost, now }: { position: Position; totalCost: number; now: number }) {
   const { data: book } = useOrderBook(position.market.publicKey.toBase58());
@@ -26,9 +27,8 @@ function PositionCard({ position, totalCost, now }: { position: Position; totalC
     return (book.yesView.bestBid + book.yesView.bestAsk) / 2;
   }, [book]);
 
-  const yesValue = midPrice !== null ? (yesBal * midPrice) / 100 : null;
-  const noValue = midPrice !== null ? (noBal * (100 - midPrice)) / 100 : null;
-  const totalValue = yesValue !== null && noValue !== null ? yesValue + noValue : null;
+  // midPrice is in cents (0-100); calcPositionValue expects 0-1 scale
+  const totalValue = midPrice !== null ? calcPositionValue(yesBal, noBal, midPrice / 100) : null;
 
   const formatCountdown = (secs: number) => {
     if (secs <= 0) return "Expired";

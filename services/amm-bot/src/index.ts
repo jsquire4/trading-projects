@@ -105,9 +105,7 @@ async function main(): Promise<void> {
   const spreadBps = parseInt(process.env.BOT_SPREAD_BPS ?? "500", 10);
   const vol = parseFloat(process.env.BOT_VOL ?? "0.30");
   // Use the market data factory — in synthetic mode this returns SyntheticClient (no API key needed)
-  const isSynthetic = process.env.MARKET_DATA_SOURCE === "synthetic";
-  let marketDataClient: IMarketDataClient | null = null;
-  marketDataClient = createMarketDataClient();
+  const marketDataClient: IMarketDataClient = createMarketDataClient();
   const riskFreeRate = parseFloat(process.env.BOT_RISK_FREE_RATE ?? "0.05");
 
   const quoteConfig: QuoteConfig = {
@@ -184,13 +182,15 @@ async function main(): Promise<void> {
       let noBalance = 0;
       try {
         const yesAcct = await getAccount(connection, userYesAta);
-        yesBalance = Number(yesAcct.amount);
+        const yesAmt = BigInt(yesAcct.amount);
+        yesBalance = yesAmt > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(yesAmt);
       } catch {
         // ATA doesn't exist yet — balance is 0
       }
       try {
         const noAcct = await getAccount(connection, userNoAta);
-        noBalance = Number(noAcct.amount);
+        const noAmt = BigInt(noAcct.amount);
+        noBalance = noAmt > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(noAmt);
       } catch {
         // ATA doesn't exist yet — balance is 0
       }

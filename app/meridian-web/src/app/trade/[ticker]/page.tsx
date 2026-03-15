@@ -17,6 +17,7 @@ import { MyPositions } from "@/components/MyPositions";
 import { RedeemPanel } from "@/components/RedeemPanel";
 import { FillFeed } from "@/components/FillFeed";
 import { PayoffDisplay } from "@/components/PayoffDisplay";
+import { CreateMarketPanel } from "@/components/CreateMarketPanel";
 import { getExplorerUrl } from "@/lib/network";
 
 // ---------------------------------------------------------------------------
@@ -160,18 +161,17 @@ export default function TradingCockpit({
     );
   }
 
-  // No markets for this ticker
+  // No markets for this ticker — show create market panel
   if (tickerMarkets.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center gap-4 py-20">
-        <h1 className="text-2xl font-bold text-white">{ticker}</h1>
-        <p className="text-white/50">No active markets for {ticker} today.</p>
+      <div className="flex flex-col items-center gap-6 py-12">
         <Link
           href="/trade"
-          className="text-sm text-accent hover:text-accent/80 transition-colors"
+          className="text-sm text-white/30 hover:text-white/60 transition-colors self-start"
         >
           &larr; Back to all markets
         </Link>
+        <CreateMarketPanel ticker={ticker} />
       </div>
     );
   }

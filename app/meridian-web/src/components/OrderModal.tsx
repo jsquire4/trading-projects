@@ -374,7 +374,31 @@ export function OrderModal({
                 </div>
               )}
 
-              {/* TODO: Show rent deposit when new slots needed */}
+              {/* Rent deposit for new market / new slot */}
+              {isNewMarket && (
+                <div className="pt-2 border-t border-white/5 space-y-1">
+                  <div className="flex items-center justify-between text-xs text-amber-400/70">
+                    <span>Market creation rent</span>
+                    <span className="font-mono">~0.02 SOL</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-amber-400/70">
+                    <span>Order slot rent</span>
+                    <span className="font-mono">~0.001 SOL</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-amber-300">
+                    <span>Total rent</span>
+                    <span className="font-mono">~0.021 SOL</span>
+                  </div>
+                </div>
+              )}
+              {!isNewMarket && restsAsLimit > 0 && (
+                <div className="pt-2 border-t border-white/5">
+                  <div className="flex items-center justify-between text-xs text-white/40">
+                    <span>Slot rent (if new level)</span>
+                    <span className="font-mono">~0.001 SOL</span>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

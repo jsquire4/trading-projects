@@ -61,6 +61,7 @@ import {
   findOrderBook,
   findPriceFeed,
   findSolTreasury,
+  findTickerRegistry,
   padTicker,
 } from "../../shared/src/pda.js";
 
@@ -377,6 +378,9 @@ async function createSingleMarket(
       orderBook: orderBook,
       oracleFeed: oracleFeed,
       usdcMint: usdcMint,
+      creatorUsdcAta: null,    // admin doesn't pay creation fee
+      feeVault: null,          // no fee for admin
+      tickerRegistry: findTickerRegistry()[0],
       solTreasury: findSolTreasury()[0],
       tokenProgram: TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,

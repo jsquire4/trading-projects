@@ -16,6 +16,7 @@ import { useState, useMemo, useCallback, useEffect } from "react";
 import { PublicKey } from "@solana/web3.js";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { usePlaceOrder, type PlaceOrderParams } from "@/hooks/usePlaceOrder";
+import { usePositions } from "@/hooks/usePositions";
 import type { OrderBookData } from "@/hooks/useMarkets";
 import { Side, type ActiveOrder } from "@/lib/orderbook";
 
@@ -76,10 +77,38 @@ export function OrderModal({
 }: OrderModalProps) {
   const { publicKey } = useWallet();
   const { placeOrder } = usePlaceOrder();
+  const { data: positions = [] } = usePositions();
   const [quantity, setQuantity] = useState("");
   const [orderType, setOrderType] = useState<"limit" | "market">("limit");
   const [submitting, setSubmitting] = useState(false);
   const [activeSide, setActiveSide] = useState<OrderModalSide>(side);
+
+  // Position conflict check: on-chain blocks holding both Yes and No on the same strike.
+  // Check user's token balances for this market and warn before submit.
+  const positionConflict = useMemo(() => {
+    if (!marketPubkey) return null;
+    const marketKey = marketPubkey.toBase58();
+    const pos = positions.find((p) => p.market.publicKey.toBase58() === marketKey);
+    if (!pos) return null;
+
+    const holdsYes = pos.yesBal > BigInt(0);
+    const holdsNo = pos.noBal > BigInt(0);
+
+    // Buy Yes / Sell No requires no No tokens
+    if ((activeSide === "buy-yes") && holdsNo) {
+      return "You hold No tokens on this strike. Sell or pair-burn them before buying Yes.";
+    }
+    // Buy No / Sell No (NO_BID) requires no Yes tokens
+    if ((activeSide === "buy-no") && holdsYes) {
+      return "You hold Yes tokens on this strike. Sell or pair-burn them before buying No.";
+    }
+    // Sell No requires no Yes tokens (NO_BID check)
+    if ((activeSide === "sell-no") && holdsYes) {
+      return "You hold Yes tokens on this strike. Sell or pair-burn them before selling No.";
+    }
+
+    return null;
+  }, [marketPubkey, positions, activeSide]);
 
   // Reset state when modal opens or side changes
   useEffect(() => {
@@ -312,6 +341,19 @@ export function OrderModal({
             ))}
           </div>
 
+          {/* Position conflict warning */}
+          {positionConflict && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-300">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="font-semibold">Position Conflict</span>
+              </div>
+              <p>{positionConflict}</p>
+              <p className="text-amber-300/60 mt-1">
+                You cannot hold both Yes and No tokens on the same strike. This is enforced on-chain.
+              </p>
+            </div>
+          )}
+
           {/* Available liquidity */}
           {!isNewMarket && totalAvailable > 0 && (
             <div className="rounded-lg bg-white/5 border border-white/10 px-4 py-3 space-y-2">
@@ -488,7 +530,7 @@ export function OrderModal({
           </button>
           <button
             onClick={handleSubmit}
-            disabled={submitting || quantityNum <= 0 || !publicKey}
+            disabled={submitting || quantityNum <= 0 || !publicKey || !!positionConflict}
             className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition-colors border ${
               submitting
                 ? "bg-white/5 text-white/30 border-white/10"

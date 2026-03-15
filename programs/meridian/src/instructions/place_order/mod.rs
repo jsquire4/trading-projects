@@ -313,13 +313,14 @@ pub fn handle_place_order<'info>(
     Ok(())
 }
 
-/// Try to place a resting order, allocating a new level via realloc if needed.
-/// Returns Ok(true) if placed successfully, Ok(false) if level is full.
+/// Try to place a resting order, allocating a new level or expanding an
+/// existing one via realloc if needed. Maker pays SOL rent per slot.
+/// Returns Ok(true) if placed successfully, Ok(false) on unrecoverable failure.
 fn try_place_resting_order<'info>(
     ob_info: &AccountInfo<'info>,
     user: &Signer<'info>,
     system_program: &Program<'info, System>,
-    market: &Account<'info, StrikeMarket>,
+    _market: &Account<'info, StrikeMarket>,
     side: u8,
     price: u8,
     quantity: u64,
@@ -340,27 +341,35 @@ fn try_place_resting_order<'info>(
             &user.key(),
         ) {
             Ok(_order_id) => return Ok(true),
-            Err(PlaceError::LevelFull) => return Ok(false),
             Err(PlaceError::OrderIdOverflow) => return Ok(false),
+            Err(PlaceError::LevelFull) => {
+                // Fall through to expand level
+            }
             Err(PlaceError::NeedsNewLevel) => {
-                // Fall through to allocate
+                // Fall through to allocate new level
+                drop(ob_data);
+                allocate_new_level(ob_info, user, system_program, price)?;
+                // Retry placement after new level
+                let mut ob_data2 = ob_info.try_borrow_mut_data()?;
+                return match place_resting_order(
+                    &mut ob_data2,
+                    &user.key(),
+                    side,
+                    price,
+                    quantity,
+                    original_quantity,
+                    timestamp,
+                    &user.key(),
+                ) {
+                    Ok(_order_id) => Ok(true),
+                    Err(_) => Ok(false),
+                };
             }
         }
     }
 
-    // Need to allocate a new level — realloc the account
-    allocate_new_level(ob_info, user, system_program, market)?;
-
-    // Initialize the new level
-    {
-        let mut ob_data = ob_info.try_borrow_mut_data()?;
-        let _level_idx = ob_data[HDR_LEVEL_COUNT]; // will be incremented by init_level
-        let max_levels = ob_data[HDR_MAX_LEVELS];
-        // Find a free slot in the allocated levels
-        let free_idx = find_free_level_slot(&ob_data)
-            .unwrap_or(max_levels.saturating_sub(1));
-        init_level(&mut ob_data, free_idx, price);
-    }
+    // Level exists but is full — expand by 1 slot
+    expand_level(ob_info, user, system_program, price)?;
 
     // Retry placement
     {
@@ -381,34 +390,108 @@ fn try_place_resting_order<'info>(
     }
 }
 
-/// Allocate space for one new level in the order book via realloc.
-/// Transfers rent from user to the order book account.
+/// Allocate space for one new level (1 slot) in the order book via realloc.
+/// Appends at the end of the account. Maker pays SOL rent.
 fn allocate_new_level<'info>(
     ob_info: &AccountInfo<'info>,
     user: &Signer<'info>,
     system_program: &Program<'info, System>,
-    _market: &Account<'info, StrikeMarket>,
+    price: u8,
 ) -> Result<()> {
     let current_len = ob_info.data_len();
-    let orders_per_level;
-    let new_max_levels;
+    // New level = 8 byte header + 1 × 112 byte slot = 120 bytes
+    let level_size = LEVEL_HEADER_SIZE + ORDER_SLOT_SIZE;
+    let new_len = current_len + level_size;
 
-    {
-        let ob_data = ob_info.try_borrow_data()?;
-        orders_per_level = ob_data[HDR_ORDERS_PER_LEVEL];
-        let max_levels = ob_data[HDR_MAX_LEVELS];
-
-        require!(
-            (max_levels as usize) < MAX_PRICE_LEVELS,
-            MeridianError::MaxLevelsReached
-        );
-        new_max_levels = max_levels + 1;
-    }
-
-    let entry_size = LEVEL_HEADER_SIZE + orders_per_level as usize * ORDER_SLOT_SIZE;
-    let new_len = current_len + entry_size;
+    // Verify the new level offset fits in u16 (price_map stores u16 offsets)
+    require!(
+        current_len < PRICE_UNALLOCATED as usize,
+        MeridianError::MaxLevelsReached
+    );
 
     // Transfer rent for the new space
+    transfer_rent(ob_info, user, system_program, new_len)?;
+
+    // Realloc
+    ob_info.realloc(new_len, false)?;
+
+    // Initialize the new level at the end
+    {
+        let mut ob_data = ob_info.try_borrow_mut_data()?;
+        let new_max = ob_data[HDR_MAX_LEVELS].saturating_add(1);
+        ob_data[HDR_MAX_LEVELS] = new_max;
+        // init_level writes the level header and updates price_map
+        init_level(&mut ob_data, current_len, price);
+    }
+
+    Ok(())
+}
+
+/// Expand an existing level by 1 slot. Reallocs the account by ORDER_SLOT_SIZE
+/// bytes, shifts subsequent data forward if needed, and updates all affected
+/// price_map offsets.
+fn expand_level<'info>(
+    ob_info: &AccountInfo<'info>,
+    user: &Signer<'info>,
+    system_program: &Program<'info, System>,
+    price: u8,
+) -> Result<()> {
+    let current_len = ob_info.data_len();
+    let new_len = current_len + ORDER_SLOT_SIZE;
+
+    // Read the level's byte offset and current slot count
+    let (loff, old_slot_count) = {
+        let ob_data = ob_info.try_borrow_data()?;
+        let loff_u16 = book_price_map(&ob_data, price);
+        require!(loff_u16 != PRICE_UNALLOCATED, MeridianError::OrderNotFound);
+        let loff = loff_u16 as usize;
+        let sc = level_slot_count(&ob_data, loff);
+        (loff, sc)
+    };
+
+    // The insertion point: right after the level's last existing slot
+    let insertion_point = loff + LEVEL_HEADER_SIZE + old_slot_count as usize * ORDER_SLOT_SIZE;
+
+    // Transfer rent
+    transfer_rent(ob_info, user, system_program, new_len)?;
+
+    // Realloc
+    ob_info.realloc(new_len, false)?;
+
+    // Shift subsequent data forward and update price_map offsets
+    {
+        let mut ob_data = ob_info.try_borrow_mut_data()?;
+
+        // Shift everything from insertion_point..old_end forward by ORDER_SLOT_SIZE
+        if insertion_point < current_len {
+            ob_data.copy_within(insertion_point..current_len, insertion_point + ORDER_SLOT_SIZE);
+        }
+
+        // Zero the new slot region
+        ob_data[insertion_point..insertion_point + ORDER_SLOT_SIZE].fill(0);
+
+        // Update price_map: any level offset > loff needs to shift by ORDER_SLOT_SIZE
+        for p in 1..=99u8 {
+            let off = book_price_map(&ob_data, p);
+            if off != PRICE_UNALLOCATED && (off as usize) > loff {
+                book_set_price_map(&mut ob_data, p, off + ORDER_SLOT_SIZE as u16);
+            }
+        }
+
+        // Increment this level's slot_count
+        set_level_slot_count(&mut ob_data, loff, old_slot_count + 1);
+    }
+
+    Ok(())
+}
+
+/// Transfer rent difference from user to the order book account.
+fn transfer_rent<'info>(
+    ob_info: &AccountInfo<'info>,
+    user: &Signer<'info>,
+    system_program: &Program<'info, System>,
+    new_len: usize,
+) -> Result<()> {
     let rent = Rent::get()?;
     let required_lamports = rent.minimum_balance(new_len);
     let current_lamports = ob_info.lamports();
@@ -425,15 +508,6 @@ fn allocate_new_level<'info>(
             ),
             diff,
         )?;
-    }
-
-    // Realloc
-    ob_info.realloc(new_len, false)?;
-
-    // Update max_levels in header
-    {
-        let mut ob_data = ob_info.try_borrow_mut_data()?;
-        ob_data[HDR_MAX_LEVELS] = new_max_levels;
     }
 
     Ok(())

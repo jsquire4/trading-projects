@@ -39,31 +39,42 @@ pub const OUTCOME_YES_WINS: u8 = 1;
 pub const OUTCOME_NO_WINS: u8 = 2;
 
 // ---------------------------------------------------------------------------
-// Sparse Order Book layout constants
+// Sparse Order Book layout constants — variable-size levels
 // ---------------------------------------------------------------------------
 
-/// Initial orders per level when a new level is allocated
-pub const INITIAL_ORDERS_PER_LEVEL: u8 = 4;
-/// Maximum orders per level (growth cap)
-pub const MAX_ORDERS_PER_LEVEL_CAP: u8 = 32;
-/// Unallocated price map entry
-pub const PRICE_UNALLOCATED: u8 = 0xFF;
+/// Unallocated price map entry (u16 sentinel)
+pub const PRICE_UNALLOCATED: u16 = 0xFFFF;
 
 /// Order slot size in bytes (80 + 32 for rent_depositor)
 pub const ORDER_SLOT_SIZE: usize = 112;
-/// Level header size in bytes (price + count + padding)
+/// Level header size in bytes (price + active_count + slot_count + padding)
 pub const LEVEL_HEADER_SIZE: usize = 8;
 
 // Header byte offsets (including 8-byte Anchor discriminator)
+//
+// New layout: price_map is [u16; 99] = 198 bytes (stores byte offsets, not indices)
+//
+// [0..8]     discriminator
+// [8..40]    market Pubkey
+// [40..48]   next_order_id u64
+// [48..246]  price_map [u16 LE; 99] — byte offsets, 0xFFFF = unallocated
+// [246]      level_count u8
+// [247]      max_levels u8 (allocated level count, monotonically increasing)
+// [248]      bump u8
+// [249..270] reserved
 pub const DISC_SIZE: usize = 8;
-pub const HDR_MARKET: usize = 8;       // [8..40]  Pubkey
-pub const HDR_NEXT_ORDER_ID: usize = 40; // [40..48] u64
-pub const HDR_PRICE_MAP: usize = 48;   // [48..147] [u8; 99]
-pub const HDR_LEVEL_COUNT: usize = 147; // [147] u8
-pub const HDR_MAX_LEVELS: usize = 148;  // [148] u8
-pub const HDR_ORDERS_PER_LEVEL: usize = 149; // [149] u8
-pub const HDR_BUMP: usize = 150;       // [150] u8
-pub const HEADER_SIZE: usize = 168;    // Total header including discriminator
+pub const HDR_MARKET: usize = 8;          // [8..40]   Pubkey
+pub const HDR_NEXT_ORDER_ID: usize = 40;  // [40..48]  u64
+pub const HDR_PRICE_MAP: usize = 48;      // [48..246] [u16; 99]
+pub const HDR_LEVEL_COUNT: usize = 246;   // [246] u8
+pub const HDR_MAX_LEVELS: usize = 247;    // [247] u8
+pub const HDR_BUMP: usize = 248;          // [248] u8
+pub const HEADER_SIZE: usize = 270;       // Total header
+
+// Level header byte offsets (relative to level start)
+pub const LVL_PRICE: usize = 0;
+pub const LVL_ACTIVE_COUNT: usize = 1;
+pub const LVL_SLOT_COUNT: usize = 2;
 
 // Order slot field offsets within a slot
 pub const SLOT_OWNER: usize = 0;       // [0..32]  Pubkey
@@ -71,25 +82,21 @@ pub const SLOT_ORDER_ID: usize = 32;   // [32..40] u64
 pub const SLOT_QUANTITY: usize = 40;   // [40..48] u64
 pub const SLOT_ORIG_QTY: usize = 48;   // [48..56] u64
 pub const SLOT_SIDE: usize = 56;       // [56] u8
-/// Padding after SLOT_SIDE (1 byte) to align SLOT_TIMESTAMP at offset 64.
-/// Range: [SLOT_SIDE + 1 .. SLOT_TIMESTAMP) = [57..64)
 pub const SLOT_PAD1_START: usize = SLOT_SIDE + 1;       // 57
 pub const SLOT_PAD1_END: usize = 64;                    // exclusive
 pub const SLOT_TIMESTAMP: usize = 64;  // [64..72] i64
 pub const SLOT_IS_ACTIVE: usize = 72;  // [72] u8
-/// Padding after SLOT_IS_ACTIVE (1 byte) to align SLOT_RENT_DEPOSITOR at offset 80.
-/// Range: [SLOT_IS_ACTIVE + 1 .. SLOT_RENT_DEPOSITOR) = [73..80)
 pub const SLOT_PAD2_START: usize = SLOT_IS_ACTIVE + 1;  // 73
 pub const SLOT_PAD2_END: usize = 80;                    // exclusive
 pub const SLOT_RENT_DEPOSITOR: usize = 80; // [80..112] Pubkey
 
-// Compile-time assertions to guard against layout drift.
-// If any offset constant changes, these will fail to compile.
-const _: () = assert!(SLOT_PAD1_START == SLOT_SIDE + 1, "SLOT_PAD1_START must follow SLOT_SIDE");
-const _: () = assert!(SLOT_PAD1_END == SLOT_TIMESTAMP, "SLOT_PAD1_END must equal SLOT_TIMESTAMP");
-const _: () = assert!(SLOT_PAD2_START == SLOT_IS_ACTIVE + 1, "SLOT_PAD2_START must follow SLOT_IS_ACTIVE");
-const _: () = assert!(SLOT_PAD2_END == SLOT_RENT_DEPOSITOR, "SLOT_PAD2_END must equal SLOT_RENT_DEPOSITOR");
-const _: () = assert!(SLOT_RENT_DEPOSITOR + 32 == ORDER_SLOT_SIZE, "SLOT_RENT_DEPOSITOR + Pubkey(32) must equal ORDER_SLOT_SIZE");
+// Compile-time assertions
+const _: () = assert!(SLOT_PAD1_START == SLOT_SIDE + 1);
+const _: () = assert!(SLOT_PAD1_END == SLOT_TIMESTAMP);
+const _: () = assert!(SLOT_PAD2_START == SLOT_IS_ACTIVE + 1);
+const _: () = assert!(SLOT_PAD2_END == SLOT_RENT_DEPOSITOR);
+const _: () = assert!(SLOT_RENT_DEPOSITOR + 32 == ORDER_SLOT_SIZE);
+const _: () = assert!(HDR_PRICE_MAP + MAX_PRICE_LEVELS * 2 == HDR_LEVEL_COUNT);
 
 /// OrderBook PDA seed prefix
 pub const ORDER_BOOK_SEED: &[u8] = b"order_book";
@@ -104,64 +111,49 @@ pub fn sparse_book_discriminator() -> [u8; 8] {
 }
 
 // ---------------------------------------------------------------------------
-// Byte-level accessor functions for sparse order book
+// Byte-level accessor functions
 // ---------------------------------------------------------------------------
 
-/// Compute the byte offset of level `idx` within account data.
-#[inline]
-pub fn level_offset(data: &[u8], idx: u8) -> usize {
-    let opl = data[HDR_ORDERS_PER_LEVEL] as usize;
-    let entry_size = LEVEL_HEADER_SIZE + opl * ORDER_SLOT_SIZE;
-    HEADER_SIZE + idx as usize * entry_size
-}
-
-/// Compute the byte offset of a specific order slot.
-#[inline]
-pub fn slot_offset(data: &[u8], level_idx: u8, slot_idx: u8) -> usize {
-    level_offset(data, level_idx) + LEVEL_HEADER_SIZE + slot_idx as usize * ORDER_SLOT_SIZE
-}
-
-/// Compute the total account size for given level count and orders_per_level.
-#[inline]
-pub fn account_size(level_count: u8, orders_per_level: u8) -> usize {
-    let entry_size = LEVEL_HEADER_SIZE + orders_per_level as usize * ORDER_SLOT_SIZE;
-    HEADER_SIZE + level_count as usize * entry_size
-}
-
-/// Read a Pubkey from data at the given offset.
 #[inline]
 pub fn read_pubkey(data: &[u8], offset: usize) -> Pubkey {
     Pubkey::new_from_array(data[offset..offset + 32].try_into().unwrap())
 }
 
-/// Write a Pubkey to data at the given offset.
 #[inline]
 pub fn write_pubkey(data: &mut [u8], offset: usize, key: &Pubkey) {
     data[offset..offset + 32].copy_from_slice(key.as_ref());
 }
 
-/// Read a little-endian u64 from data.
 #[inline]
 pub fn read_u64(data: &[u8], offset: usize) -> u64 {
     u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap())
 }
 
-/// Write a little-endian u64 to data.
 #[inline]
 pub fn write_u64(data: &mut [u8], offset: usize, val: u64) {
     data[offset..offset + 8].copy_from_slice(&val.to_le_bytes());
 }
 
-/// Read a little-endian i64 from data.
 #[inline]
 pub fn read_i64(data: &[u8], offset: usize) -> i64 {
     i64::from_le_bytes(data[offset..offset + 8].try_into().unwrap())
 }
 
-/// Write a little-endian i64 to data.
 #[inline]
 pub fn write_i64(data: &mut [u8], offset: usize, val: i64) {
     data[offset..offset + 8].copy_from_slice(&val.to_le_bytes());
+}
+
+#[inline]
+pub fn read_u16(data: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes([data[offset], data[offset + 1]])
+}
+
+#[inline]
+pub fn write_u16(data: &mut [u8], offset: usize, val: u16) {
+    let bytes = val.to_le_bytes();
+    data[offset] = bytes[0];
+    data[offset + 1] = bytes[1];
 }
 
 // ---------------------------------------------------------------------------
@@ -178,14 +170,19 @@ pub fn book_next_order_id(data: &[u8]) -> u64 {
     read_u64(data, HDR_NEXT_ORDER_ID)
 }
 
+/// Read the byte offset for a price level from the price map (u16 LE).
+/// Returns PRICE_UNALLOCATED (0xFFFF) if no level exists at this price.
 #[inline]
-pub fn book_price_map(data: &[u8], price: u8) -> u8 {
-    data[HDR_PRICE_MAP + (price as usize - 1)]
+pub fn book_price_map(data: &[u8], price: u8) -> u16 {
+    let idx = HDR_PRICE_MAP + (price as usize - 1) * 2;
+    read_u16(data, idx)
 }
 
+/// Write a byte offset into the price map for a given price.
 #[inline]
-pub fn book_set_price_map(data: &mut [u8], price: u8, level_idx: u8) {
-    data[HDR_PRICE_MAP + (price as usize - 1)] = level_idx;
+pub fn book_set_price_map(data: &mut [u8], price: u8, offset: u16) {
+    let idx = HDR_PRICE_MAP + (price as usize - 1) * 2;
+    write_u16(data, idx, offset);
 }
 
 #[inline]
@@ -199,81 +196,97 @@ pub fn book_max_levels(data: &[u8]) -> u8 {
 }
 
 #[inline]
-pub fn book_orders_per_level(data: &[u8]) -> u8 {
-    data[HDR_ORDERS_PER_LEVEL]
-}
-
-#[inline]
 pub fn book_bump(data: &[u8]) -> u8 {
     data[HDR_BUMP]
 }
 
 // ---------------------------------------------------------------------------
-// Level accessors
+// Level accessors — take `loff` (byte offset of level within account data)
 // ---------------------------------------------------------------------------
 
-/// Read the price stored at level `idx`.
+/// Read the price stored at a level.
 #[inline]
-pub fn level_price(data: &[u8], idx: u8) -> u8 {
-    data[level_offset(data, idx)]
+pub fn level_price(data: &[u8], loff: usize) -> u8 {
+    data[loff + LVL_PRICE]
 }
 
-/// Read the active order count at level `idx`.
+/// Read the active order count at a level.
 #[inline]
-pub fn level_count(data: &[u8], idx: u8) -> u8 {
-    data[level_offset(data, idx) + 1]
+pub fn level_count(data: &[u8], loff: usize) -> u8 {
+    data[loff + LVL_ACTIVE_COUNT]
 }
 
-/// Set the active order count at level `idx`.
+/// Set the active order count at a level.
 #[inline]
-pub fn set_level_count(data: &mut [u8], idx: u8, count: u8) {
-    let off = level_offset(data, idx) + 1;
-    data[off] = count;
+pub fn set_level_count(data: &mut [u8], loff: usize, count: u8) {
+    data[loff + LVL_ACTIVE_COUNT] = count;
+}
+
+/// Read the total allocated slot count at a level.
+#[inline]
+pub fn level_slot_count(data: &[u8], loff: usize) -> u8 {
+    data[loff + LVL_SLOT_COUNT]
+}
+
+/// Set the total allocated slot count at a level.
+#[inline]
+pub fn set_level_slot_count(data: &mut [u8], loff: usize, count: u8) {
+    data[loff + LVL_SLOT_COUNT] = count;
 }
 
 // ---------------------------------------------------------------------------
-// Order slot accessors
+// Slot offset computation
+// ---------------------------------------------------------------------------
+
+/// Compute the byte offset of a specific order slot given the level's byte offset.
+#[inline]
+pub fn slot_offset_at(loff: usize, slot_idx: u8) -> usize {
+    loff + LEVEL_HEADER_SIZE + slot_idx as usize * ORDER_SLOT_SIZE
+}
+
+// ---------------------------------------------------------------------------
+// Order slot accessors — take `loff` (level byte offset) and `slot_idx`
 // ---------------------------------------------------------------------------
 
 #[inline]
-pub fn slot_is_active(data: &[u8], level_idx: u8, slot_idx: u8) -> bool {
-    data[slot_offset(data, level_idx, slot_idx) + SLOT_IS_ACTIVE] != 0
+pub fn slot_is_active(data: &[u8], loff: usize, slot_idx: u8) -> bool {
+    data[slot_offset_at(loff, slot_idx) + SLOT_IS_ACTIVE] != 0
 }
 
 #[inline]
-pub fn slot_side(data: &[u8], level_idx: u8, slot_idx: u8) -> u8 {
-    data[slot_offset(data, level_idx, slot_idx) + SLOT_SIDE]
+pub fn slot_side(data: &[u8], loff: usize, slot_idx: u8) -> u8 {
+    data[slot_offset_at(loff, slot_idx) + SLOT_SIDE]
 }
 
 #[inline]
-pub fn slot_timestamp(data: &[u8], level_idx: u8, slot_idx: u8) -> i64 {
-    read_i64(data, slot_offset(data, level_idx, slot_idx) + SLOT_TIMESTAMP)
+pub fn slot_timestamp(data: &[u8], loff: usize, slot_idx: u8) -> i64 {
+    read_i64(data, slot_offset_at(loff, slot_idx) + SLOT_TIMESTAMP)
 }
 
 #[inline]
-pub fn slot_quantity(data: &[u8], level_idx: u8, slot_idx: u8) -> u64 {
-    read_u64(data, slot_offset(data, level_idx, slot_idx) + SLOT_QUANTITY)
+pub fn slot_quantity(data: &[u8], loff: usize, slot_idx: u8) -> u64 {
+    read_u64(data, slot_offset_at(loff, slot_idx) + SLOT_QUANTITY)
 }
 
 #[inline]
-pub fn slot_owner(data: &[u8], level_idx: u8, slot_idx: u8) -> Pubkey {
-    read_pubkey(data, slot_offset(data, level_idx, slot_idx) + SLOT_OWNER)
+pub fn slot_owner(data: &[u8], loff: usize, slot_idx: u8) -> Pubkey {
+    read_pubkey(data, slot_offset_at(loff, slot_idx) + SLOT_OWNER)
 }
 
 #[inline]
-pub fn slot_order_id(data: &[u8], level_idx: u8, slot_idx: u8) -> u64 {
-    read_u64(data, slot_offset(data, level_idx, slot_idx) + SLOT_ORDER_ID)
+pub fn slot_order_id(data: &[u8], loff: usize, slot_idx: u8) -> u64 {
+    read_u64(data, slot_offset_at(loff, slot_idx) + SLOT_ORDER_ID)
 }
 
 #[inline]
-pub fn slot_rent_depositor(data: &[u8], level_idx: u8, slot_idx: u8) -> Pubkey {
-    read_pubkey(data, slot_offset(data, level_idx, slot_idx) + SLOT_RENT_DEPOSITOR)
+pub fn slot_rent_depositor(data: &[u8], loff: usize, slot_idx: u8) -> Pubkey {
+    read_pubkey(data, slot_offset_at(loff, slot_idx) + SLOT_RENT_DEPOSITOR)
 }
 
 /// Write a complete order slot.
 pub fn write_order_slot(
     data: &mut [u8],
-    level_idx: u8,
+    loff: usize,
     slot_idx: u8,
     owner: &Pubkey,
     order_id: u64,
@@ -283,32 +296,30 @@ pub fn write_order_slot(
     timestamp: i64,
     rent_depositor: &Pubkey,
 ) {
-    let base = slot_offset(data, level_idx, slot_idx);
+    let base = slot_offset_at(loff, slot_idx);
     write_pubkey(data, base + SLOT_OWNER, owner);
     write_u64(data, base + SLOT_ORDER_ID, order_id);
     write_u64(data, base + SLOT_QUANTITY, quantity);
     write_u64(data, base + SLOT_ORIG_QTY, original_quantity);
     data[base + SLOT_SIDE] = side;
-    // Zero padding between SLOT_SIDE and SLOT_TIMESTAMP
     data[base + SLOT_PAD1_START..base + SLOT_PAD1_END].fill(0);
     write_i64(data, base + SLOT_TIMESTAMP, timestamp);
     data[base + SLOT_IS_ACTIVE] = 1;
-    // Zero padding between SLOT_IS_ACTIVE and SLOT_RENT_DEPOSITOR
     data[base + SLOT_PAD2_START..base + SLOT_PAD2_END].fill(0);
     write_pubkey(data, base + SLOT_RENT_DEPOSITOR, rent_depositor);
 }
 
 /// Deactivate an order slot (zero quantity + is_active).
-pub fn deactivate_slot(data: &mut [u8], level_idx: u8, slot_idx: u8) {
-    let base = slot_offset(data, level_idx, slot_idx);
+pub fn deactivate_slot(data: &mut [u8], loff: usize, slot_idx: u8) {
+    let base = slot_offset_at(loff, slot_idx);
     write_u64(data, base + SLOT_QUANTITY, 0);
     data[base + SLOT_IS_ACTIVE] = 0;
 }
 
 /// Set the quantity of an order slot.
 #[inline]
-pub fn set_slot_quantity(data: &mut [u8], level_idx: u8, slot_idx: u8, qty: u64) {
-    write_u64(data, slot_offset(data, level_idx, slot_idx) + SLOT_QUANTITY, qty);
+pub fn set_slot_quantity(data: &mut [u8], loff: usize, slot_idx: u8, qty: u64) {
+    write_u64(data, slot_offset_at(loff, slot_idx) + SLOT_QUANTITY, qty);
 }
 
 // ---------------------------------------------------------------------------
@@ -324,14 +335,15 @@ pub fn init_sparse_book(data: &mut [u8], market: &Pubkey, bump: u8) {
     write_pubkey(data, HDR_MARKET, market);
     // next_order_id = 0
     write_u64(data, HDR_NEXT_ORDER_ID, 0);
-    // price_map: all unallocated
-    data[HDR_PRICE_MAP..HDR_PRICE_MAP + MAX_PRICE_LEVELS].fill(PRICE_UNALLOCATED);
+    // price_map: all unallocated (u16 0xFFFF each)
+    for p in 0..MAX_PRICE_LEVELS {
+        let idx = HDR_PRICE_MAP + p * 2;
+        write_u16(data, idx, PRICE_UNALLOCATED);
+    }
     // level_count = 0
     data[HDR_LEVEL_COUNT] = 0;
     // max_levels = 0
     data[HDR_MAX_LEVELS] = 0;
-    // orders_per_level = INITIAL_ORDERS_PER_LEVEL
-    data[HDR_ORDERS_PER_LEVEL] = INITIAL_ORDERS_PER_LEVEL;
     // bump
     data[HDR_BUMP] = bump;
     // reserved = 0
@@ -342,51 +354,38 @@ pub fn init_sparse_book(data: &mut [u8], market: &Pubkey, bump: u8) {
 // Level allocation helpers
 // ---------------------------------------------------------------------------
 
-/// Initialize a newly allocated level at `level_idx` for the given price.
-pub fn init_level(data: &mut [u8], level_idx: u8, price: u8) {
-    let base = level_offset(data, level_idx);
-    let opl = data[HDR_ORDERS_PER_LEVEL] as usize;
-    let entry_size = LEVEL_HEADER_SIZE + opl * ORDER_SLOT_SIZE;
-
-    // Zero the entire level
-    data[base..base + entry_size].fill(0);
+/// Initialize a level at byte offset `loff` for the given price, with 1 slot.
+/// The caller must have already reallocated the account data.
+pub fn init_level(data: &mut [u8], loff: usize, price: u8) {
+    let level_size = LEVEL_HEADER_SIZE + ORDER_SLOT_SIZE; // 1 slot
+    // Zero the entire level region
+    data[loff..loff + level_size].fill(0);
     // Set price
-    data[base] = price;
-    // count = 0 (already zeroed)
+    data[loff + LVL_PRICE] = price;
+    // active_count = 0 (already zeroed)
+    // slot_count = 1
+    data[loff + LVL_SLOT_COUNT] = 1;
 
     // Update price_map
-    book_set_price_map(data, price, level_idx);
-    // Increment level_count (saturate to guard against theoretical u8 overflow)
+    book_set_price_map(data, price, loff as u16);
+    // Increment level_count
     data[HDR_LEVEL_COUNT] = data[HDR_LEVEL_COUNT].saturating_add(1);
 }
 
 /// Free a level: reset its price_map entry and decrement level_count.
-/// Does NOT compact levels — the slot remains allocated but unused.
+/// Does NOT compact — the space remains allocated but unused.
 /// Returns the price that was freed.
-pub fn free_level(data: &mut [u8], level_idx: u8) -> u8 {
-    let price = level_price(data, level_idx);
+pub fn free_level(data: &mut [u8], loff: usize) -> u8 {
+    let price = level_price(data, loff);
     // Clear price_map entry
     book_set_price_map(data, price, PRICE_UNALLOCATED);
     // Decrement level_count
     data[HDR_LEVEL_COUNT] = data[HDR_LEVEL_COUNT].saturating_sub(1);
-    // Zero the level header (price + count)
-    let base = level_offset(data, level_idx);
-    data[base] = 0;
-    data[base + 1] = 0;
+    // Zero the level header (price + active_count + slot_count)
+    data[loff + LVL_PRICE] = 0;
+    data[loff + LVL_ACTIVE_COUNT] = 0;
+    data[loff + LVL_SLOT_COUNT] = 0;
     price
-}
-
-/// Find a free level slot (allocated space but not in use).
-/// Returns None if max_levels are all in use.
-pub fn find_free_level_slot(data: &[u8]) -> Option<u8> {
-    let max = data[HDR_MAX_LEVELS];
-    for i in 0..max {
-        // A level slot is free if its price is 0 (unused)
-        if level_price(data, i) == 0 {
-            return Some(i);
-        }
-    }
-    None
 }
 
 /// Verify the sparse order book discriminator.

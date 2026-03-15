@@ -94,14 +94,15 @@ pub fn handle_cancel_order(
     }
 
     // Check if level is now empty — if so, free it
-    let level_empty;
     {
-        let ob_data = ob_info.try_borrow_data()?;
-        level_empty = level_count(&ob_data, cancelled.level_idx) == 0;
-    }
-    if level_empty {
         let mut ob_data = ob_info.try_borrow_mut_data()?;
-        free_level(&mut ob_data, cancelled.level_idx);
+        let loff_u16 = book_price_map(&ob_data, price);
+        if loff_u16 != PRICE_UNALLOCATED {
+            let loff = loff_u16 as usize;
+            if level_count(&ob_data, loff) == 0 {
+                free_level(&mut ob_data, loff);
+            }
+        }
     }
 
     // Build signer seeds for market PDA

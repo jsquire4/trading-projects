@@ -28,20 +28,22 @@ function StrikeSelector({
   markets,
   selectedKey,
   onSelect,
+  onNewStrike,
+  showingNewStrike,
 }: {
   markets: ParsedMarket[];
   selectedKey: string;
   onSelect: (key: string) => void;
+  onNewStrike: () => void;
+  showingNewStrike: boolean;
 }) {
-  if (markets.length <= 1) return null;
-
   return (
     <div className="flex items-center gap-2 overflow-x-auto pb-1">
       <span className="text-xs text-white/40 shrink-0">Strike:</span>
       {markets.map((m) => {
         const strike = (Number(m.strikePrice) / 1_000_000).toFixed(0);
         const key = m.publicKey.toBase58();
-        const isSelected = key === selectedKey;
+        const isSelected = key === selectedKey && !showingNewStrike;
 
         return (
           <button
@@ -57,6 +59,16 @@ function StrikeSelector({
           </button>
         );
       })}
+      <button
+        onClick={onNewStrike}
+        className={`px-3 py-1 rounded-md text-sm font-medium transition-all shrink-0 ${
+          showingNewStrike
+            ? "bg-accent/20 text-accent border border-accent/30"
+            : "bg-white/5 text-white/50 border border-dashed border-white/20 hover:text-white/80 hover:border-white/30"
+        }`}
+      >
+        + New Strike
+      </button>
     </div>
   );
 }
@@ -130,6 +142,12 @@ export default function TradingCockpit({
   const [lastTxSignature, setLastTxSignature] = useState<string | null>(null);
   const handleTransactionSuccess = useCallback((sig: string) => {
     setLastTxSignature(sig);
+  }, []);
+
+  // New strike creation panel toggle
+  const [showNewStrike, setShowNewStrike] = useState(false);
+  const handleNewStrike = useCallback(() => {
+    setShowNewStrike((prev) => !prev);
   }, []);
 
   // Mobile section toggles
@@ -224,8 +242,18 @@ export default function TradingCockpit({
       <StrikeSelector
         markets={tickerMarkets}
         selectedKey={activeKey}
-        onSelect={setSelectedKey}
+        onSelect={(key) => {
+          setSelectedKey(key);
+          setShowNewStrike(false);
+        }}
+        onNewStrike={handleNewStrike}
+        showingNewStrike={showNewStrike}
       />
+
+      {/* Inline create market panel */}
+      {showNewStrike && (
+        <CreateMarketPanel ticker={ticker} />
+      )}
 
       {/* Main grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">

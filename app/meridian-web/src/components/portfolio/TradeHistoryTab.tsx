@@ -87,11 +87,15 @@ export function TradeHistoryTab() {
 
   return (
     <div className="space-y-3">
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-white/50">{fills.length} trade{fills.length !== 1 ? "s" : ""}</span>
         <button
           onClick={handleExport}
-          className="text-xs text-accent hover:text-accent/80 transition-colors border border-accent/30 rounded-md px-3 py-1.5"
+          className="flex items-center gap-1.5 text-sm font-medium text-white bg-white/10 hover:bg-white/15 transition-colors border border-white/20 rounded-lg px-4 py-2"
         >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4">
+            <path d="M8 1a.75.75 0 0 1 .75.75v6.44l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 0 1 1.06-1.06l2.22 2.22V1.75A.75.75 0 0 1 8 1ZM2.75 11a.75.75 0 0 1 .75.75v1.5h9v-1.5a.75.75 0 0 1 1.5 0v1.5A1.5 1.5 0 0 1 12.5 14.75h-9A1.5 1.5 0 0 1 2 13.25v-1.5a.75.75 0 0 1 .75-.75Z" />
+          </svg>
           Export CSV
         </button>
       </div>

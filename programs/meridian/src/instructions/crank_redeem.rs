@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Burn, Mint, Token, TokenAccount, Transfer, spl_token};
 
 use crate::error::MeridianError;
+use crate::helpers::parse_token_account_fields;
 use crate::state::events::CrankRedeemEvent;
 use crate::state::{GlobalConfig, StrikeMarket};
 
@@ -95,42 +96,47 @@ pub fn handle_crank_redeem<'info>(
             continue;
         }
 
-        // Parse winning ATA: mint(32) + owner(32) + amount(8)
-        let winning_data = user_winning_ata.try_borrow_data()?;
-        if winning_data.len() < 72 {
-            continue;
-        }
-        let winning_ata_mint = Pubkey::new_from_array(winning_data[0..32].try_into().unwrap());
-        let winning_ata_owner = Pubkey::new_from_array(winning_data[32..64].try_into().unwrap());
-        let winning_balance = u64::from_le_bytes(winning_data[64..72].try_into().unwrap());
-        drop(winning_data);
+        // Parse winning ATA fields
+        let winning_fields = {
+            let data = user_winning_ata.try_borrow_data()?;
+            let fields = parse_token_account_fields(&data);
+            drop(data);
+            fields
+        };
+        let winning_fields = match winning_fields {
+            Some(f) => f,
+            None => continue,
+        };
 
         // Validate mint matches winning token
-        if winning_ata_mint != winning_mint_key {
+        if winning_fields.mint != winning_mint_key {
             continue;
         }
 
         // Skip zero-balance accounts
-        if winning_balance == 0 {
+        if winning_fields.amount == 0 {
             continue;
         }
 
-        // Parse USDC ATA: validate mint and owner match
-        let usdc_data = user_usdc_ata.try_borrow_data()?;
-        if usdc_data.len() < 64 {
-            continue;
-        }
-        let usdc_ata_mint = Pubkey::new_from_array(usdc_data[0..32].try_into().unwrap());
-        let usdc_ata_owner = Pubkey::new_from_array(usdc_data[32..64].try_into().unwrap());
-        drop(usdc_data);
+        // Parse USDC ATA fields
+        let usdc_fields = {
+            let data = user_usdc_ata.try_borrow_data()?;
+            let fields = parse_token_account_fields(&data);
+            drop(data);
+            fields
+        };
+        let usdc_fields = match usdc_fields {
+            Some(f) => f,
+            None => continue,
+        };
 
         // Validate USDC ATA mint
-        if usdc_ata_mint != usdc_mint_key {
+        if usdc_fields.mint != usdc_mint_key {
             continue;
         }
 
         // Validate both ATAs belong to the same owner
-        if winning_ata_owner != usdc_ata_owner {
+        if winning_fields.owner != usdc_fields.owner {
             continue;
         }
 
@@ -174,7 +180,7 @@ pub fn handle_crank_redeem<'info>(
                 },
                 signer_seeds,
             ),
-            winning_balance,
+            winning_fields.amount,
         )?;
 
         // Transfer USDC from vault to user ($1 per winning token)
@@ -188,10 +194,10 @@ pub fn handle_crank_redeem<'info>(
                 },
                 signer_seeds,
             ),
-            winning_balance,
+            winning_fields.amount,
         )?;
 
-        total_redeemed_amount += winning_balance;
+        total_redeemed_amount += winning_fields.amount;
         redeemed_count += 1;
     }
 

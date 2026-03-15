@@ -7,6 +7,26 @@ use crate::state::events::FillEvent;
 use crate::state::order_book::*;
 use super::validate::validate_maker_account;
 
+/// Common account references needed by all fill processing functions.
+/// Eliminates the 13-15 parameter arity that was duplicated across
+/// process_fills, process_merge_fill, and process_swap_fill.
+pub(super) struct FillContext<'a, 'info> {
+    pub tp: &'a AccountInfo<'info>,
+    pub market_ai: &'a AccountInfo<'info>,
+    pub escrow_ai: &'a AccountInfo<'info>,
+    pub yes_escrow_ai: &'a AccountInfo<'info>,
+    pub no_escrow_ai: &'a AccountInfo<'info>,
+    pub vault_ai: &'a AccountInfo<'info>,
+    pub yes_mint_ai: &'a AccountInfo<'info>,
+    pub no_mint_ai: &'a AccountInfo<'info>,
+    pub user_usdc_ai: &'a AccountInfo<'info>,
+    pub user_yes_ai: &'a AccountInfo<'info>,
+    pub fee_vault_ai: &'a AccountInfo<'info>,
+    pub remaining_accounts: &'a [AccountInfo<'info>],
+    pub fee_bps: u16,
+    pub signer_seeds: &'a [&'a [&'a [u8]]],
+}
+
 /// Compute per-side fee using u128 intermediate to prevent overflow.
 /// Returns floor(gross * fee_bps / 10_000).
 fn compute_fee(gross: u64, fee_bps: u16) -> Result<u64> {
@@ -49,7 +69,6 @@ fn transfer_fee<'info>(
 
 /// Processes all fills from the matching engine, executing token transfers/burns
 /// and emitting FillEvents. Returns the accumulated price improvement refund amount.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn process_fills<'info>(
     match_result: &MatchResult,
     side: u8,
@@ -57,20 +76,7 @@ pub(super) fn process_fills<'info>(
     market_key: Pubkey,
     taker_key: Pubkey,
     timestamp: i64,
-    remaining_accounts: &[AccountInfo<'info>],
-    tp: &AccountInfo<'info>,
-    market_ai: &AccountInfo<'info>,
-    escrow_ai: &AccountInfo<'info>,
-    yes_escrow_ai: &AccountInfo<'info>,
-    no_escrow_ai: &AccountInfo<'info>,
-    vault_ai: &AccountInfo<'info>,
-    yes_mint_ai: &AccountInfo<'info>,
-    no_mint_ai: &AccountInfo<'info>,
-    user_usdc_ai: &AccountInfo<'info>,
-    user_yes_ai: &AccountInfo<'info>,
-    fee_vault_ai: &AccountInfo<'info>,
-    fee_bps: u16,
-    signer_seeds: &[&[&[u8]]],
+    fctx: &FillContext<'_, 'info>,
 ) -> Result<u64> {
     let mut rem_idx: usize = 0;
     let mut price_improvement_refund: u64 = 0;
@@ -79,39 +85,10 @@ pub(super) fn process_fills<'info>(
         let fill_fee;
 
         if fill.is_merge {
-            fill_fee = process_merge_fill(
-                fill,
-                side,
-                fee_bps,
-                remaining_accounts,
-                &mut rem_idx,
-                tp,
-                market_ai,
-                yes_escrow_ai,
-                no_escrow_ai,
-                vault_ai,
-                yes_mint_ai,
-                no_mint_ai,
-                user_usdc_ai,
-                fee_vault_ai,
-                signer_seeds,
-            )?;
+            fill_fee = process_merge_fill(fill, fctx, &mut rem_idx)?;
         } else {
             let (improvement, fee) = process_swap_fill(
-                fill,
-                side,
-                price,
-                fee_bps,
-                remaining_accounts,
-                &mut rem_idx,
-                tp,
-                market_ai,
-                escrow_ai,
-                yes_escrow_ai,
-                user_usdc_ai,
-                user_yes_ai,
-                fee_vault_ai,
-                signer_seeds,
+                fill, side, price, fctx, &mut rem_idx,
             )?;
             fill_fee = fee;
             price_improvement_refund = price_improvement_refund
@@ -140,28 +117,21 @@ pub(super) fn process_fills<'info>(
 
 /// Processes a single merge/burn fill: burns Yes and No tokens from escrow,
 /// then distributes USDC payouts to taker and maker (minus fees).
+///
+/// Both sides (SIDE_NO_BID taker and SIDE_YES_ASK taker) produce the same
+/// transfers: taker gets no_payout, maker gets yes_payout. This is because
+/// in a merge, the Yes+No pair is burned for $1, and each counterparty
+/// receives their proportional share regardless of which side initiated.
+///
 /// Returns the total fee collected.
-#[allow(clippy::too_many_arguments)]
 fn process_merge_fill<'info>(
     fill: &Fill,
-    side: u8,
-    fee_bps: u16,
-    remaining_accounts: &[AccountInfo<'info>],
+    fctx: &FillContext<'_, 'info>,
     rem_idx: &mut usize,
-    tp: &AccountInfo<'info>,
-    market_ai: &AccountInfo<'info>,
-    yes_escrow_ai: &AccountInfo<'info>,
-    no_escrow_ai: &AccountInfo<'info>,
-    vault_ai: &AccountInfo<'info>,
-    yes_mint_ai: &AccountInfo<'info>,
-    no_mint_ai: &AccountInfo<'info>,
-    user_usdc_ai: &AccountInfo<'info>,
-    fee_vault_ai: &AccountInfo<'info>,
-    signer_seeds: &[&[&[u8]]],
 ) -> Result<u64> {
     // Gross payout = fill.quantity ($1 per token pair from vault)
     // Fee is off the top: total_fee = floor(gross_payout * fee_bps / 10_000)
-    let total_fee = compute_fee(fill.quantity, fee_bps)?;
+    let total_fee = compute_fee(fill.quantity, fctx.fee_bps)?;
 
     let net_payout = fill.quantity
         .checked_sub(total_fee)
@@ -197,13 +167,13 @@ fn process_merge_fill<'info>(
     // Burn Yes from yes_escrow
     token::burn(
         CpiContext::new_with_signer(
-            tp.clone(),
+            fctx.tp.clone(),
             Burn {
-                mint: yes_mint_ai.clone(),
-                from: yes_escrow_ai.clone(),
-                authority: market_ai.clone(),
+                mint: fctx.yes_mint_ai.clone(),
+                from: fctx.yes_escrow_ai.clone(),
+                authority: fctx.market_ai.clone(),
             },
-            signer_seeds,
+            fctx.signer_seeds,
         ),
         fill.quantity,
     )?;
@@ -211,113 +181,69 @@ fn process_merge_fill<'info>(
     // Burn No from no_escrow
     token::burn(
         CpiContext::new_with_signer(
-            tp.clone(),
+            fctx.tp.clone(),
             Burn {
-                mint: no_mint_ai.clone(),
-                from: no_escrow_ai.clone(),
-                authority: market_ai.clone(),
+                mint: fctx.no_mint_ai.clone(),
+                from: fctx.no_escrow_ai.clone(),
+                authority: fctx.market_ai.clone(),
             },
-            signer_seeds,
+            fctx.signer_seeds,
         ),
         fill.quantity,
     )?;
 
     // Transfer fee to fee_vault (from usdc_vault which holds the $1)
-    transfer_fee(total_fee, tp, vault_ai, fee_vault_ai, market_ai, signer_seeds)?;
+    transfer_fee(total_fee, fctx.tp, fctx.vault_ai, fctx.fee_vault_ai, fctx.market_ai, fctx.signer_seeds)?;
 
-    if side == SIDE_NO_BID {
-        // Taker = No seller -> gets no_payout from vault
-        token::transfer(
-            CpiContext::new_with_signer(
-                tp.clone(),
-                Transfer {
-                    from: vault_ai.clone(),
-                    to: user_usdc_ai.clone(),
-                    authority: market_ai.clone(),
-                },
-                signer_seeds,
-            ),
-            no_payout,
-        )?;
+    // Both merge directions produce identical transfers:
+    //   - Taker receives no_payout (the No-side share of the merged $1)
+    //   - Maker receives yes_payout (the Yes-side share of the merged $1)
+    // This holds whether taker is No seller (side=2) or Yes seller (side=1),
+    // because the payout split is determined solely by the fill price, and
+    // the taker always holds the complement of the maker's position.
+    token::transfer(
+        CpiContext::new_with_signer(
+            fctx.tp.clone(),
+            Transfer {
+                from: fctx.vault_ai.clone(),
+                to: fctx.user_usdc_ai.clone(),
+                authority: fctx.market_ai.clone(),
+            },
+            fctx.signer_seeds,
+        ),
+        no_payout,
+    )?;
 
-        // Maker = Yes seller -> gets yes_payout
-        require!(
-            *rem_idx < remaining_accounts.len(),
-            MeridianError::InsufficientAccounts
-        );
-        let maker_usdc = &remaining_accounts[*rem_idx];
-        *rem_idx += 1;
-        validate_maker_account(maker_usdc, fill.maker)?;
-        token::transfer(
-            CpiContext::new_with_signer(
-                tp.clone(),
-                Transfer {
-                    from: vault_ai.clone(),
-                    to: maker_usdc.clone(),
-                    authority: market_ai.clone(),
-                },
-                signer_seeds,
-            ),
-            yes_payout,
-        )?;
-    } else {
-        // taker_side == SIDE_YES_ASK, maker_side == SIDE_NO_BID
-        // Taker = Yes seller -> gets no_payout from vault
-        token::transfer(
-            CpiContext::new_with_signer(
-                tp.clone(),
-                Transfer {
-                    from: vault_ai.clone(),
-                    to: user_usdc_ai.clone(),
-                    authority: market_ai.clone(),
-                },
-                signer_seeds,
-            ),
-            no_payout,
-        )?;
-
-        // Maker = No seller -> gets yes_payout
-        require!(
-            *rem_idx < remaining_accounts.len(),
-            MeridianError::InsufficientAccounts
-        );
-        let maker_usdc = &remaining_accounts[*rem_idx];
-        *rem_idx += 1;
-        validate_maker_account(maker_usdc, fill.maker)?;
-        token::transfer(
-            CpiContext::new_with_signer(
-                tp.clone(),
-                Transfer {
-                    from: vault_ai.clone(),
-                    to: maker_usdc.clone(),
-                    authority: market_ai.clone(),
-                },
-                signer_seeds,
-            ),
-            yes_payout,
-        )?;
-    }
+    require!(
+        *rem_idx < fctx.remaining_accounts.len(),
+        MeridianError::InsufficientAccounts
+    );
+    let maker_usdc = &fctx.remaining_accounts[*rem_idx];
+    *rem_idx += 1;
+    validate_maker_account(maker_usdc, fill.maker)?;
+    token::transfer(
+        CpiContext::new_with_signer(
+            fctx.tp.clone(),
+            Transfer {
+                from: fctx.vault_ai.clone(),
+                to: maker_usdc.clone(),
+                authority: fctx.market_ai.clone(),
+            },
+            fctx.signer_seeds,
+        ),
+        yes_payout,
+    )?;
 
     Ok(total_fee)
 }
 
 /// Processes a single standard swap fill. Returns (price_improvement, fee).
-#[allow(clippy::too_many_arguments)]
 fn process_swap_fill<'info>(
     fill: &Fill,
     side: u8,
     price: u8,
-    fee_bps: u16,
-    remaining_accounts: &[AccountInfo<'info>],
+    fctx: &FillContext<'_, 'info>,
     rem_idx: &mut usize,
-    tp: &AccountInfo<'info>,
-    market_ai: &AccountInfo<'info>,
-    escrow_ai: &AccountInfo<'info>,
-    yes_escrow_ai: &AccountInfo<'info>,
-    user_usdc_ai: &AccountInfo<'info>,
-    user_yes_ai: &AccountInfo<'info>,
-    fee_vault_ai: &AccountInfo<'info>,
-    signer_seeds: &[&[&[u8]]],
 ) -> Result<(u64, u64)> {
     let fill_usdc = (fill.quantity as u128)
         .checked_mul(fill.price as u128)
@@ -328,7 +254,7 @@ fn process_swap_fill<'info>(
         .ok_or(MeridianError::DivisionByZero)? as u64;
 
     // Fee: single fee on the gross USDC amount, deducted from USDC flow
-    let total_fee = compute_fee(fill_usdc, fee_bps)?;
+    let total_fee = compute_fee(fill_usdc, fctx.fee_bps)?;
     let net_usdc = fill_usdc
         .checked_sub(total_fee)
         .ok_or(MeridianError::ArithmeticOverflow)?;
@@ -340,40 +266,40 @@ fn process_swap_fill<'info>(
         // Yes from yes_escrow -> taker
         token::transfer(
             CpiContext::new_with_signer(
-                tp.clone(),
+                fctx.tp.clone(),
                 Transfer {
-                    from: yes_escrow_ai.clone(),
-                    to: user_yes_ai.clone(),
-                    authority: market_ai.clone(),
+                    from: fctx.yes_escrow_ai.clone(),
+                    to: fctx.user_yes_ai.clone(),
+                    authority: fctx.market_ai.clone(),
                 },
-                signer_seeds,
+                fctx.signer_seeds,
             ),
             fill.quantity,
         )?;
 
         // USDC from escrow_vault -> maker (net of fee)
         require!(
-            *rem_idx < remaining_accounts.len(),
+            *rem_idx < fctx.remaining_accounts.len(),
             MeridianError::InsufficientAccounts
         );
-        let maker_usdc = &remaining_accounts[*rem_idx];
+        let maker_usdc = &fctx.remaining_accounts[*rem_idx];
         *rem_idx += 1;
         validate_maker_account(maker_usdc, fill.maker)?;
         token::transfer(
             CpiContext::new_with_signer(
-                tp.clone(),
+                fctx.tp.clone(),
                 Transfer {
-                    from: escrow_ai.clone(),
+                    from: fctx.escrow_ai.clone(),
                     to: maker_usdc.clone(),
-                    authority: market_ai.clone(),
+                    authority: fctx.market_ai.clone(),
                 },
-                signer_seeds,
+                fctx.signer_seeds,
             ),
             net_usdc,
         )?;
 
         // Transfer fee from escrow to fee_vault
-        transfer_fee(total_fee, tp, escrow_ai, fee_vault_ai, market_ai, signer_seeds)?;
+        transfer_fee(total_fee, fctx.tp, fctx.escrow_ai, fctx.fee_vault_ai, fctx.market_ai, fctx.signer_seeds)?;
 
         // Price improvement: taker escrowed at `price` but filled at `fill.price`
         if fill.price < price {
@@ -390,37 +316,37 @@ fn process_swap_fill<'info>(
         // USDC from escrow -> taker (net of fee)
         token::transfer(
             CpiContext::new_with_signer(
-                tp.clone(),
+                fctx.tp.clone(),
                 Transfer {
-                    from: escrow_ai.clone(),
-                    to: user_usdc_ai.clone(),
-                    authority: market_ai.clone(),
+                    from: fctx.escrow_ai.clone(),
+                    to: fctx.user_usdc_ai.clone(),
+                    authority: fctx.market_ai.clone(),
                 },
-                signer_seeds,
+                fctx.signer_seeds,
             ),
             net_usdc,
         )?;
 
         // Transfer fee from escrow to fee_vault
-        transfer_fee(total_fee, tp, escrow_ai, fee_vault_ai, market_ai, signer_seeds)?;
+        transfer_fee(total_fee, fctx.tp, fctx.escrow_ai, fctx.fee_vault_ai, fctx.market_ai, fctx.signer_seeds)?;
 
         // Yes from yes_escrow -> maker
         require!(
-            *rem_idx < remaining_accounts.len(),
+            *rem_idx < fctx.remaining_accounts.len(),
             MeridianError::InsufficientAccounts
         );
-        let maker_yes = &remaining_accounts[*rem_idx];
+        let maker_yes = &fctx.remaining_accounts[*rem_idx];
         *rem_idx += 1;
         validate_maker_account(maker_yes, fill.maker)?;
         token::transfer(
             CpiContext::new_with_signer(
-                tp.clone(),
+                fctx.tp.clone(),
                 Transfer {
-                    from: yes_escrow_ai.clone(),
+                    from: fctx.yes_escrow_ai.clone(),
                     to: maker_yes.clone(),
-                    authority: market_ai.clone(),
+                    authority: fctx.market_ai.clone(),
                 },
-                signer_seeds,
+                fctx.signer_seeds,
             ),
             fill.quantity,
         )?;

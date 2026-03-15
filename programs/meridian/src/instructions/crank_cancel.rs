@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer, spl_token};
 
 use crate::error::MeridianError;
+use crate::helpers::parse_token_account_fields;
 use crate::matching::engine::crank_cancel_batch;
 use crate::state::events::CrankCancelEvent;
 use crate::state::order_book::*;
@@ -94,20 +95,22 @@ pub fn handle_crank_cancel<'info>(
             dest.owner == &spl_token::ID,
             MeridianError::InvalidProgramId
         );
-        let dest_data = dest.try_borrow_data()?;
-        require!(dest_data.len() >= 64, MeridianError::AccountNotInitialized);
-        let dest_mint = Pubkey::new_from_array(dest_data[0..32].try_into().unwrap());
-        let dest_owner = Pubkey::new_from_array(dest_data[32..64].try_into().unwrap());
-        drop(dest_data);
+        let dest_fields = {
+            let data = dest.try_borrow_data()?;
+            let fields = parse_token_account_fields(&data);
+            drop(data);
+            fields
+        };
+        let dest_fields = dest_fields.ok_or(MeridianError::AccountNotInitialized)?;
 
-        require!(dest_owner == order.owner, MeridianError::SignerMismatch);
+        require!(dest_fields.owner == order.owner, MeridianError::SignerMismatch);
         let expected_mint = match order.side {
             SIDE_USDC_BID => usdc_mint,
             SIDE_YES_ASK => yes_mint,
             SIDE_NO_BID => no_mint,
             _ => return Err(MeridianError::InvalidSide.into()),
         };
-        require!(dest_mint == expected_mint, MeridianError::InvalidMint);
+        require!(dest_fields.mint == expected_mint, MeridianError::InvalidMint);
 
         match order.side {
             SIDE_USDC_BID => {

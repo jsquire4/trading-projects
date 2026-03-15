@@ -1,7 +1,30 @@
+use anchor_lang::prelude::Pubkey;
+
 /// Compute the expiry day from a market_close_unix timestamp.
 /// Used in PDA seed derivation to normalize timestamps to day boundaries.
 pub const fn expiry_day(market_close_unix: i64) -> u32 {
     (market_close_unix / 86400) as u32
+}
+
+/// Parsed fields from an SPL token account's raw data.
+/// Layout: mint(32) + owner(32) + amount(8) = 72 bytes minimum.
+pub struct TokenAccountFields {
+    pub mint: Pubkey,
+    pub owner: Pubkey,
+    pub amount: u64,
+}
+
+/// Parse the mint, owner, and amount from raw SPL token account data.
+/// Returns `None` if the data is too short (< 72 bytes).
+pub fn parse_token_account_fields(data: &[u8]) -> Option<TokenAccountFields> {
+    if data.len() < 72 {
+        return None;
+    }
+    Some(TokenAccountFields {
+        mint: Pubkey::new_from_array(data[0..32].try_into().unwrap()),
+        owner: Pubkey::new_from_array(data[32..64].try_into().unwrap()),
+        amount: u64::from_le_bytes(data[64..72].try_into().unwrap()),
+    })
 }
 
 /// Constructs the config PDA signer seeds from a GlobalConfig reference.

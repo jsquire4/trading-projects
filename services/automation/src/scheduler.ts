@@ -17,10 +17,62 @@ const log = createLogger("automation-scheduler");
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVICES_ROOT = resolve(__dirname, "..", "..");
 
-// Timeout per job type (ms)
-const INIT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-const SETTLE_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes
-const VERIFY_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
+// ---------------------------------------------------------------------------
+// Data-driven job configuration
+// ---------------------------------------------------------------------------
+
+interface JobConfig {
+  id: string;
+  hour: number;
+  minute: number;
+  /** Relative path from SERVICES_ROOT to the entry-point script */
+  servicePath: string;
+  /** Timeout in milliseconds */
+  timeoutMs: number;
+  /** If true, log a critical alert on failure instead of a warning */
+  criticalOnFailure: boolean;
+  /** Human-readable label for log messages */
+  label: string;
+}
+
+const JOB_CONFIGS: JobConfig[] = [
+  {
+    id: "morning-init",
+    hour: 8,
+    minute: 0,
+    servicePath: "market-initializer/src/index.ts",
+    timeoutMs: 5 * 60 * 1000,
+    criticalOnFailure: false,
+    label: "market-initializer",
+  },
+  {
+    id: "morning-verify",
+    hour: 8,
+    minute: 30,
+    servicePath: "market-initializer/src/verify.ts",
+    timeoutMs: 2 * 60 * 1000,
+    criticalOnFailure: true,
+    label: "morning verification",
+  },
+  {
+    id: "afternoon-settle",
+    hour: 16,
+    minute: 5,
+    servicePath: "settlement/src/index.ts",
+    timeoutMs: 20 * 60 * 1000,
+    criticalOnFailure: false,
+    label: "settlement",
+  },
+  {
+    id: "afternoon-verify",
+    hour: 16,
+    minute: 10,
+    servicePath: "settlement/src/verify.ts",
+    timeoutMs: 2 * 60 * 1000,
+    criticalOnFailure: true,
+    label: "afternoon verification",
+  },
+];
 
 interface ScheduledJob {
   id: string;
@@ -40,40 +92,14 @@ export class Scheduler {
   private lastRunDate: Map<string, string> = new Map();
 
   constructor() {
-    this.jobs = [
-      {
-        id: "morning-init",
-        hour: 8,
-        minute: 0,
-        handler: () => this.runMorningInit(),
-        timer: null,
-        nextRun: null,
-      },
-      {
-        id: "morning-verify",
-        hour: 8,
-        minute: 30,
-        handler: () => this.runMorningVerify(),
-        timer: null,
-        nextRun: null,
-      },
-      {
-        id: "afternoon-settle",
-        hour: 16,
-        minute: 5,
-        handler: () => this.runAfternoonSettle(),
-        timer: null,
-        nextRun: null,
-      },
-      {
-        id: "afternoon-verify",
-        hour: 16,
-        minute: 10,
-        handler: () => this.runAfternoonVerify(),
-        timer: null,
-        nextRun: null,
-      },
-    ];
+    this.jobs = JOB_CONFIGS.map((cfg) => ({
+      id: cfg.id,
+      hour: cfg.hour,
+      minute: cfg.minute,
+      handler: () => this.runJobFromConfig(cfg),
+      timer: null,
+      nextRun: null,
+    }));
   }
 
   /**
@@ -231,48 +257,22 @@ export class Scheduler {
   }
 
   // ---------------------------------------------------------------------------
-  // Job implementations
+  // Data-driven job runner
   // ---------------------------------------------------------------------------
 
-  private async runMorningInit(): Promise<void> {
-    log.info("Triggering market-initializer service");
-    const servicePath = resolve(SERVICES_ROOT, "market-initializer", "src", "index.ts");
-    await this.spawnService("market-initializer", servicePath, INIT_TIMEOUT_MS);
-  }
-
-  private async runMorningVerify(): Promise<void> {
-    log.info("Verifying markets were created");
-    // Verification: attempt to connect to RPC and check for today's markets.
-    // If the market-initializer wrote a status file or the on-chain state shows
-    // markets, we consider it a success. For now, we spawn a lightweight verify
-    // script; if no dedicated verifier exists, we log a warning.
-    const servicePath = resolve(SERVICES_ROOT, "market-initializer", "src", "verify.ts");
+  private async runJobFromConfig(cfg: JobConfig): Promise<void> {
+    log.info(`Triggering ${cfg.label} service`);
+    const servicePath = resolve(SERVICES_ROOT, cfg.servicePath);
     try {
-      await this.spawnService("morning-verify", servicePath, VERIFY_TIMEOUT_MS);
-      log.info("Morning verification passed — markets created");
+      await this.spawnService(cfg.id, servicePath, cfg.timeoutMs);
+      log.info(`${cfg.label} completed successfully`);
     } catch {
-      log.critical("MORNING VERIFICATION FAILED — markets may not have been created", {
-        date: getTodayET(),
-      });
-    }
-  }
-
-  private async runAfternoonSettle(): Promise<void> {
-    log.info("Triggering settlement service");
-    const servicePath = resolve(SERVICES_ROOT, "settlement", "src", "index.ts");
-    await this.spawnService("settlement", servicePath, SETTLE_TIMEOUT_MS);
-  }
-
-  private async runAfternoonVerify(): Promise<void> {
-    log.info("Verifying markets were settled");
-    const servicePath = resolve(SERVICES_ROOT, "settlement", "src", "verify.ts");
-    try {
-      await this.spawnService("afternoon-verify", servicePath, VERIFY_TIMEOUT_MS);
-      log.info("Afternoon verification passed — markets settled");
-    } catch {
-      log.critical("AFTERNOON VERIFICATION FAILED — markets may remain unsettled", {
-        date: getTodayET(),
-      });
+      if (cfg.criticalOnFailure) {
+        log.critical(`${cfg.label.toUpperCase()} FAILED`, {
+          date: getTodayET(),
+        });
+      }
+      // Non-critical failures are already logged by spawnService
     }
   }
 

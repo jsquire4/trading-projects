@@ -12,6 +12,9 @@
 // ---------------------------------------------------------------------------
 
 import http from "node:http";
+import { execFile } from "node:child_process";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { AnchorProvider, Program, Wallet } from "@coral-xyz/anchor";
 import BN from "bn.js";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
@@ -19,6 +22,7 @@ import bs58 from "bs58";
 
 import { createMarketDataClient, type IMarketDataClient } from "../../shared/src/market-data.js";
 import { createLogger } from "../../shared/src/alerting.js";
+import { tickerFromBytes } from "../../shared/src/utils.js";
 import meridianIdl from "../../shared/src/idl/meridian.json" with { type: "json" };
 import mockOracleIdl from "../../shared/src/idl/mock_oracle.json" with { type: "json" };
 import {
@@ -29,11 +33,10 @@ import {
   MOCK_ORACLE_PROGRAM_ID,
 } from "../../shared/src/pda.js";
 
-import { settleMarkets, MarketInfo, tickerFromBytes } from "./settler.js";
+import { settleMarkets, MarketInfo } from "./settler.js";
 import { crankCancelAll } from "./cranker.js";
 import { autoRedeemAll } from "./redeemer.js";
 import { closeEligibleMarkets } from "./closer.js";
-import { initializeMarkets } from "../../market-initializer/src/initializer.js";
 
 const log = createLogger("settlement");
 
@@ -186,7 +189,134 @@ async function loadUnsettledMarkets(
 }
 
 // ---------------------------------------------------------------------------
-// Settlement cycle — extracted for reuse by trigger server
+// Phase functions — each encapsulates one step of the settlement pipeline
+// ---------------------------------------------------------------------------
+
+/** Phase 3: Find and settle all expired, unsettled markets. */
+async function settleExpiredMarkets(
+  meridianProgram: Program,
+  allMarkets: MarketInfo[],
+  closingPrices: Map<string, number>,
+): Promise<import("./settler.js").SettlementResult> {
+  const now = Math.floor(Date.now() / 1000);
+  const expiredUnsettled = allMarkets.filter((m) => {
+    if (m.account.isSettled) return false;
+    if (m.account.marketCloseUnix.toNumber() > now) return false;
+    const ticker = tickerFromBytes(m.account.ticker);
+    if (!closingPrices.has(ticker)) {
+      log.warn(`Skipping settlement for ${ticker} — no closing price available`);
+      return false;
+    }
+    return true;
+  });
+
+  log.info(`${expiredUnsettled.length} markets eligible for settlement`);
+  const result = await settleMarkets(meridianProgram, expiredUnsettled);
+  log.info(
+    `Settlement complete: ${result.settled.length} settled, ${result.failed.length} failed`,
+  );
+  return result;
+}
+
+/** Phase 4 + 4.5: Crank cancel resting orders and auto-redeem winners. */
+async function crankAndRedeem(
+  meridianProgram: Program,
+  allMarkets: MarketInfo[],
+  settlementResult: import("./settler.js").SettlementResult,
+  usdcMint: PublicKey,
+): Promise<void> {
+  const settledMarkets = allMarkets.filter(
+    (m) =>
+      m.account.isSettled ||
+      settlementResult.settled.some((s) => s.publicKey.equals(m.publicKey)),
+  );
+
+  if (settledMarkets.length > 0) {
+    log.info(`Running crank cancel on ${settledMarkets.length} settled markets`);
+    const crankResults = await crankCancelAll(meridianProgram, settledMarkets, usdcMint);
+    for (const r of crankResults) {
+      if (r.error) {
+        log.error(`Crank failed for ${r.market}: ${r.error}`);
+      } else if (r.cancelled > 0) {
+        log.info(`Cranked ${r.cancelled} orders for ${r.market}`);
+      }
+    }
+
+    log.info(`Running auto-redeem on ${settledMarkets.length} settled markets`);
+    const redeemResults = await autoRedeemAll(meridianProgram, settledMarkets, usdcMint);
+    for (const r of redeemResults) {
+      if (r.error) {
+        log.error(`Auto-redeem failed for ${r.market}: ${r.error}`);
+      } else if (r.redeemed > 0) {
+        log.info(`Auto-redeemed ${r.redeemed} users for ${r.market} in ${r.batches} batches`);
+      }
+    }
+  } else {
+    log.info("No settled markets to crank or auto-redeem");
+  }
+}
+
+/** Phase 5: Close markets that have been settled long enough. */
+async function closeMarkets(
+  meridianProgram: Program,
+  adminKeypair: Keypair,
+  connection: Connection,
+): Promise<void> {
+  log.info("Checking for markets eligible to close");
+  const closeResult = await closeEligibleMarkets(meridianProgram, adminKeypair, connection);
+  if (closeResult.closed.length > 0) {
+    log.info(`Closed ${closeResult.closed.length} markets: ${closeResult.closed.join(", ")}`);
+  }
+  if (closeResult.failed.length > 0) {
+    log.error(`Failed to close ${closeResult.failed.length} markets`, {
+      failed: closeResult.failed,
+    });
+  }
+}
+
+/** Phase 6: Spawn market-initializer as a child process to create next-day markets. */
+async function initNextDay(): Promise<void> {
+  log.info("Creating markets for next trading day");
+
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  const initScript = resolve(__dirname, "../../market-initializer/src/index.ts");
+  const tsxPath = resolve(__dirname, "../../node_modules/.bin/tsx");
+
+  try {
+    await new Promise<void>((resolveP, rejectP) => {
+      const child = execFile(tsxPath, [initScript], {
+        env: { ...process.env },
+        timeout: 5 * 60 * 1000, // 5 minute timeout
+      }, (err, stdout, stderr) => {
+        if (stdout) {
+          for (const line of stdout.split("\n").filter(Boolean)) {
+            log.info(`[market-initializer] ${line}`);
+          }
+        }
+        if (stderr) {
+          for (const line of stderr.split("\n").filter(Boolean)) {
+            log.warn(`[market-initializer:stderr] ${line}`);
+          }
+        }
+        if (err) {
+          rejectP(err);
+        } else {
+          resolveP();
+        }
+      });
+    });
+    log.info("Next-day market initialization completed");
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    log.error(`Failed to create next-day markets: ${errMsg}`, {
+      stack: err instanceof Error ? err.stack : undefined,
+    });
+    // Non-fatal — settlement was successful, markets can be created by morning-init
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Settlement cycle — orchestrates all phases
 // ---------------------------------------------------------------------------
 
 async function runSettlementCycle(): Promise<{ ok: boolean; error?: string; summary?: Record<string, unknown> }> {
@@ -224,7 +354,7 @@ async function runSettlementCycle(): Promise<{ ok: boolean; error?: string; summ
   const tickerArrays = globalConfig.tickers as number[][];
   const activeTickers: string[] = [];
   for (let i = 0; i < tickerCount; i++) {
-    const t = Buffer.from(tickerArrays[i]).toString("utf-8").replace(/\0+$/, "");
+    const t = tickerFromBytes(tickerArrays[i]);
     if (t.length > 0) activeTickers.push(t);
   }
 
@@ -234,115 +364,24 @@ async function runSettlementCycle(): Promise<{ ok: boolean; error?: string; summ
 
   log.info(`Active tickers: ${activeTickers.join(", ")}`);
 
-  // ---- Step 1: Fetch closing prices ----
+  // ---- Phase 1: Fetch closing prices ----
   const closingPrices = await fetchClosingPrices(marketData, activeTickers);
 
-  // ---- Step 2: Update oracle feeds ----
+  // ---- Phase 2: Update oracle feeds ----
   await updateOracleFeeds(oracleProgram, adminKeypair, closingPrices);
 
-  // ---- Step 3: Settle markets ----
+  // ---- Phase 3: Settle expired markets ----
   const allMarkets = await loadUnsettledMarkets(meridianProgram);
-  const now = Math.floor(Date.now() / 1000);
-  const expiredUnsettled = allMarkets.filter((m) => {
-    if (m.account.isSettled) return false;
-    if (m.account.marketCloseUnix.toNumber() > now) return false;
-    const ticker = tickerFromBytes(m.account.ticker);
-    if (!closingPrices.has(ticker)) {
-      log.warn(`Skipping settlement for ${ticker} — no closing price available`);
-      return false;
-    }
-    return true;
-  });
+  const settlementResult = await settleExpiredMarkets(meridianProgram, allMarkets, closingPrices);
 
-  log.info(`${expiredUnsettled.length} markets eligible for settlement`);
+  // ---- Phase 4 + 4.5: Crank cancel + auto-redeem ----
+  await crankAndRedeem(meridianProgram, allMarkets, settlementResult, usdcMint);
 
-  const settlementResult = await settleMarkets(meridianProgram, expiredUnsettled);
+  // ---- Phase 5: Close eligible markets ----
+  await closeMarkets(meridianProgram, adminKeypair, connection);
 
-  log.info(
-    `Settlement complete: ${settlementResult.settled.length} settled, ${settlementResult.failed.length} failed`,
-  );
-
-  // ---- Step 4: Crank cancel on settled markets ----
-  const settledMarkets = allMarkets.filter(
-    (m) =>
-      m.account.isSettled ||
-      settlementResult.settled.some((s) => s.publicKey.equals(m.publicKey)),
-  );
-
-  if (settledMarkets.length > 0) {
-    log.info(`Running crank cancel on ${settledMarkets.length} settled markets`);
-    const crankResults = await crankCancelAll(meridianProgram, settledMarkets, usdcMint);
-
-    for (const r of crankResults) {
-      if (r.error) {
-        log.error(`Crank failed for ${r.market}: ${r.error}`);
-      } else if (r.cancelled > 0) {
-        log.info(`Cranked ${r.cancelled} orders for ${r.market}`);
-      }
-    }
-  } else {
-    log.info("No settled markets to crank");
-  }
-
-  // ---- Step 4.5: Auto-redeem winning tokens ----
-  if (settledMarkets.length > 0) {
-    log.info(`Running auto-redeem on ${settledMarkets.length} settled markets`);
-    const redeemResults = await autoRedeemAll(meridianProgram, settledMarkets, usdcMint);
-
-    for (const r of redeemResults) {
-      if (r.error) {
-        log.error(`Auto-redeem failed for ${r.market}: ${r.error}`);
-      } else if (r.redeemed > 0) {
-        log.info(`Auto-redeemed ${r.redeemed} users for ${r.market} in ${r.batches} batches`);
-      }
-    }
-  } else {
-    log.info("No settled markets to auto-redeem");
-  }
-
-  // ---- Step 5: Close eligible markets ----
-  log.info("Checking for markets eligible to close");
-  const closeResult = await closeEligibleMarkets(meridianProgram, adminKeypair, connection);
-  if (closeResult.closed.length > 0) {
-    log.info(`Closed ${closeResult.closed.length} markets: ${closeResult.closed.join(", ")}`);
-  }
-  if (closeResult.failed.length > 0) {
-    log.error(`Failed to close ${closeResult.failed.length} markets`, {
-      failed: closeResult.failed,
-    });
-  }
-
-  // ---- Step 6: Auto-create next-day markets ----
-  log.info("Creating markets for next trading day");
-  try {
-    const initResults = await initializeMarkets();
-    const totalCreated = initResults.reduce((s, r) => s + r.strikesCreated, 0);
-    const totalSkipped = initResults.reduce((s, r) => s + r.strikesSkipped, 0);
-    const initErrors = initResults.flatMap((r) => r.errors);
-
-    if (totalCreated > 0) {
-      log.info(`Next-day markets created: ${totalCreated} new, ${totalSkipped} skipped`, {
-        results: initResults.map((r) => ({
-          ticker: r.ticker,
-          previousClose: r.previousClose,
-          created: r.strikesCreated,
-          skipped: r.strikesSkipped,
-        })),
-      });
-    } else if (totalSkipped > 0) {
-      log.info(`Next-day markets already exist (${totalSkipped} skipped)`);
-    }
-
-    if (initErrors.length > 0) {
-      log.error(`Market creation had ${initErrors.length} errors`, { errors: initErrors });
-    }
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    log.error(`Failed to create next-day markets: ${errMsg}`, {
-      stack: err instanceof Error ? err.stack : undefined,
-    });
-    // Non-fatal — settlement was successful, markets can be created by morning-init
-  }
+  // ---- Phase 6: Create next-day markets (child process) ----
+  await initNextDay();
 
   // ---- Summary ----
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);

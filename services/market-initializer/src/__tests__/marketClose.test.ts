@@ -5,9 +5,9 @@ import { computeMarketCloseUnix } from "../initializer.ts";
 // Mock isMarketDay to control weekend/holiday behavior
 // ---------------------------------------------------------------------------
 
-vi.mock("../../../automation/src/timezone.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../automation/src/timezone.js")>(
-    "../../../automation/src/timezone.js",
+vi.mock("../../../shared/src/timezone.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../shared/src/timezone.js")>(
+    "../../../shared/src/timezone.js",
   );
   return {
     ...actual,
@@ -15,7 +15,7 @@ vi.mock("../../../automation/src/timezone.js", async () => {
   };
 });
 
-import { isMarketDay } from "../../../automation/src/timezone.js";
+import { isMarketDay } from "../../../shared/src/timezone.js";
 const mockIsMarketDay = vi.mocked(isMarketDay);
 
 // ---------------------------------------------------------------------------

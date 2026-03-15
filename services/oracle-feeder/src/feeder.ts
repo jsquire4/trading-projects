@@ -6,11 +6,11 @@
 // ---------------------------------------------------------------------------
 
 import { Program, AnchorProvider, Wallet } from "@coral-xyz/anchor";
-import BN from "bn.js";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { createMarketDataClient, type IMarketDataClient } from "../../shared/src/market-data.js";
 import { createLogger } from "../../shared/src/alerting.js";
 import { findPriceFeed } from "../../shared/src/pda.js";
+import { updateOnChain } from "./oracle-helpers.js";
 import type { MockOracle } from "../../shared/src/idl/mock_oracle.js";
 import MockOracleIDL from "../../shared/src/idl/mock_oracle.json" with { type: "json" };
 
@@ -25,20 +25,6 @@ const POLL_INTERVAL_MS = parseInt(process.env.ORACLE_POLL_INTERVAL_MS ?? "10000"
 // Retry config
 const MAX_RETRIES = 3;
 const BASE_RETRY_DELAY_MS = 1_000;
-
-/** Convert a dollar price (e.g. 185.42) to USDC lamports (u64). */
-function priceToLamports(price: number): BN {
-  return new BN(Math.round(price * 1_000_000));
-}
-
-/** Confidence = 0.1% of price (conservative). */
-function computeConfidence(price: number): BN {
-  return new BN(Math.round(price * 1_000_000 * 0.001));
-}
-
-async function sleepMs(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 // ---------------------------------------------------------------------------
 // Core feeder
@@ -84,9 +70,9 @@ export async function startFeeder(
 
   let pollInterval: ReturnType<typeof setInterval> | null = null;
 
-  // ------ On-chain update with retry ------
+  // ------ On-chain update with rate limiting + retry ------
 
-  async function updateOnChain(ticker: string, price: number): Promise<void> {
+  async function updateTickerOnChain(ticker: string, price: number): Promise<void> {
     const priceFeed = priceFeedPDAs.get(ticker);
     if (!priceFeed) return;
 
@@ -95,43 +81,12 @@ export async function startFeeder(
     const last = lastUpdate.get(ticker) ?? 0;
     if (now - last < RATE_LIMIT_MS) return;
 
-    const priceLamports = priceToLamports(price);
-    const confidence = computeConfidence(price);
-    const timestamp = new BN(Math.floor(now / 1000));
-
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        await program.methods
-          .updatePrice(priceLamports, confidence, timestamp)
-          .accounts({
-            authority: authority.publicKey,
-            priceFeed,
-          })
-          .signers([authority])
-          .rpc();
-
-        lastUpdate.set(ticker, Date.now());
-        log.info(`Updated ${ticker}: $${price.toFixed(2)}`, {
-          lamports: priceLamports.toString(),
-          confidence: confidence.toString(),
-        });
-        return;
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (attempt < MAX_RETRIES) {
-          const delay = BASE_RETRY_DELAY_MS * Math.pow(2, attempt - 1);
-          log.warn(
-            `Tx failed for ${ticker} (attempt ${attempt}/${MAX_RETRIES}), retrying in ${delay}ms`,
-            { error: msg },
-          );
-          await sleepMs(delay);
-        } else {
-          log.error(
-            `Tx failed for ${ticker} after ${MAX_RETRIES} attempts, dropping update`,
-            { error: msg, price },
-          );
-        }
-      }
+    const ok = await updateOnChain(program, authority, priceFeed, ticker, price, {
+      maxRetries: MAX_RETRIES,
+      baseRetryDelayMs: BASE_RETRY_DELAY_MS,
+    });
+    if (ok) {
+      lastUpdate.set(ticker, Date.now());
     }
   }
 
@@ -142,7 +97,7 @@ export async function startFeeder(
       const quotes = await client.getQuotes(tickers);
       for (const q of quotes) {
         if (q.last > 0) {
-          await updateOnChain(q.symbol, q.last);
+          await updateTickerOnChain(q.symbol, q.last);
         }
       }
     } catch (err: unknown) {

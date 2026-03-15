@@ -13,6 +13,7 @@ import { Connection, Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 
 import { createLogger } from "../../shared/src/alerting.js";
+import { tickerFromBytes } from "../../shared/src/utils.js";
 import {
   findGlobalConfig,
   findStrikeMarket,
@@ -58,9 +59,7 @@ async function main(): Promise<void> {
   const tickerArrays = globalConfig.tickers as number[][];
   const activeTickers: string[] = [];
   for (let i = 0; i < tickerCount; i++) {
-    const t = Buffer.from(tickerArrays[i])
-      .toString("utf-8")
-      .replace(/\0+$/, "");
+    const t = tickerFromBytes(tickerArrays[i]);
     if (t.length > 0) activeTickers.push(t);
   }
 
@@ -72,7 +71,7 @@ async function main(): Promise<void> {
   log.info(`Verifying markets for: ${activeTickers.join(", ")}`);
 
   // ---- Compute today's market close timestamp ------------------------------
-  const marketCloseUnix = computeMarketCloseUnix();
+  const marketCloseUnix = await computeMarketCloseUnix();
 
   // ---- Fetch previous close prices for strike calculation ------------------
   const client = createMarketDataClient();

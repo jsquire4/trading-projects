@@ -6,6 +6,7 @@ import { Program } from "@coral-xyz/anchor";
 import BN from "bn.js";
 import { PublicKey } from "@solana/web3.js";
 import { createLogger } from "../../shared/src/alerting.js";
+import { tickerFromBytes } from "../../shared/src/utils.js";
 import { findGlobalConfig, findPriceFeed, padTicker } from "../../shared/src/pda.js";
 
 const log = createLogger("settlement:settler");
@@ -43,10 +44,8 @@ export interface SettlementResult {
   failed: { market: MarketInfo; error: string }[];
 }
 
-/** Extract ticker string from the on-chain [u8; 8] array */
-export function tickerFromBytes(bytes: number[]): string {
-  return Buffer.from(bytes).toString("utf-8").replace(/\0+$/, "");
-}
+// tickerFromBytes re-exported from shared/src/utils for backward compatibility
+export { tickerFromBytes } from "../../shared/src/utils.js";
 
 /** Check if an Anchor error matches one of the retryable oracle codes */
 function isRetryableOracleError(err: unknown): boolean {

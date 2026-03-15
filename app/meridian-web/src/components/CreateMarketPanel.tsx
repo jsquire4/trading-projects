@@ -23,6 +23,7 @@ import {
   findOrderBook,
   findPriceFeed,
   findFeeVault,
+  findSolTreasury,
   findTickerRegistry,
   padTicker,
 } from "@/lib/pda";
@@ -236,6 +237,9 @@ export function CreateMarketPanel({ ticker }: CreateMarketPanelProps) {
 
       const [tickerRegistryAddr] = findTickerRegistry();
       accounts.tickerRegistry = tickerRegistryAddr;
+
+      const [solTreasuryAddr] = findSolTreasury();
+      accounts.solTreasury = solTreasuryAddr;
 
       const tx = await program.methods
         .createStrikeMarket(

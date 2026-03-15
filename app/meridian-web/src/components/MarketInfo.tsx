@@ -64,7 +64,7 @@ export function MarketInfo({ market, currentPrice }: MarketInfoProps) {
             </div>
           </div>
         )}
-        {market.isPaused && (
+        {false && (
           <div className="col-span-2">
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400 text-[10px] font-medium">
               PAUSED

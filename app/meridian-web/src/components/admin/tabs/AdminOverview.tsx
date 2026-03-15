@@ -31,10 +31,10 @@ export function AdminOverview() {
   const { data: treasury } = useTreasuryBalance();
   const { data: markets = [] } = useMarkets();
 
-  const activeCount = markets.filter((m) => !m.isSettled && !m.isPaused).length;
-  const pausedCount = markets.filter((m) => m.isPaused).length;
-  const settledCount = markets.filter((m) => m.isSettled && !m.isClosed).length;
-  const closedCount = markets.filter((m) => m.isClosed).length;
+  const activeCount = markets.filter((m) => !m.isSettled).length;
+  const pausedCount = 0; // per-market pause removed; global pause only
+  const settledCount = markets.filter((m) => m.isSettled).length;
+  const closedCount = 0; // markets are destroyed on close, not flagged
 
   const obligations = config ? Number(config.obligations) / 1e6 : 0;
   const reserve = config ? Number(config.operatingReserve) / 1e6 : 0;

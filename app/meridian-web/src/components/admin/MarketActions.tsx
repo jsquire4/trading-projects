@@ -66,22 +66,20 @@ function MarketActionRow({ market }: { market: ParsedMarket }) {
   }, [program, publicKey, market, overridePriceInput]);
 
   const buildPause = useCallback(async (config: ReturnType<typeof findGlobalConfig>[0]) => {
-    return program!.methods.pause(market.publicKey)
+    return program!.methods.pause()
       .accountsPartial({
         admin: publicKey!,
         config,
-        market: market.publicKey,
       }).transaction();
-  }, [program, publicKey, market]);
+  }, [program, publicKey]);
 
   const buildUnpause = useCallback(async (config: ReturnType<typeof findGlobalConfig>[0]) => {
-    return program!.methods.unpause(market.publicKey)
+    return program!.methods.unpause()
       .accountsPartial({
         admin: publicKey!,
         config,
-        market: market.publicKey,
       }).transaction();
-  }, [program, publicKey, market]);
+  }, [program, publicKey]);
 
   type ConfigKey = ReturnType<typeof findGlobalConfig>[0];
   const handlers: Record<string, (config: ConfigKey) => Promise<Transaction | null>> = useMemo(
@@ -121,19 +119,10 @@ function MarketActionRow({ market }: { market: ParsedMarket }) {
           {market.isSettled && (
             <span className="text-[10px] text-accent bg-accent/20 px-1.5 py-0.5 rounded">SETTLED</span>
           )}
-          {market.isPaused && (
-            <span className="text-[10px] text-yellow-400 bg-yellow-500/20 px-1.5 py-0.5 rounded">PAUSED</span>
-          )}
         </div>
         <div className="flex gap-2">
-          {!market.isPaused ? (
-            <button
-              onClick={() => handleAction("pause")}
-              disabled={submitting !== null}
-              className="text-[11px] text-yellow-400/70 hover:text-yellow-400 transition-colors"
-            >
-              Pause
-            </button>
+          {false ? (
+            <button disabled className="text-[11px] text-yellow-400/70">Pause</button>
           ) : (
             <button
               onClick={() => handleAction("unpause")}

@@ -14,7 +14,7 @@ interface RedeemPanelProps {
 
 export function RedeemPanel({ market, yesBal, noBal, onSuccess }: RedeemPanelProps) {
   const { publicKey } = useWallet();
-  const { redeem, treasuryRedeem, submitting } = useRedeem();
+  const { redeem, submitting } = useRedeem();
 
   const now = Math.floor(Date.now() / 1000);
   const overrideDeadline = Number(market.overrideDeadline);
@@ -32,10 +32,7 @@ export function RedeemPanel({ market, yesBal, noBal, onSuccess }: RedeemPanelPro
   const winnerLabel = isYesWinner ? "Yes" : "No";
 
   const hasValidOutcome = market.outcome === 1 || market.outcome === 2;
-  const canWinnerRedeem = market.isSettled && hasValidOutcome && !inOverrideWindow && winnerBal > BigInt(0) && !market.isPaused;
-
-  // Treasury redeem: available after market is CLOSED (USDC moved to treasury)
-  const canTreasuryRedeem = market.isClosed && (yesBal > BigInt(0) || noBal > BigInt(0));
+  const canWinnerRedeem = market.isSettled && hasValidOutcome && !inOverrideWindow && winnerBal > BigInt(0);
 
   const handlePairBurn = useCallback(async () => {
     if (!canPairBurn) return;
@@ -59,20 +56,10 @@ export function RedeemPanel({ market, yesBal, noBal, onSuccess }: RedeemPanelPro
     if (sig) onSuccess?.();
   }, [canWinnerRedeem, winnerBal, winnerTokens, winnerLabel, market.publicKey, redeem, onSuccess]);
 
-  const handleTreasuryRedeem = useCallback(async () => {
-    if (!canTreasuryRedeem) return;
-    const totalTokens = Number(yesBal + noBal) / 1_000_000;
-    const sig = await treasuryRedeem({
-      marketPublicKey: market.publicKey,
-      description: `Treasury redeem ${totalTokens.toFixed(0)} tokens`,
-    });
-    if (sig) onSuccess?.();
-  }, [canTreasuryRedeem, yesBal, noBal, market.publicKey, treasuryRedeem, onSuccess]);
-
   if (!publicKey) return null;
 
   // Show nothing if no actions available
-  if (!canPairBurn && !canWinnerRedeem && !canTreasuryRedeem) {
+  if (!canPairBurn && !canWinnerRedeem) {
     if (market.isSettled && !inOverrideWindow && hasValidOutcome) {
       return (
         <div className="rounded-lg border border-white/10 bg-white/5 p-4 space-y-2">
@@ -142,29 +129,6 @@ export function RedeemPanel({ market, yesBal, noBal, onSuccess }: RedeemPanelPro
         </div>
       )}
 
-      {/* Treasury Redeem section — after market is CLOSED */}
-      {canTreasuryRedeem && (
-        <div className="rounded-lg border border-purple-500/20 bg-purple-500/5 p-4 space-y-3">
-          <h3 className="text-sm font-semibold text-purple-400">
-            Treasury Redeem
-          </h3>
-          <p className="text-xs text-white/50">
-            Market is closed. Burn your remaining tokens and receive USDC from the treasury.
-            Pairs redeem at $1 each, winning tokens at $1, losing tokens at $0.
-          </p>
-          <div className="grid grid-cols-2 gap-2 text-xs text-white/40">
-            <div>Yes tokens: {(Number(yesBal) / 1_000_000).toFixed(0)}</div>
-            <div>No tokens: {(Number(noBal) / 1_000_000).toFixed(0)}</div>
-          </div>
-          <button
-            onClick={handleTreasuryRedeem}
-            disabled={submitting}
-            className="w-full rounded-md py-2.5 text-sm font-semibold text-white bg-purple-500/20 hover:bg-purple-500/30 disabled:bg-white/5 disabled:text-white/20 transition-colors"
-          >
-            {submitting ? "Redeeming..." : "Redeem from Treasury"}
-          </button>
-        </div>
-      )}
     </div>
   );
 }

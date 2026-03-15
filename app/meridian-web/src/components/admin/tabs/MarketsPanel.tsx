@@ -52,7 +52,7 @@ function MarketRow({ market }: { market: ParsedMarket }) {
   const canClose = market.isSettled && (isMock || now > overrideDeadline);
   const canCrankCancel = market.isSettled;
   const canCrankRedeem = market.isSettled;
-  const canCleanup = market.isClosed;
+  const canCleanup = false; // cleanup removed
 
   const handleAction = useCallback(async (action: string, buildTx: () => Promise<any>) => {
     if (!program || !publicKey) return;
@@ -79,31 +79,20 @@ function MarketRow({ market }: { market: ParsedMarket }) {
           {market.isSettled && (
             <span className="text-[10px] text-accent bg-accent/20 px-1.5 py-0.5 rounded">SETTLED</span>
           )}
-          {market.isPaused && (
-            <span className="text-[10px] text-yellow-400 bg-yellow-500/20 px-1.5 py-0.5 rounded">PAUSED</span>
-          )}
-          {market.isClosed && (
-            <span className="text-[10px] text-white/40 bg-white/10 px-1.5 py-0.5 rounded">CLOSED</span>
-          )}
         </div>
         <div className="flex gap-2">
-          {!market.isPaused ? (
+          {false ? (
             <button
-              onClick={() => handleAction("Pause", () =>
-                program!.methods.pause(market.publicKey)
-                  .accountsPartial({ admin: publicKey!, config: configAddr, market: market.publicKey })
-                  .transaction()
-              )}
-              disabled={submitting !== null}
-              className="text-[11px] text-yellow-400/70 hover:text-yellow-400 transition-colors"
+              disabled
+              className="text-[11px] text-yellow-400/70"
             >
               Pause
             </button>
           ) : (
             <button
               onClick={() => handleAction("Unpause", () =>
-                program!.methods.unpause(market.publicKey)
-                  .accountsPartial({ admin: publicKey!, config: configAddr, market: market.publicKey })
+                program!.methods.unpause()
+                  .accountsPartial({ admin: publicKey!, config: configAddr })
                   .transaction()
               )}
               disabled={submitting !== null}
@@ -254,20 +243,10 @@ function MarketRow({ market }: { market: ParsedMarket }) {
           </button>
         )}
 
-        {canCleanup && (
+        {false && (
           <button
-            onClick={() => handleAction("Cleanup", () => {
-              const [yesMint] = findYesMint(market.publicKey);
-              const [noMint] = findNoMint(market.publicKey);
-              return program!.methods.cleanupMarket()
-                .accountsPartial({
-                  admin: publicKey!, config: configAddr, market: market.publicKey,
-                  yesMint, noMint,
-                })
-                .transaction();
-            })}
-            disabled={submitting !== null}
-            className="text-xs bg-red-500/10 text-red-400/70 hover:text-red-400 rounded-md px-3 py-1.5 transition-colors disabled:opacity-50"
+            disabled
+            className="text-xs bg-red-500/10 text-red-400/70 rounded-md px-3 py-1.5"
           >
             Cleanup
           </button>
@@ -297,9 +276,7 @@ export function MarketsPanel() {
     const closed: ParsedMarket[] = [];
 
     for (const m of markets) {
-      if (m.isClosed) closed.push(m);
-      else if (m.isSettled) settled.push(m);
-      else if (m.isPaused) paused.push(m);
+      if (m.isSettled) settled.push(m);
       else active.push(m);
     }
 
@@ -318,19 +295,9 @@ export function MarketsPanel() {
 
     try {
       const [configAddr] = findGlobalConfig();
-      const activeMarkets = markets.filter((m) => !m.isSettled && !m.isClosed);
-      const remainingAccounts = activeMarkets.flatMap((m) => {
-        const [orderBook] = findOrderBook(m.publicKey);
-        return [
-          { pubkey: m.publicKey, isWritable: true, isSigner: false },
-          { pubkey: orderBook, isWritable: true, isSigner: false },
-        ];
-      });
-
       const tx = await program.methods
         .circuitBreaker()
         .accountsPartial({ admin: publicKey, config: configAddr })
-        .remainingAccounts(remainingAccounts)
         .transaction();
 
       await sendTransaction(tx, { description: "Circuit Breaker" });

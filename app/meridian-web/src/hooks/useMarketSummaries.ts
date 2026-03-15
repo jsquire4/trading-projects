@@ -23,7 +23,7 @@ export function useMarketSummaries() {
   const { connection } = useConnection();
 
   const activeMarkets = useMemo(
-    () => markets.filter((m) => !m.isSettled && !m.isClosed),
+    () => markets.filter((m) => !m.isSettled),
     [markets],
   );
 

@@ -79,8 +79,8 @@ export function PlatformSettings() {
     const isPaused = config.isPaused;
     await handleAction(isPaused ? "Unpause Platform" : "Pause Platform", () =>
       isPaused
-        ? program!.methods.unpause(null).accountsPartial({ admin: publicKey!, config: configAddr }).transaction()
-        : program!.methods.pause(null).accountsPartial({ admin: publicKey!, config: configAddr }).transaction(),
+        ? program!.methods.unpause().accountsPartial({ admin: publicKey!, config: configAddr }).transaction()
+        : program!.methods.pause().accountsPartial({ admin: publicKey!, config: configAddr }).transaction(),
     );
   }, [config, handleAction, program, publicKey, configAddr]);
 
@@ -99,7 +99,7 @@ export function PlatformSettings() {
     const blackout = blackoutInput && !isNaN(blackoutNum) && blackoutNum >= 0 ? blackoutNum : null;
 
     await handleAction("Update Config", () =>
-      program!.methods.updateConfig(staleness, settlementStal, confidence, reserve, blackout)
+      program!.methods.updateConfig(staleness, settlementStal, confidence, reserve, blackout, null)
         .accountsPartial({ admin: publicKey!, config: configAddr })
         .transaction(),
       () => {
@@ -111,15 +111,6 @@ export function PlatformSettings() {
       },
     );
   }, [stalenessInput, settlementStalenessInput, confidenceInput, reserveInput, blackoutInput, handleAction, program, publicKey, configAddr]);
-
-  // ---- Expand Config ----
-  const handleExpandConfig = useCallback(async () => {
-    await handleAction("Expand Config", () =>
-      program!.methods.expandConfig()
-        .accountsPartial({ admin: publicKey!, config: configAddr, systemProgram: SystemProgram.programId })
-        .transaction(),
-    );
-  }, [handleAction, program, publicKey, configAddr]);
 
   const isPendingAdmin = config?.pendingAdmin && publicKey?.equals(config.pendingAdmin);
 
@@ -271,18 +262,11 @@ export function PlatformSettings() {
       <div className="rounded-lg border border-white/10 bg-white/5 p-4">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-semibold text-white/80">Expand Config</h3>
+            <h3 className="text-sm font-semibold text-white/80">Config Status</h3>
             <p className="text-xs text-white/40 mt-1">
-              One-time migration to v2 layout (192 → 248 bytes)
+              GlobalConfig fully initialized (288 bytes)
             </p>
           </div>
-          <button
-            onClick={handleExpandConfig}
-            disabled={submitting !== null}
-            className="rounded-md px-3 py-2 text-xs font-medium bg-white/5 text-white/50 hover:text-white/80 border border-white/10 transition-colors disabled:opacity-50"
-          >
-            {submitting === "Expand Config" ? "..." : "Expand"}
-          </button>
         </div>
       </div>
     </div>

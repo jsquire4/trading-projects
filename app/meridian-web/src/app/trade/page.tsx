@@ -35,7 +35,7 @@ function useCountdown(markets: ParsedMarket[]) {
   const [timeLeft, setTimeLeft] = useState("");
 
   const earliestClose = useMemo(() => {
-    const active = markets.filter((m) => !m.isSettled && !m.isClosed);
+    const active = markets.filter((m) => !m.isSettled);
     if (active.length === 0) return null;
     return Math.min(...active.map((m) => Number(m.marketCloseUnix)));
   }, [markets]);
@@ -209,7 +209,7 @@ export default function TradePage() {
   // Group non-closed markets into active (<12h to close) and upcoming (>=12h)
   const { grouped, upcomingGrouped, totalActive, totalUpcoming, perTicker, allTickers } = useMemo(() => {
     const nowSec = Math.floor(Date.now() / 1000);
-    const nonClosed = markets.filter((m) => !m.isClosed);
+    const nonClosed = markets;
     const active = nonClosed.filter((m) => !m.isSettled && (Number(m.marketCloseUnix) - nowSec) < 12 * 3600);
     const upcoming = nonClosed.filter((m) => !m.isSettled && (Number(m.marketCloseUnix) - nowSec) >= 12 * 3600);
 

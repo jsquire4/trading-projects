@@ -44,7 +44,7 @@ export function OpenOrdersTab() {
   const { data: markets = [], isLoading } = useMarkets();
   // Show all non-closed markets (including settled — user may need to cancel orders there)
   const visibleMarkets = useMemo(
-    () => markets.filter((m) => !m.isClosed),
+    () => markets,
     [markets],
   );
 

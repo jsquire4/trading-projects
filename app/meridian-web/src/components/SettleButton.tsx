@@ -22,7 +22,7 @@ export function SettleButton({ market, onSuccess }: SettleButtonProps) {
 
   const now = Math.floor(Date.now() / 1000);
   const closeUnix = Number(market.marketCloseUnix);
-  const canSettle = !market.isSettled && !market.isPaused && now > closeUnix && !!publicKey;
+  const canSettle = !market.isSettled && now > closeUnix && !!publicKey;
 
   const handleSettle = useCallback(async () => {
     if (!program || !publicKey || !canSettle) return;

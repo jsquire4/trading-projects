@@ -100,7 +100,7 @@ export default function HomePage() {
 
   // Derive per-ticker summaries from active (unsettled) markets
   const tickerSummaries = useMemo(() => {
-    const active = markets.filter((m) => !m.isSettled && !m.isClosed);
+    const active = markets.filter((m) => !m.isSettled);
 
     const grouped = new Map<
       string,
@@ -129,7 +129,7 @@ export default function HomePage() {
       .sort((a, b) => a.ticker.localeCompare(b.ticker));
   }, [markets]);
 
-  const activeCount = markets.filter((m) => !m.isSettled && !m.isClosed).length;
+  const activeCount = markets.filter((m) => !m.isSettled).length;
   const settledCount = markets.filter((m) => m.isSettled).length;
   const totalMinted = markets.reduce(
     (sum, m) => sum + Number(m.totalMinted),

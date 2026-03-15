@@ -10,7 +10,8 @@ import { useTransaction } from "@/hooks/useTransaction";
 import { useGlobalConfig } from "@/hooks/useGlobalConfig";
 import { useFeeVaultBalance } from "@/hooks/useFeeVaultBalance";
 import { useTreasuryBalance } from "@/hooks/useTreasuryBalance";
-import { findGlobalConfig, findFeeVault, findTreasury } from "@/lib/pda";
+import { findGlobalConfig, findFeeVault, findTreasury, findSolTreasury } from "@/lib/pda";
+import { SystemProgram } from "@solana/web3.js";
 
 export function FeesRevenue() {
   const { program } = useAnchorProgram();
@@ -111,15 +112,18 @@ export function FeesRevenue() {
     try {
       const [configAddr] = findGlobalConfig();
       const [treasuryAddr] = findTreasury();
+      const [solTreasuryAddr] = findSolTreasury();
       const adminUsdcAta = await getAssociatedTokenAddress(config.usdcMint, publicKey);
       const tx = await program.methods
-        .withdrawTreasury(lamports)
+        .withdrawTreasury(lamports, 0) // mode 0 = USDC
         .accountsPartial({
           admin: publicKey,
           config: configAddr,
           treasury: treasuryAddr,
           adminUsdcAta,
+          solTreasury: solTreasuryAddr,
           tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
         })
         .transaction();
       await sendTransaction(tx, { description: "Withdraw Treasury" });

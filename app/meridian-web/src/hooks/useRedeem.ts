@@ -41,7 +41,6 @@ export interface TreasuryRedeemParams {
 
 interface UseRedeemReturn {
   redeem: (params: RedeemParams) => Promise<string | null>;
-  treasuryRedeem: (params: TreasuryRedeemParams) => Promise<string | null>;
   submitting: boolean;
 }
 
@@ -114,57 +113,5 @@ export function useRedeem(): UseRedeemReturn {
     [program, publicKey, sendTransaction, queryClient],
   );
 
-  const treasuryRedeemFn = useCallback(
-    async (params: TreasuryRedeemParams): Promise<string | null> => {
-      if (!program || !publicKey) return null;
-
-      setSubmitting(true);
-      try {
-        const [config] = findGlobalConfig();
-        const [treasury] = findTreasury();
-        const [yesMint] = findYesMint(params.marketPublicKey);
-        const [noMint] = findNoMint(params.marketPublicKey);
-
-        const userUsdcAta = await getAssociatedTokenAddress(USDC_MINT, publicKey);
-        const userYesAta = await getAssociatedTokenAddress(yesMint, publicKey);
-        const userNoAta = await getAssociatedTokenAddress(noMint, publicKey);
-
-        const tx = await program.methods
-          .treasuryRedeem()
-          .accountsPartial({
-            user: publicKey,
-            config,
-            market: params.marketPublicKey,
-            yesMint,
-            noMint,
-            treasury,
-            userUsdcAta,
-            userYesAta,
-            userNoAta,
-            tokenProgram: TOKEN_PROGRAM_ID,
-          })
-          .transaction();
-
-        const sig = await sendTransaction(tx, {
-          description: params.description,
-        });
-
-        if (sig) {
-          queryClient.invalidateQueries({ queryKey: ["positions"] });
-          queryClient.invalidateQueries({ queryKey: ["markets"] });
-          queryClient.invalidateQueries({ queryKey: ["walletState"] });
-          queryClient.invalidateQueries({ queryKey: ["walletBalance"] });
-        }
-
-        return sig;
-      } catch {
-        return null;
-      } finally {
-        setSubmitting(false);
-      }
-    },
-    [program, publicKey, sendTransaction, queryClient],
-  );
-
-  return { redeem, treasuryRedeem: treasuryRedeemFn, submitting };
+  return { redeem, submitting };
 }

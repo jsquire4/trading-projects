@@ -79,7 +79,7 @@ export default function TradingCockpit({
   const tickerMarkets = useMemo(
     () =>
       allMarkets
-        .filter((m) => m.ticker === ticker && !m.isClosed)
+        .filter((m) => m.ticker === ticker)
         .sort(
           (a, b) => Number(a.strikePrice) - Number(b.strikePrice),
         ),
@@ -198,11 +198,6 @@ export default function TradingCockpit({
               <h1 className="text-xl font-bold text-white">
                 {ticker} &mdash; ${strikeDollars.toFixed(0)}
               </h1>
-              {market.isPaused && (
-                <span className="px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400 text-[10px] font-medium">
-                  PAUSED
-                </span>
-              )}
               {market.isSettled && (
                 <span className="px-2 py-0.5 rounded bg-accent/20 text-accent text-[10px] font-medium">
                   SETTLED

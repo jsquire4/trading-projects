@@ -49,7 +49,7 @@ function PositionCard({ position, totalCost, now }: { position: Position; totalC
 
   const overrideDeadline = Number(position.market.overrideDeadline);
   const inOverrideWindow = isSettled && now < overrideDeadline;
-  const canRedeem = isSettled && isWinner && !inOverrideWindow && !position.market.isPaused && winnerBal > BigInt(0);
+  const canRedeem = isSettled && isWinner && !inOverrideWindow && winnerBal > BigInt(0);
 
   const minutesLeft = Math.max(0, remaining / 60);
   const side = yesBal >= noBal ? "yes" : "no";

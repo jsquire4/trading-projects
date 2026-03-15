@@ -74,7 +74,7 @@ export function MintPairButton({ market }: MintPairButtonProps) {
     finally { setSubmitting(false); }
   }, [program, publicKey, market, qtyLamports, isValidInteger, sendTransaction, queryClient]);
 
-  if (!publicKey || market.isSettled || market.isPaused) return null;
+  if (!publicKey || market.isSettled) return null;
 
   if (!showForm) {
     return (

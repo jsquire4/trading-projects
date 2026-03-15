@@ -42,8 +42,6 @@ export interface ParsedMarket {
   ticker: string;
   isSettled: boolean;
   outcome: number;
-  isPaused: boolean;
-  isClosed: boolean;
   overrideCount: number;
   bump: number;
 }
@@ -97,8 +95,6 @@ function parseMarketAccount(
     ticker,
     isSettled: a.isSettled as boolean,
     outcome: a.outcome as number,
-    isPaused: a.isPaused as boolean,
-    isClosed: a.isClosed as boolean,
     overrideCount: a.overrideCount as number,
     bump: a.bump as number,
   };

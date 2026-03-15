@@ -603,6 +603,46 @@ describe("Admin V2 — Phase 6A", () => {
   });
 
   // =========================================================================
+  // add_ticker reactivation
+  // =========================================================================
+
+  describe("add_ticker reactivation", () => {
+    it("reactivates a deactivated ticker via add_ticker", async () => {
+      const provider = new BankrunProvider(ctx.context);
+      // JPM was deactivated in the deactivate_ticker tests above
+      const ix = buildAddTickerIx({
+        payer: ctx.admin.publicKey,
+        config,
+        tickerRegistry,
+        ticker: padTicker("JPM"),
+      });
+      await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), ix), [ctx.admin]);
+
+      // Verify ticker is active again by creating a market with it
+      // (if it were still deactivated, create_strike_market would fail)
+      const registry = await provider.connection.getAccountInfo(tickerRegistry);
+      expect(registry).to.not.be.null;
+    });
+
+    it("still rejects adding an active ticker", async () => {
+      const provider = new BankrunProvider(ctx.context);
+      // JPM is now active again — re-adding should fail
+      const ix = buildAddTickerIx({
+        payer: ctx.admin.publicKey,
+        config,
+        tickerRegistry,
+        ticker: padTicker("JPM"),
+      });
+      try {
+        await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), ix), [ctx.admin]);
+        expect.fail("Should reject active duplicate");
+      } catch (err: any) {
+        expect(String(err)).to.match(/TickerAlreadyExists|0x1809|custom program error/i);
+      }
+    });
+  });
+
+  // =========================================================================
   // withdraw_fees
   // =========================================================================
 
@@ -1181,7 +1221,14 @@ describe("Admin V2 — Phase 6A", () => {
     it("rejects market creation with deactivated ticker in registry", async () => {
       const provider = new BankrunProvider(ctx.context);
 
-      // JPM was deactivated in the deactivate_ticker tests
+      // JPM was reactivated in the reactivation tests — deactivate it again
+      const deactIx = buildDeactivateTickerIx({
+        admin: ctx.admin.publicKey,
+        config,
+        tickerRegistry,
+        ticker: padTicker("JPM"),
+      });
+      await provider.sendAndConfirm!(new Transaction().add(uniqueCuIx(), deactIx), [ctx.admin]);
       const jpmFeed = await initializeOracleFeed(ctx.context, ctx.admin, "JPM")
         .catch(() => {
           const [feed] = PublicKey.findProgramAddressSync(

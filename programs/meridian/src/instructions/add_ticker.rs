@@ -22,19 +22,15 @@ pub struct AddTicker<'info> {
 }
 
 /// Permissionless — anyone can add a ticker (pays rent for realloc).
-/// Fails if ticker already exists. When oracle_type == Pyth, requires
-/// a valid Pyth price account as remaining_accounts[0].
+/// If the ticker was previously deactivated, reactivates it instead of
+/// creating a duplicate. Fails only if the ticker already exists AND is active.
+/// When oracle_type == Pyth, requires a valid Pyth price account as
+/// remaining_accounts[0].
 pub fn handle_add_ticker<'info>(
     ctx: Context<'_, '_, '_, 'info, AddTicker<'info>>,
     ticker: [u8; 8],
 ) -> Result<()> {
     let registry = &mut ctx.accounts.ticker_registry;
-
-    // Check for duplicate
-    require!(
-        !registry.has_ticker(&ticker),
-        MeridianError::TickerAlreadyExists,
-    );
 
     // Determine pyth_feed based on oracle_type
     let pyth_feed = if ctx.accounts.config.oracle_type == 1 {
@@ -55,7 +51,28 @@ pub fn handle_add_ticker<'info>(
         Pubkey::default()
     };
 
-    // Add entry
+    let ticker_str = core::str::from_utf8(&ticker)
+        .unwrap_or("?")
+        .trim_end_matches('\0');
+
+    // If ticker exists, reactivate if deactivated; error if already active
+    if let Some(idx) = registry.find_index(&ticker) {
+        require!(
+            !registry.entries[idx].is_active,
+            MeridianError::TickerAlreadyExists,
+        );
+        registry.entries[idx].is_active = true;
+        registry.entries[idx].pyth_feed = pyth_feed;
+        msg!(
+            "Ticker reactivated: {} (pyth_feed={}), payer={}",
+            ticker_str,
+            pyth_feed,
+            ctx.accounts.payer.key(),
+        );
+        return Ok(());
+    }
+
+    // New ticker — add entry and realloc
     let new_entry = TickerEntry {
         ticker,
         is_active: true,
@@ -88,9 +105,6 @@ pub fn handle_add_ticker<'info>(
 
     account_info.realloc(new_size, false)?;
 
-    let ticker_str = core::str::from_utf8(&ticker)
-        .unwrap_or("?")
-        .trim_end_matches('\0');
     msg!(
         "Ticker added: {} (pyth_feed={}), payer={}",
         ticker_str,

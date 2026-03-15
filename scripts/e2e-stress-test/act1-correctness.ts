@@ -48,6 +48,8 @@ import {
   buildUpdateConfigIx,
   buildCircuitBreakerIx,
   buildExpandConfigIx,
+  buildDeactivateTickerIx,
+  buildAddTickerIx,
   padTicker,
 } from "../../tests/helpers/instructions";
 
@@ -68,6 +70,7 @@ import {
   findNoEscrow,
   findOrderBook,
   findPriceFeed as findPriceFeedPda,
+  findTickerRegistry,
 } from "../../services/shared/src/pda";
 
 import { BASE_PRICES } from "../../services/shared/src/synthetic-config";
@@ -806,6 +809,35 @@ async function act1AdminV2(
     // Already expanded — still track it
     track(ctx, "expand_config");
     details.push(`expand_config: ${e.message?.slice(0, 80)}`);
+  }
+
+  // deactivate_ticker + re-add (reactivation) round-trip
+  const lastTicker = ctx.config.tickers[ctx.config.tickers.length - 1];
+  logStep("deactivate_ticker + reactivate...");
+  try {
+    const [tickerRegistry] = findTickerRegistry();
+    const deactivateIx = buildDeactivateTickerIx({
+      admin: admin.publicKey,
+      config: configPda,
+      tickerRegistry,
+      ticker: padTicker(lastTicker),
+    });
+    await sendTx(connection, new Transaction().add(deactivateIx), [admin]);
+    track(ctx, "deactivate_ticker");
+    details.push(`Deactivated ticker ${lastTicker}`);
+
+    // Re-add reactivates the deactivated ticker
+    const readdIx = buildAddTickerIx({
+      payer: admin.publicKey,
+      config: configPda,
+      tickerRegistry,
+      ticker: padTicker(lastTicker),
+    });
+    await sendTx(connection, new Transaction().add(readdIx), [admin]);
+    track(ctx, "add_ticker");
+    details.push(`Reactivated ticker ${lastTicker}`);
+  } catch (e: any) {
+    recordError(errors, -1, "deactivate_ticker", e.message, lastTicker);
   }
 
   // circuit_breaker (on a non-primary market to avoid disrupting later phases)

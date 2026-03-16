@@ -46,21 +46,19 @@ async function main(): Promise<void> {
     wsEndpoint: rpcUrl.replace("https://", "wss://").replace("http://", "ws://"),
   });
 
-  // 3. Start live event listener BEFORE backfill to avoid missing events
+  // 3. Start REST API immediately so healthchecks pass during backfill
+  const server = startApiServer(port);
+
+  // 4. Start live event listener BEFORE backfill to avoid missing events
   // during the backfill window. Listener deduplicates via signatureExists().
   startLiveListener(connection, programId, idl);
 
-  // 4. Run backfill from last checkpoint
-  try {
-    await runBackfill(connection, programId, idl);
-  } catch (err) {
+  // 5. Run backfill from last checkpoint (non-blocking for the API)
+  runBackfill(connection, programId, idl).catch((err) => {
     log.error("Backfill failed — continuing with live listener", {
       error: String(err),
     });
-  }
-
-  // 5. Start REST API
-  const server = startApiServer(port);
+  });
 
   // Graceful shutdown
   const shutdown = async () => {

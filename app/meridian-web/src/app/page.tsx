@@ -294,7 +294,7 @@ export default function HomePage() {
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <Step number="1" title="Fund Your Wallet" description="Connect a Solana wallet and deposit USDC. Each contract costs exactly $1 to enter a position." accent={STEP_ACCENTS[0]} delay="0.1s" />
-          <Step number="2" title="Trade Yes or No" description="Pick a MAG7 ticker and strike price. Buy Yes if you think the stock closes above the strike, or No if you think it closes below." accent={STEP_ACCENTS[1]} delay="0.25s" />
+          <Step number="2" title="Trade Yes or No" description="Pick a MAG7 ticker and strike price. Buy Yes if you think the stock closes at or above the strike, or No if you think it closes below." accent={STEP_ACCENTS[1]} delay="0.25s" />
           <Step number="3" title="Collect at Settlement" description="At 4 PM ET, the oracle reports the closing price. Winning side collects $1 USDC per token. Losers receive nothing." accent={STEP_ACCENTS[2]} delay="0.4s" />
         </div>
       </section>

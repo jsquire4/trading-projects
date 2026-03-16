@@ -56,6 +56,8 @@ A Solana keypair at `~/.config/solana/id.json` is required. Create one with `sol
 
 ## Architecture
 
+> **Full architecture deep-dive:** See the [interactive architecture summary](app/meridian-web/public/architecture.html) for exhaustive coverage of PDA seeds, account layouts, matching engine internals, fee/treasury mechanics, service polling intervals, frontend hooks, and the complete glossary. Accessible at `/architecture.html` on the live deployment.
+
 **Two Solana programs (Anchor 0.31.1)**
 - `meridian` — Main trading engine: on-chain CLOB order book, mint pairs, settlement, redemption
 - `mock_oracle` — Price feed program; fed by Yahoo Finance API (swappable for Pyth on mainnet)

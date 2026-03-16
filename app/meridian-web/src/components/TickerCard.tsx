@@ -151,13 +151,13 @@ export function TickerCard({
           )}
         </div>
 
-        {/* CTA: Will TICKER close above $STRIKE? */}
+        {/* CTA: Will TICKER close at or above $STRIKE? */}
         <div className="text-center space-y-3 pt-1">
           <p className="text-xs uppercase tracking-widest text-white/40">
             Today&apos;s Question
           </p>
           <p className="text-base font-bold text-white">
-            Will {ticker} close above{" "}
+            Will {ticker} close at or above{" "}
             <span className="text-green-400">${strikeDollars}</span>?
           </p>
           {implied ? (

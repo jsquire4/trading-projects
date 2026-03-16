@@ -153,7 +153,7 @@ export function OrderTree({
       <div className="px-5 pt-5 pb-4 border-b border-white/10 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold text-white">
-            Will <span className="bg-gradient-to-r from-green-400 via-blue-400 to-purple-400 bg-clip-text text-transparent drop-shadow-[0_0_8px_rgba(96,165,250,0.3)]">{ticker}</span> close above{" "}
+            Will <span className="bg-gradient-to-r from-green-400 via-blue-400 to-purple-400 bg-clip-text text-transparent drop-shadow-[0_0_8px_rgba(96,165,250,0.3)]">{ticker}</span> close at or above{" "}
             <span className="bg-gradient-to-r from-emerald-400 to-green-300 bg-clip-text text-transparent drop-shadow-[0_0_8px_rgba(52,211,153,0.3)]">${strikeDollars}</span>?
           </h2>
           <p className="text-sm text-white/40 mt-1">$1 payout per winning contract</p>

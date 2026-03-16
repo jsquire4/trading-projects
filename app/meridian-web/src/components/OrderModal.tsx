@@ -179,9 +179,14 @@ export function OrderModal({
         .filter((o) => o.side === Side.YesAsk && o.priceLevel <= yesPrice)
         .sort((a, b) => a.priceLevel - b.priceLevel);
     } else if (activeSide === "sell-yes") {
-      // Selling Yes = matching against USDC bids at or above our price
-      matchable = orders
-        .filter((o) => o.side === Side.UsdcBid && o.priceLevel >= yesPrice)
+      // Selling Yes = matching against USDC bids AND No-backed bids (merge path).
+      // On-chain, match_against_bids considers both sides with combined FIFO.
+      const maxNoPrice = 100 - yesPrice;
+      const usdcBids = orders
+        .filter((o) => o.side === Side.UsdcBid && o.priceLevel >= yesPrice);
+      const noBids = orders
+        .filter((o) => o.side === Side.NoBackedBid && o.priceLevel <= maxNoPrice);
+      matchable = [...usdcBids, ...noBids]
         .sort((a, b) => b.priceLevel - a.priceLevel); // best (highest) bid first
     } else if (activeSide === "sell-no") {
       // Selling No = matching against Yes asks (merge) at complementary prices
@@ -190,11 +195,17 @@ export function OrderModal({
         .filter((o) => o.side === Side.YesAsk && o.priceLevel <= maxYesAsk)
         .sort((a, b) => a.priceLevel - b.priceLevel);
     } else {
-      // buy-no: matches against Yes asks
-      const maxYesAsk = 100 - noPrice;
-      matchable = orders
-        .filter((o) => o.side === Side.YesAsk && o.priceLevel <= maxYesAsk)
-        .sort((a, b) => a.priceLevel - b.priceLevel);
+      // buy-no: the actual tx is mint_pair + sell_yes(side=1), which matches
+      // against USDC bids and No-backed bids — NOT Yes asks.
+      const yesSellPrice = 100 - noPrice; // = yesPrice
+      const usdcBids = orders
+        .filter((o) => o.side === Side.UsdcBid && o.priceLevel >= yesSellPrice)
+        .sort((a, b) => b.priceLevel - a.priceLevel);
+      const noBids = orders
+        .filter((o) => o.side === Side.NoBackedBid && o.priceLevel <= 100 - yesSellPrice)
+        .sort((a, b) => b.priceLevel - a.priceLevel);
+      // Combined, sorted by best price first (highest bid)
+      matchable = [...usdcBids, ...noBids].sort((a, b) => b.priceLevel - a.priceLevel);
     }
 
     // Group by price level
@@ -360,11 +371,34 @@ export function OrderModal({
 
     setError(null);
 
-    // Pre-submit balance validation
-    const needsUsdc = isBuy;
-    if (needsUsdc && usdcBalance !== null && totalCostUSDC > usdcBalance) {
-      setError(`Insufficient USDC. You have $${usdcBalance.toFixed(2)} but need $${totalCostUSDC.toFixed(2)}. Use the faucet to get test funds.`);
+    // Pre-submit balance validation — include strike creation fee for new markets
+    const creationFeeUsdc = (isNewMarket && config && !config.admin.equals(publicKey))
+      ? Number(config.strikeCreationFee) / USDC_LAMPORTS
+      : 0;
+    const totalUsdcNeeded = (isBuy ? totalCostUSDC : 0) + creationFeeUsdc;
+    if (totalUsdcNeeded > 0 && usdcBalance !== null && totalUsdcNeeded > usdcBalance) {
+      const breakdown = creationFeeUsdc > 0
+        ? ` ($${totalCostUSDC.toFixed(2)} order + $${creationFeeUsdc.toFixed(2)} market creation fee)`
+        : "";
+      setError(`Insufficient USDC. You have $${usdcBalance.toFixed(2)} but need $${totalUsdcNeeded.toFixed(2)}${breakdown}. Use the faucet to get test funds.`);
       return;
+    }
+    // Seller-side: check token inventory
+    if (activeSide === "sell-yes" && marketPubkey) {
+      const pos = positions.find((p) => p.market.publicKey.toBase58() === marketPubkey.toBase58());
+      const yesBal = pos ? Number(pos.yesBal) / USDC_LAMPORTS : 0;
+      if (yesBal < quantityNum) {
+        setError(`Insufficient Yes tokens. You hold ${yesBal.toFixed(0)} but want to sell ${quantityNum}.`);
+        return;
+      }
+    }
+    if (activeSide === "sell-no" && marketPubkey) {
+      const pos = positions.find((p) => p.market.publicKey.toBase58() === marketPubkey.toBase58());
+      const noBal = pos ? Number(pos.noBal) / USDC_LAMPORTS : 0;
+      if (noBal < quantityNum) {
+        setError(`Insufficient No tokens. You hold ${noBal.toFixed(0)} but want to sell ${quantityNum}.`);
+        return;
+      }
     }
     const minSol = marketPubkey ? 0.01 : 0.05; // new market needs more SOL for rent
     if (solBalance !== null && solBalance < minSol) {
@@ -553,7 +587,7 @@ export function OrderModal({
             />
           </div>
 
-          {/* Order type toggle */}
+          {/* Order type toggle — disabled for new markets (no resting liquidity to fill) */}
           <div className="flex gap-1 bg-white/5 rounded-lg p-1">
             <button
               onClick={() => setOrderType("limit")}
@@ -566,12 +600,16 @@ export function OrderModal({
               Limit
             </button>
             <button
-              onClick={() => setOrderType("market")}
+              onClick={() => !isNewMarket && setOrderType("market")}
+              disabled={isNewMarket}
               className={`flex-1 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                orderType === "market"
-                  ? "bg-white/10 text-white"
-                  : "text-white/40 hover:text-white/60"
+                isNewMarket
+                  ? "text-white/20 cursor-not-allowed"
+                  : orderType === "market"
+                    ? "bg-white/10 text-white"
+                    : "text-white/40 hover:text-white/60"
               }`}
+              title={isNewMarket ? "New strikes require limit orders — no resting liquidity to fill" : undefined}
             >
               Market
             </button>
@@ -580,6 +618,7 @@ export function OrderModal({
           {/* Payoff explanation — uses PayoffDisplay component for all sides */}
           <PayoffDisplay
             side={isYesSide ? "yes" : "no"}
+            action={isBuy ? "buy" : "sell"}
             price={displayPrice}
             ticker={ticker}
             strikePrice={strikePrice}

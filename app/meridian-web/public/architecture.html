@@ -1,0 +1,2244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Meridian Full Architecture Summary</title>
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --panel: #111111;
+      --panel-2: #171717;
+      --text: #ededed;
+      --muted: #a1a1a1;
+      --accent: #3b82f6;
+      --accent-2: #a855f7;
+      --good: #22c55e;
+      --warn: #f59e0b;
+      --border: rgba(255, 255, 255, 0.10);
+      --shadow: 0 14px 40px rgba(0, 0, 0, 0.4);
+      --mono: "SFMono-Regular", "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+      --sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--text);
+      background: var(--bg);
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(59,130,246,0.08), transparent 70%),
+        radial-gradient(ellipse 60% 40% at 80% -10%, rgba(168,85,247,0.05), transparent 60%),
+        radial-gradient(ellipse 60% 40% at 20% -10%, rgba(34,197,94,0.05), transparent 60%);
+      background-attachment: fixed;
+      line-height: 1.6;
+    }
+
+    a { color: #60a5fa; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .page {
+      max-width: 1260px;
+      margin: 0 auto;
+      padding: 40px 24px 80px;
+    }
+
+    .hero {
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(168, 85, 247, 0.08));
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 36px;
+      box-shadow: var(--shadow);
+      margin-bottom: 24px;
+    }
+
+    .eyebrow {
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.5);
+      margin-bottom: 10px;
+    }
+
+    h1, h2, h3, h4 {
+      line-height: 1.2;
+      margin: 0 0 12px;
+    }
+
+    h1 {
+      font-size: 42px;
+      margin-bottom: 14px;
+    }
+
+    h2 {
+      font-size: 28px;
+      margin-top: 0;
+    }
+
+    h3 {
+      font-size: 21px;
+      color: #ededed;
+      margin-top: 28px;
+    }
+
+    /* Prevent h3 top-margin from collapsing into preceding grid/table/card */
+    .grid + h3,
+    .table-wrap + h3,
+    .callout + h3,
+    pre + h3,
+    .card + h3 {
+      margin-top: 32px;
+    }
+
+    /* First h3 inside a panel needs no extra top margin */
+    h2 + h3 {
+      margin-top: 18px;
+    }
+
+    h4 {
+      font-size: 17px;
+      color: #d4d4d4;
+    }
+
+    p, li { color: var(--muted); }
+
+    .hero p {
+      max-width: 980px;
+      font-size: 16px;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .pill {
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      background: rgba(255, 255, 255, 0.05);
+      color: #d4d4d4;
+      font-size: 13px;
+    }
+
+    .toc,
+    .panel,
+    .diagram,
+    .callout,
+    .table-wrap {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      box-shadow: var(--shadow);
+    }
+
+    .toc {
+      padding: 24px 28px;
+      margin-bottom: 24px;
+    }
+
+    .toc-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 10px 20px;
+    }
+
+    .toc a {
+      display: block;
+      padding: 6px 0;
+    }
+
+    .section {
+      margin-top: 28px;
+    }
+
+    .panel {
+      padding: 26px 28px;
+      margin-bottom: 24px;
+    }
+
+    .grid {
+      display: grid;
+      gap: 18px;
+      margin-bottom: 24px;
+    }
+
+    .grid-2 { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+
+    .card {
+      background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 18px;
+      padding: 18px;
+      overflow: hidden;
+    }
+
+    .card code {
+      word-break: break-all;
+    }
+
+    .card h4 { margin-bottom: 8px; margin-top: 0; }
+
+    .diagram {
+      padding: 22px;
+      margin-bottom: 24px;
+      overflow: auto;
+    }
+
+    .diagram > p,
+    .diagram > .callout {
+      padding-left: 6px;
+      padding-right: 6px;
+    }
+
+    .callout {
+      padding: 18px 20px;
+      margin: 18px 0;
+      border-left: 4px solid var(--accent);
+    }
+
+    .callout.warn { border-left-color: var(--warn); }
+    .callout.good { border-left-color: var(--good); }
+
+    code, pre {
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+
+    code {
+      background: rgba(255,255,255,0.07);
+      color: #e5e5e5;
+      border-radius: 6px;
+      padding: 2px 6px;
+    }
+
+    pre {
+      white-space: pre-wrap;
+      background: rgba(0, 0, 0, 0.4);
+      color: #d4d4d4;
+      border-radius: 16px;
+      padding: 16px;
+      border: 1px solid rgba(255,255,255,0.08);
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 720px;
+    }
+
+    th, td {
+      text-align: left;
+      vertical-align: top;
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      color: var(--muted);
+    }
+
+    th {
+      color: #ededed;
+      background: rgba(255,255,255,0.04);
+    }
+
+    .table-wrap {
+      overflow: auto;
+      padding: 0;
+      margin-bottom: 24px;
+    }
+
+    .kpi {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 14px;
+      margin-top: 22px;
+    }
+
+    .kpi .card strong {
+      display: block;
+      font-size: 28px;
+      color: #fff;
+      margin-bottom: 6px;
+    }
+
+    .small {
+      font-size: 13px;
+      color: #a1a1a1;
+    }
+
+    .list-tight li { margin-bottom: 6px; }
+
+    .mermaid {
+      min-width: 0;
+    }
+
+    /* Inline diagrams: fit container width */
+    .mermaid svg {
+      width: 100% !important;
+      height: auto !important;
+      max-width: 100% !important;
+    }
+
+    /* Zoomable diagram — click to expand in-place */
+    .diagram-zoomable {
+      cursor: zoom-in;
+      position: relative;
+      transition: none;
+    }
+    .diagram-zoomable::after {
+      content: "Click to expand";
+      position: absolute;
+      top: 10px;
+      right: 14px;
+      font-size: 11px;
+      color: rgba(255,255,255,0.35);
+      background: rgba(0,0,0,0.4);
+      padding: 3px 10px;
+      border-radius: 8px;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    /* Expanded state: the diagram becomes its own fullscreen overlay */
+    .diagram-zoomable.expanded {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: rgba(5,5,5,0.95);
+      cursor: zoom-out;
+      overflow: auto;
+      padding: 60px 40px 100px;
+      margin: 0;
+      border-radius: 0;
+      border: none;
+      box-shadow: none;
+    }
+    .diagram-zoomable.expanded::after {
+      content: "Click anywhere or press Esc to close";
+      position: fixed;
+      top: 16px;
+      right: 20px;
+      font-size: 12px;
+      color: rgba(255,255,255,0.5);
+      background: rgba(0,0,0,0.7);
+      padding: 6px 14px;
+      border-radius: 10px;
+      z-index: 10001;
+    }
+    /* When expanded, let SVG render at natural size */
+    .diagram-zoomable.expanded .mermaid svg {
+      width: auto !important;
+      max-width: none !important;
+    }
+    /* Hide non-chart children (h2, callouts) when expanded */
+    .diagram-zoomable.expanded > h2,
+    .diagram-zoomable.expanded > .callout,
+    .diagram-zoomable.expanded > .panel {
+      display: none;
+    }
+
+    .footer {
+      margin-top: 30px;
+      padding: 18px 0 0;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      color: #a1a1a1;
+      font-size: 14px;
+    }
+
+    /* Gradient text — matches main app .text-gradient */
+    .text-gradient {
+      background: linear-gradient(135deg, #22c55e 0%, #3b82f6 50%, #a855f7 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    /* Subtle gradient accents on key panels */
+    .hero {
+      position: relative;
+    }
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: 24px;
+      background: linear-gradient(135deg, rgba(34,197,94,0.04), rgba(59,130,246,0.06), rgba(168,85,247,0.04));
+      pointer-events: none;
+    }
+
+    /* Card accent borders — matches main app */
+    .card-accent-green { border-left: 2px solid rgba(34, 197, 94, 0.4); }
+    .card-accent-blue { border-left: 2px solid rgba(59, 130, 246, 0.4); }
+    .card-accent-purple { border-left: 2px solid rgba(168, 85, 247, 0.4); }
+    .card-accent-amber { border-left: 2px solid rgba(245, 158, 11, 0.4); }
+
+    /* Subtle glow on hero and BLUF */
+    .card-glow {
+      box-shadow: 0 0 40px -10px rgba(59, 130, 246, 0.15), 0 0 20px -10px rgba(168, 85, 247, 0.1);
+    }
+
+    @media (max-width: 760px) {
+      .page { padding: 22px 14px 56px; }
+      .hero, .panel, .diagram, .toc { padding: 18px; }
+      h1 { font-size: 32px; }
+      h2 { font-size: 24px; }
+      .mermaid { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <!-- ================================================================== -->
+    <!-- BLUF — Bottom Line Up Front                                        -->
+    <!-- ================================================================== -->
+    <div class="panel card-glow" style="border-left: 4px solid var(--accent); margin-bottom: 24px;">
+      <h2 style="margin-bottom: 16px;">BLUF — What Meridian Is in 60 Seconds</h2>
+      <p style="font-size: 15px; color: var(--text); margin-bottom: 14px;">
+        Meridian is a <strong>same-day binary stock outcome market</strong> on Solana.
+        Pick a stock, pick a strike price, bet Yes or No on whether it closes at or above that strike by 4 PM ET.
+        Winners get <strong>$1 per contract</strong>. Losers get nothing.
+      </p>
+
+      <div class="grid grid-2" style="margin-bottom: 18px;">
+        <div class="card">
+          <h4>How It Works</h4>
+          <ol class="list-tight" style="padding-left: 18px;">
+            <li><strong>Morning:</strong> Markets are auto-created for MAG7 stocks with vol-based strike ladders.</li>
+            <li><strong>During the day:</strong> Users trade Yes/No contracts through a single on-chain order book. An AMM bot seeds liquidity.</li>
+            <li><strong>4 PM ET:</strong> Oracle writes the closing price on-chain. The program settles every market, cranks out resting orders, auto-redeems winners, closes accounts, and creates tomorrow's markets.</li>
+          </ol>
+        </div>
+        <div class="card">
+          <h4>Key Design Choices</h4>
+          <ul class="list-tight">
+            <li><strong>One order book, three sides:</strong> Buy Yes (USDC bid), Sell Yes (Yes ask), Sell No (No-backed bid). Buy No is synthesized as mint_pair + sell_yes.</li>
+            <li><strong>$1 invariant:</strong> Every Yes + No pair is backed by exactly $1 USDC. When a Yes seller meets a No seller, the pair burns and releases $1.</li>
+            <li><strong>Fully autonomous lifecycle:</strong> Settlement, redemption, cleanup, and next-day creation are all handled by one service with no manual intervention.</li>
+            <li><strong>Frontend talks directly to the chain:</strong> No backend API for trading. The wallet builds versioned transactions with ALT compression.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="grid grid-3" style="margin-bottom: 0;">
+        <div class="card" style="text-align: center;">
+          <strong style="display: block; font-size: 24px; color: #fff;">2 Programs</strong>
+          <span style="font-size: 12px; color: var(--muted);">meridian (trading) + mock_oracle (prices)</span>
+        </div>
+        <div class="card" style="text-align: center;">
+          <strong style="display: block; font-size: 24px; color: #fff;">7 Services</strong>
+          <span style="font-size: 12px; color: var(--muted);">oracle, settlement, initializer, AMM, indexer, monitor, scheduler</span>
+        </div>
+        <div class="card" style="text-align: center;">
+          <strong style="display: block; font-size: 24px; color: #fff;">167 Tests</strong>
+          <span style="font-size: 12px; color: var(--muted);">on-chain (bankrun) + frontend + E2E stress test</span>
+        </div>
+      </div>
+    </div>
+
+    <header class="hero">
+      <div class="eyebrow">Meridian / Peak6 / Architecture Report</div>
+      <h1 class="text-gradient">Full Architecture Summary</h1>
+      <p>
+        This document is a code-grounded architecture summary of the Meridian monorepo after a fresh project reindex.
+        Meridian is a Solana-based 0DTE binary stock outcome market system: each market asks whether a stock closes at
+        or above a strike that day, users trade <code>Yes</code> and <code>No</code> exposure through one on-chain order book,
+        and markets settle against an on-chain oracle-fed close price with automated cleanup, redemption, and next-day
+        market creation.
+      </p>
+      <p>
+        The most important architectural choice is the single-book, three-side market model. Rather than maintaining
+        separate Yes and No books, Meridian stores one on-chain order book and represents all user-facing flows through
+        three raw sides: <code>USDC bid</code> for Buy Yes, <code>Yes ask</code> for Sell Yes, and <code>No-backed bid</code>
+        for Sell No. Buy No is synthesized client-side as an atomic <code>mint_pair + sell_yes</code> flow.
+      </p>
+      <div class="meta">
+        <span class="pill">Reindexed: 2026-03-16</span>
+        <span class="pill">GitNexus graph: 2,436 nodes / 5,400 edges / 134 flows</span>
+        <span class="pill">Runtime shape: Next.js + Solana programs + TS services</span>
+        <span class="pill">Primary chain model: Anchor programs on Solana</span>
+      </div>
+      <div class="kpi">
+        <div class="card">
+          <strong>2</strong>
+          On-chain programs: <code>meridian</code> and <code>mock_oracle</code>
+        </div>
+        <div class="card">
+          <strong>7</strong>
+          Core service areas around trading, indexing, initialization, monitoring, and automation
+        </div>
+        <div class="card">
+          <strong>1</strong>
+          Canonical on-chain order book per strike market
+        </div>
+        <div class="card">
+          <strong>3</strong>
+          Raw order sides representing all four end-user trade intents
+        </div>
+      </div>
+    </header>
+
+    <nav class="toc">
+      <h2>Contents</h2>
+      <div class="toc-grid">
+        <a href="#executive-summary">1. Executive Summary</a>
+        <a href="#repo-structure">2. Repository Structure</a>
+        <a href="#critical-systems">3. Critical Systems</a>
+        <a href="#dataflows">4. System Dataflows</a>
+        <a href="#orderbook-core">5. Order Book Core Model</a>
+        <a href="#three-sides">6. The Three Sides</a>
+        <a href="#full-order-flow">7. Full Order Flow</a>
+        <a href="#blockchain-state">8. Blockchain State and Invariants</a>
+        <a href="#onchain-reference">9. On-Chain Technical Reference</a>
+        <a href="#admin-controls">10. Admin Controls</a>
+        <a href="#fee-treasury">11. Fee and Treasury Architecture</a>
+        <a href="#automation">12. Automations and Daily Operations</a>
+        <a href="#service-internals">13. Service Internals</a>
+        <a href="#settlement-open">14. End-of-Day Settlement and Opening Markets</a>
+        <a href="#frontend-arch">15. Frontend Architecture</a>
+        <a href="#synthetic-testing">16. Synthetic Mode and Testing</a>
+        <a href="#risks">17. Operational Notes and Risks</a>
+        <a href="#key-files">18. Key Files</a>
+        <a href="#glossary">Appendix: Glossary</a>
+      </div>
+    </nav>
+
+    <section id="executive-summary" class="section">
+      <div class="panel">
+        <h2>1. Executive Summary</h2>
+        <p>
+          Meridian is best understood as three cooperating planes. The <strong>on-chain plane</strong> is authoritative:
+          the <code>meridian</code> program owns market state, token mints, vaults, escrows, settlement flags, fees, pause
+          state, and the sparse custom order book. The <strong>off-chain operations plane</strong> keeps the protocol alive:
+          services feed stock prices on-chain, initialize fresh daily strike markets, settle expired markets, index events,
+          seed liquidity, and monitor health. The <strong>frontend plane</strong> is a direct wallet-first client: it reads
+          chain state directly, constructs versioned Solana transactions itself, and uses backend HTTP only for analytics,
+          proxies, and convenience routes.
+        </p>
+        <p>
+          The protocol is not a traditional order book with a separate No market. It uses a unified market topology where
+          Yes and No are complements around a hard <code>$1</code> invariant. A Yes + No pair is always backed by exactly
+          <code>$1 USDC</code> in the market vault. That invariant makes the merge/burn path possible: when a Yes seller
+          and a No seller meet, the engine can burn one Yes and one No and release the underlying dollar from the vault,
+          splitting it between the two sellers according to execution price.
+        </p>
+        <div class="callout good">
+          <strong>Key architectural conclusion:</strong> the order book is not just a matching surface. It is tightly coupled
+          to escrow routing, vault accounting, mint supply conservation, settlement automation, and the frontend’s user-intent
+          abstraction. Most of Meridian’s complexity comes from preserving those invariants while still making all four trading
+          actions feel simple.
+        </div>
+      </div>
+    </section>
+
+    <section id="repo-structure" class="section">
+      <div class="panel">
+        <h2>2. Repository Structure</h2>
+        <div class="grid grid-3">
+          <div class="card">
+            <h3>Programs</h3>
+            <p><code>programs/meridian</code> is the main trading engine. <code>programs/mock-oracle</code> stores on-chain price feeds.</p>
+          </div>
+          <div class="card">
+            <h3>Frontend</h3>
+            <p><code>app/meridian-web</code> is the Next.js client with wallet integration, market views, trade flows, admin UI, and analytics.</p>
+          </div>
+          <div class="card">
+            <h3>Services</h3>
+            <p><code>services/*</code> contains operational daemons and one-shot jobs for oracle updates, settlement, initialization, automation, indexing, monitoring, and market making.</p>
+          </div>
+          <div class="card">
+            <h3>Scripts</h3>
+            <p><code>scripts/</code> bootstraps local/devnet environments, creates config and feeds, runs demos, and validates the stack.</p>
+          </div>
+          <div class="card">
+            <h3>Tests</h3>
+            <p><code>tests/</code> plus colocated frontend/service tests cover order placement, settlement, oracle behavior, admin flows, and UI transforms.</p>
+          </div>
+          <div class="card">
+            <h3>Docs</h3>
+            <p><code>docs/ORDER_BOOK.md</code> is the canonical design reference for the market model; <code>README.md</code> and <code>docs/DEV_LOG.md</code> explain lifecycle and design decisions.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="critical-systems" class="section">
+      <div class="panel">
+        <h2>3. Critical Systems</h2>
+        <div class="grid grid-2">
+          <div class="card">
+            <h3>Frontend Trading Client</h3>
+            <p>
+              The frontend is not a thin shell over an API. It derives PDAs, reads Anchor accounts, deserializes raw order-book
+              bytes, loads ALTs, and builds versioned transactions directly against the program. This makes wallet UX first-class
+              and keeps execution trust-minimized.
+            </p>
+            <p class="small">
+              Key files: <code>app/meridian-web/src/hooks/useAnchorProgram.ts</code>,
+              <code>app/meridian-web/src/hooks/useMarkets.ts</code>,
+              <code>app/meridian-web/src/hooks/usePlaceOrder.ts</code>,
+              <code>app/meridian-web/src/lib/orderbook.ts</code>
+            </p>
+          </div>
+          <div class="card">
+            <h3>Meridian On-Chain Program</h3>
+            <p>
+              The <code>meridian</code> program owns the market lifecycle from config initialization to pair minting, order matching,
+              fee charging, settlement, redemption, crank cleanup, pause controls, and closure. Every economically meaningful state
+              transition is encoded here.
+            </p>
+            <p class="small">
+              Key file: <code>programs/meridian/src/lib.rs</code>
+            </p>
+          </div>
+          <div class="card">
+            <h3>Mock Oracle Program</h3>
+            <p>
+              The oracle program stores price feeds as on-chain accounts. Off-chain feeders write prices in, and the normal
+              <code>settle_market</code> path reads them back on-chain. The overall settlement pipeline can still fall back to
+              admin-mediated settlement from last-known external prices if confirmation times out, so the oracle-backed path is
+              the primary path rather than the only path.
+            </p>
+            <p class="small">
+              Key files: <code>programs/mock-oracle/src/lib.rs</code>,
+              <code>programs/mock-oracle/src/state/price_feed.rs</code>
+            </p>
+          </div>
+          <div class="card">
+            <h3>Settlement Pipeline</h3>
+            <p>
+              The settlement service is the operational heart of the system. It detects expired unsettled markets, confirms prices,
+              updates the oracle, settles, crank-cancels resting orders, auto-redeems, closes old markets, creates next-day markets,
+              and unpauses when appropriate.
+            </p>
+            <p class="small">
+              Key files: <code>services/settlement/src/index.ts</code>,
+              <code>services/settlement/src/settler.ts</code>,
+              <code>services/settlement/src/cranker.ts</code>,
+              <code>services/settlement/src/redeemer.ts</code>,
+              <code>services/settlement/src/closer.ts</code>
+            </p>
+          </div>
+          <div class="card">
+            <h3>Market Initialization</h3>
+            <p>
+              Daily markets are created per ticker and strike with full PDA wiring, mints, vaults, escrows, and an Address Lookup Table.
+              This is what turns a stock ticker and strike ladder into tradeable on-chain markets.
+            </p>
+            <p class="small">
+              Key files: <code>services/market-initializer/src/index.ts</code>,
+              <code>services/market-initializer/src/initializer.ts</code>
+            </p>
+          </div>
+          <div class="card">
+            <h3>Analytics and Event Indexing</h3>
+            <p>
+              Trading itself does not require a backend API, but portfolio history and analytics do. The event indexer listens to
+              Anchor logs, decodes emitted events, stores them in SQLite, and serves REST endpoints for fills, VWAPs, cost basis,
+              and portfolio snapshots.
+            </p>
+            <p class="small">
+              Key files: <code>services/event-indexer/src/listener.ts</code>,
+              <code>services/event-indexer/src/db.ts</code>,
+              <code>services/event-indexer/src/api.ts</code>
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="dataflows" class="section">
+      <div class="diagram diagram-zoomable" onclick="toggleDiagramExpand(this)">
+        <h2>4. System Dataflows</h2>
+        <div class="mermaid">
+flowchart TD
+    User["Trader / Admin Wallet"]
+    Yahoo["Yahoo Finance / Synthetic Data"]
+
+    subgraph Frontend["Frontend Layer"]
+      Web["Next.js Frontend<br/>wallet adapter + queries + tx builder"]
+      Proxy["Next API routes<br/>market-data + faucet proxies"]
+    end
+
+    subgraph Services["Off-Chain Services"]
+      OracleSvc["Oracle Feeder"]
+      SettleSvc["Settlement Service"]
+      InitSvc["Market Initializer"]
+      Amm["AMM Bot"]
+      Indexer["Event Indexer<br/>onLogs → SQLite → REST"]
+      AutoSvc["Automation Watchdog"]
+      Monitor["Monitor Service"]
+    end
+
+    subgraph Chain["Solana"]
+      Meridian["meridian program<br/>markets, orderbook, vaults, fees"]
+      Oracle["mock_oracle program<br/>price feeds"]
+      MeridianAccounts["StrikeMarket / OrderBook<br/>vault PDAs / token mints"]
+      OracleFeeds["PriceFeed PDAs"]
+    end
+
+    User -->|signs txs| Web
+    Web -->|reads accounts + submits txs| Meridian
+    Web -->|reads oracle| Oracle
+    Web -->|HTTP analytics| Indexer
+    Web -->|HTTP proxy| Proxy
+    Proxy -->|quotes / history| Yahoo
+
+    OracleSvc -->|fetches prices| Yahoo
+    OracleSvc -->|update_price| Oracle
+    OracleSvc -->|circuit breaker| Meridian
+
+    SettleSvc -->|confirm closes| Yahoo
+    SettleSvc -->|write closes| Oracle
+    SettleSvc -->|settle / crank / redeem / close| Meridian
+    SettleSvc -->|spawn next-day| InitSvc
+
+    InitSvc -->|create markets + ALTs| Meridian
+    Amm -->|quotes / cancels| Meridian
+    Indexer -->|listen logs| Meridian
+    AutoSvc -->|verify / fallback init| InitSvc
+    Monitor -->|health checks| Meridian
+    Monitor -->|oracle checks| Oracle
+
+    Meridian --> MeridianAccounts
+    Oracle --> OracleFeeds
+        </div>
+        <div class="callout">
+          The runtime is intentionally split: execution-critical state and matching stay on-chain; supporting services handle
+          ingestion, initialization, indexing, and lifecycle automation; the frontend stays close to the chain and uses backend
+          APIs mainly for convenience, not for trade execution.
+        </div>
+      </div>
+    </section>
+
+    <section id="orderbook-core" class="section">
+      <div class="panel">
+        <h2>5. Order Book Core Model</h2>
+        <p>
+          Meridian keeps <strong>one custom sparse order book account per strike market</strong>. The account starts with a compact
+          header and allocates price levels and slots on demand. This replaced a dense fixed-size layout and dramatically reduced
+          creation cost. The order book is sparse but still deterministic: it has a price map, per-level headers, and order slots
+          containing owner, order id, remaining quantity, side, timestamp, active flag, and rent depositor.
+        </p>
+        <div class="grid grid-2">
+          <div class="card">
+            <h3>Why a Single Book</h3>
+            <p>
+              A separate Yes book and No book would double storage, double matching complexity, and require cross-book arbitrage logic.
+              Meridian instead expresses the No side through complementary pricing and a No-backed collateral path inside the same book.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Why Sparse Allocation</h3>
+            <p>
+              Most markets are lightly populated. Sparse allocation means markets start small and grow only when a new price level
+              or slot is needed. This materially lowers rent and makes permissionless market creation feasible.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Matching Policy</h3>
+            <p>
+              Matching is strict price-time priority. Incoming bids scan asks from low to high, incoming asks scan bids from high to low,
+              and within a price level the oldest order wins. When a Yes ask sees both USDC bids and No-backed bids at the same price,
+              timestamp order decides; there is no bias toward one bid type.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Settlement Paths</h3>
+            <p>
+              There are only two fill settlement paths: a standard swap for <code>USDC bid x Yes ask</code>, and a merge/burn for
+              <code>No-backed bid x Yes ask</code>. Everything else in the trade engine ultimately reduces to those two branches.
+            </p>
+          </div>
+        </div>
+        <div class="callout good">
+          <strong>Important nuance:</strong> the engine itself is pure matching logic over raw order-book bytes. Token transfers, burns,
+          fee application, and vault accounting happen after the engine returns fills. That separation keeps matching deterministic and
+          lets the instruction layer handle asset movement safely.
+        </div>
+      </div>
+    </section>
+
+    <section id="three-sides" class="section">
+      <div class="panel">
+        <h2>6. The Three Sides</h2>
+        <p>
+          Meridian exposes four user-visible actions but stores only three raw on-chain order sides. This is the foundation of the
+          entire trading model.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Raw Side</th>
+                <th>User Intent</th>
+                <th>Collateral Escrowed</th>
+                <th>Price Meaning</th>
+                <th>Can Match With</th>
+                <th>Settlement Branch</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>0 = USDC bid</code></td>
+                <td>Buy Yes</td>
+                <td>USDC in <code>escrow_vault</code></td>
+                <td>Direct Yes price in cents</td>
+                <td><code>Yes ask</code></td>
+                <td>Standard swap</td>
+              </tr>
+              <tr>
+                <td><code>1 = Yes ask</code></td>
+                <td>Sell Yes</td>
+                <td>Yes in <code>yes_escrow</code></td>
+                <td>Direct Yes sale price in cents</td>
+                <td><code>USDC bid</code> and <code>No-backed bid</code></td>
+                <td>Swap or merge/burn</td>
+              </tr>
+              <tr>
+                <td><code>2 = No-backed bid</code></td>
+                <td>Sell No</td>
+                <td>No in <code>no_escrow</code></td>
+                <td>Stored in Yes-price terms<br/><code>sell_no(40c) => bid 60</code></td>
+                <td><code>Yes ask</code></td>
+                <td>Merge/burn</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="grid grid-3">
+          <div class="card">
+            <h3>Side 0: Buy Yes</h3>
+            <p>
+              This is a normal dollar-backed bid. The user escrows price-adjusted USDC and competes for Yes asks. When filled,
+              the buyer receives Yes and the seller receives USDC from the order escrow. The main vault is untouched because the trade
+              is a secondary-market swap, not a redemption.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Side 1: Sell Yes</h3>
+            <p>
+              This is the bridge side. A Yes seller can either sell to a bullish USDC-backed buyer or meet a No seller and trigger
+              merge/burn. Side 1 is therefore the only side that interacts with both other raw sides.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Side 2: Sell No</h3>
+            <p>
+              This is the architectural trick. A No seller is represented as a bid because they are offering complementary value against
+              Yes asks. Their No token is valid collateral because, when paired with a Yes, it releases exactly <code>$1</code> from the vault.
+            </p>
+          </div>
+        </div>
+
+        <div class="callout">
+          <strong>Buy No is not a native raw side.</strong> The frontend synthesizes it as:
+          <code>mint_pair(quantity)</code> then <code>place_order(side=1, complementary_yes_price)</code>, followed in the current
+          frontend implementation by a cleanup <code>redeem(mode=0)</code> for market orders. Economically, the user spends <code>$1</code>, sells the Yes leg,
+          and keeps the No leg at a net cost of <code>1 - yes_sale_price</code>.
+        </div>
+      </div>
+    </section>
+
+    <section id="full-order-flow" class="section">
+      <div class="diagram diagram-zoomable" onclick="toggleDiagramExpand(this)">
+        <h2>7. Full Order Flow</h2>
+        <div class="mermaid">
+flowchart TD
+    A["User selects action<br/>Buy Yes / Sell Yes / Buy No / Sell No"] --> B["Frontend loads market + raw orderbook"]
+    B --> C["Frontend maps intent to raw side(s)<br/>and computes maker ATAs"]
+
+    C --> D{"Intent type"}
+    D -->|Buy Yes| E["place_order(side=0)"]
+    D -->|Sell Yes| F["place_order(side=1)"]
+    D -->|Sell No| G["place_order(side=2)"]
+    D -->|Buy No| H["mint_pair -> place_order(side=1)<br/>market orders append pair-burn cleanup"]
+
+    E --> I["Escrow USDC"]
+    F --> J["Escrow Yes"]
+    G --> K["Escrow No"]
+    H --> L["Mint Yes+No into wallet, then escrow Yes leg"]
+
+    I --> M["On-chain matching engine"]
+    J --> M
+    K --> M
+    L --> M
+
+    M --> N{"Matched against maker?"}
+    N -->|USDC bid x Yes ask| O["Standard swap<br/>Yes -> buyer, USDC -> seller"]
+    N -->|No-backed bid x Yes ask| P["Merge/burn<br/>burn Yes+No, release $1 from vault"]
+    N -->|No match and limit| Q["Rest remaining on sparse book"]
+    N -->|No match and market| R["Refund remainder"]
+
+    O --> S["Emit FillEvent"]
+    P --> S
+    Q --> T["Order remains active until fill/cancel/crank_cancel"]
+    R --> U["Wallet state updated"]
+    S --> V["Event indexer stores fills / settlements / crank cancels"]
+
+    V --> W["Frontend analytics, portfolio, fill feed"]
+        </div>
+        <div class="panel" style="margin-top: 18px; margin-bottom: 0;">
+          <h3>7.1 Step-by-Step Lifecycle</h3>
+          <ol class="list-tight">
+            <li>The frontend loads the selected market, order book snapshot, and any market ALT so it can build a versioned transaction.</li>
+            <li>The user’s action is translated to a raw on-chain representation. Buy No becomes a composed multi-instruction transaction.</li>
+            <li>The program validates market status, side, price bounds, quantity, and position conflict rules.</li>
+            <li>Collateral is moved into the correct escrow account before matching.</li>
+            <li>The matching engine scans the opposite side using price-time priority and returns fills up to <code>max_fills</code>.</li>
+            <li>Each fill is processed as either a standard swap or a merge/burn.</li>
+            <li>Events are emitted, maker slots are decremented or deactivated, and leftover quantity either rests or refunds.</li>
+            <li>Off-chain indexing turns emitted events into portfolio history, cost basis, VWAP, and trade feed data.</li>
+          </ol>
+        </div>
+
+        <div class="panel" style="margin-top: 18px; margin-bottom: 0;">
+          <h3>7.2 The Full Order Flow for Each of the Three Raw Sides</h3>
+          <div class="grid grid-3">
+            <div class="card">
+              <h4>Side 0 Flow: Buy Yes</h4>
+              <p>
+                The wallet submits <code>place_order(0, price, qty)</code>. USDC is escrowed into
+                <code>escrow_vault</code>. The engine scans Yes asks from cheapest upward. If matched, the Yes seller receives
+                USDC from escrow and the buyer receives Yes. If partially matched and the order is a limit order, the unfilled
+                remainder rests on-book backed by the remaining escrow. If it is a market order, unused USDC returns to the user.
+              </p>
+            </div>
+            <div class="card">
+              <h4>Side 1 Flow: Sell Yes</h4>
+              <p>
+                The wallet submits <code>place_order(1, price, qty)</code> or the frontend synthesizes Buy No through this side.
+                Yes moves into <code>yes_escrow</code>. The engine scans the combined bid world: direct USDC bids and No-backed bids.
+                Against a USDC bid, the fill is a normal trade. Against a No-backed bid, the fill becomes merge/burn and the main vault
+                releases the dollar locked behind the pair.
+              </p>
+            </div>
+            <div class="card">
+              <h4>Side 2 Flow: Sell No</h4>
+              <p>
+                The wallet submits <code>place_order(2, inverted_yes_price, qty)</code>. No moves into
+                <code>no_escrow</code>. The engine scans Yes asks up to the complementary max price. On fill, the program burns the
+                matched Yes and No tokens and releases exactly <code>$1</code> per pair from <code>usdc_vault</code>, splitting
+                proceeds between the Yes seller and the No seller.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-top: 18px; margin-bottom: 0;">
+          <h3>7.3 Buy No, Sell No, and Cross-Seller Completion</h3>
+          <p>
+            The deepest part of the design is that <strong>three-sided matching completes the full user trade space</strong>. Buy Yes
+            and Sell Yes are obvious. Sell No becomes native through side 2. Buy No is then achieved by minting a complete pair and
+            immediately selling the Yes leg into the book. This yields all four user actions without needing a second order book.
+          </p>
+          <p>
+            It also allows a non-obvious but important emergent behavior: a Yes seller and a No seller can complete a trade with no
+            external buyer. Their complementary positions meet inside the matching engine, burn against each other, and unlock the dollar
+            in the vault. This is why the order book is not merely “a Yes-vs-USDC CLOB”; it is really a complete-set netting engine
+            expressed through a CLOB interface.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section id="blockchain-state" class="section">
+      <div class="panel">
+        <h2>8. Blockchain State and Invariants</h2>
+        <div class="grid grid-2">
+          <div class="card">
+            <h3>Core Accounts</h3>
+            <ul class="list-tight">
+              <li><code>GlobalConfig</code>: global admin, fees, thresholds, treasuries, registry references, pause state.</li>
+              <li><code>TickerRegistry</code>: supported tickers and active/inactive state.</li>
+              <li><code>StrikeMarket</code>: one market per ticker/strike/day with vault and escrow addresses, oracle feed, settlement flags, counters, and ALT.</li>
+              <li><code>OrderBook</code>: sparse raw book storage for active orders.</li>
+              <li><code>PriceFeed</code>: on-chain oracle record per ticker.</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Market Asset Topology</h3>
+            <ul class="list-tight">
+              <li><code>yes_mint</code> and <code>no_mint</code>: complementary outcome tokens.</li>
+              <li><code>usdc_vault</code>: mint collateral backing all unreedeemed pairs.</li>
+              <li><code>escrow_vault</code>: active USDC collateral for side 0 bids.</li>
+              <li><code>yes_escrow</code>: active Yes collateral for side 1 asks.</li>
+              <li><code>no_escrow</code>: active No collateral for side 2 bids.</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Invariant</th>
+                <th>Meaning</th>
+                <th>Why It Matters</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>usdc_vault = (total_minted - total_redeemed) * $1</code></td>
+                <td>Every live Yes+No pair has one dollar behind it.</td>
+                <td>Guarantees redemption and merge/burn payouts remain solvent.</td>
+              </tr>
+              <tr>
+                <td><code>yes_supply = no_supply</code></td>
+                <td>Complementary token supply always stays equal.</td>
+                <td>Prevents one-sided token creation or destructive accounting drift.</td>
+              </tr>
+              <tr>
+                <td>Escrow balances equal active book obligations</td>
+                <td>Each escrow account reflects exactly the collateral behind open orders of that side.</td>
+                <td>Ensures cancel and fill logic can always return or settle assets correctly.</td>
+              </tr>
+              <tr>
+                <td>Merge/burn payout conservation</td>
+                <td>Yes seller payout + No seller payout = <code>$1</code> per burned pair.</td>
+                <td>Preserves the complete-set identity during direct seller-to-seller completion.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout warn">
+          The vault invariant is the protocol’s economic anchor. Trading escrows are deliberately separated from the main vault so
+          normal order-book activity never muddies the accounting of minted collateral versus redeemed collateral.
+        </div>
+      </div>
+    </section>
+
+    <section id="onchain-reference" class="section">
+      <div class="panel">
+        <h2>9. On-Chain Technical Reference</h2>
+
+        <h3>9.1 Program IDs and Toolchain</h3>
+        <div class="grid grid-2">
+          <div class="card">
+            <h4>Meridian Program</h4>
+            <p><code>G5zZw1GMzqwjfbRMjTi2qUXDwoUwLw83hjEuwLfVCZvy</code></p>
+            <p class="small">Anchor 0.31.1, Rust edition 2021, bytemuck 1.14. Features: init-if-needed, stress-test (for shorter delays in tests).</p>
+          </div>
+          <div class="card">
+            <h4>Mock Oracle Program</h4>
+            <p><code>Az6BVaQwfoSqDyyn3TyvgfavoVKN4Qm8wLbMWm5EceFC</code></p>
+            <p class="small">Anchor 0.31.1. Designed to be swappable for Pyth on mainnet. The meridian program validates oracle_type and dispatches accordingly.</p>
+          </div>
+        </div>
+
+        <h3>9.2 PDA Seeds</h3>
+        <p>Every on-chain account is derived deterministically from these seeds. The program ID is always the Meridian program unless noted.</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Account</th><th>Seeds</th><th>Notes</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>GlobalConfig</code></td><td><code>["config"]</code></td><td>Singleton, created once</td></tr>
+              <tr><td><code>TickerRegistry</code></td><td><code>["tickers"]</code></td><td>Singleton, dynamic size via realloc</td></tr>
+              <tr><td><code>USDC Treasury</code></td><td><code>["treasury"]</code></td><td>SPL token account, authority = config PDA</td></tr>
+              <tr><td><code>Fee Vault</code></td><td><code>["fee_vault"]</code></td><td>SPL token account, authority = config PDA</td></tr>
+              <tr><td><code>SOL Treasury</code></td><td><code>["sol_treasury"]</code></td><td>System account (0 data bytes), holds SOL for ops</td></tr>
+              <tr><td><code>StrikeMarket</code></td><td><code>["market", ticker(8), strike_price(8 LE), expiry_day(4 LE)]</code></td><td>One per ticker/strike/day. expiry_day = floor(unix / 86400)</td></tr>
+              <tr><td><code>Yes Mint</code></td><td><code>["yes_mint", market_pubkey]</code></td><td>SPL mint, authority = market PDA, 6 decimals</td></tr>
+              <tr><td><code>No Mint</code></td><td><code>["no_mint", market_pubkey]</code></td><td>SPL mint, authority = market PDA, 6 decimals</td></tr>
+              <tr><td><code>USDC Vault</code></td><td><code>["vault", market_pubkey]</code></td><td>Collateral backing minted pairs ($1 per pair)</td></tr>
+              <tr><td><code>Escrow Vault</code></td><td><code>["escrow", market_pubkey]</code></td><td>USDC escrow for side 0 (Buy Yes) orders</td></tr>
+              <tr><td><code>Yes Escrow</code></td><td><code>["yes_escrow", market_pubkey]</code></td><td>Yes token escrow for side 1 (Sell Yes) orders</td></tr>
+              <tr><td><code>No Escrow</code></td><td><code>["no_escrow", market_pubkey]</code></td><td>No token escrow for side 2 (Sell No) orders</td></tr>
+              <tr><td><code>OrderBook</code></td><td><code>["order_book", market_pubkey]</code></td><td>Created inline during create_strike_market</td></tr>
+              <tr><td><code>PriceFeed</code></td><td><code>["price_feed", ticker(8)]</code></td><td>Mock oracle program ID, one per ticker</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>9.3 Account Layouts</h3>
+
+        <h4>GlobalConfig (288 bytes)</h4>
+        <pre>
+Offset  Size  Field                      Type
+0       8     Anchor discriminator        [u8; 8]
+8       32    admin                       Pubkey
+40      32    usdc_mint                   Pubkey
+72      32    oracle_program              Pubkey
+104     8     staleness_threshold         u64 (default 60s)
+112     8     settlement_staleness        u64 (default 120s)
+120     8     confidence_bps              u64 (default 50 = 0.5%)
+128     1     is_paused                   bool
+129     1     oracle_type                 u8 (0=Mock, 1=Pyth)
+130     56    tickers                     [[u8; 8]; 7] (legacy MAG7)
+186     1     ticker_count                u8
+187     1     bump                        u8
+188     2     fee_bps                     u16 (max 1000 = 10%)
+190     2     _padding                    [u8; 2]
+192     8     strike_creation_fee         u64 (USDC lamports)
+200     32    pending_admin               Pubkey (default = Pubkey::default())
+232     8     operating_reserve           u64 (SOL reserve floor)
+240     8     obligations                 u64 (total USDC owed post-settlement)
+248     2     settlement_blackout_minutes u16 (0-60)
+250     6     _padding2                   [u8; 6]
+256     32    sol_treasury                Pubkey</pre>
+
+        <h4>StrikeMarket (400 bytes)</h4>
+        <pre>
+Offset  Size  Field               Type
+0       8     discriminator        [u8; 8]
+8       32    config               Pubkey
+40      32    yes_mint             Pubkey
+72      32    no_mint              Pubkey
+104     32    usdc_vault           Pubkey
+136     32    escrow_vault         Pubkey
+168     32    yes_escrow           Pubkey
+200     32    no_escrow            Pubkey
+232     32    order_book           Pubkey
+264     32    oracle_feed          Pubkey
+296     8     strike_price         u64 (USDC lamports)
+304     8     market_close_unix    i64 (4 PM ET)
+312     8     total_minted         u64
+320     8     total_redeemed       u64
+328     8     settlement_price     u64 (0 if unsettled)
+336     8     previous_close       u64 (reference price)
+344     8     settled_at           i64 (0 if unsettled)
+352     8     override_deadline    i64 (settled_at + override_window)
+360     32    alt_address          Pubkey (set post-creation)
+392     8     ticker               [u8; 8]
+400     1     is_settled           bool
+401     1     outcome              u8 (0=unsettled, 1=YesWins, 2=NoWins)
+402     1     override_count       u8 (max 3)
+403     1     bump                 u8</pre>
+
+        <h4>Sparse OrderBook (270-byte header + dynamic levels)</h4>
+        <pre>
+HEADER (270 bytes):
+Offset  Size  Field           Type
+0       8     discriminator    [u8; 8] (SHA256("account:OrderBook")[..8])
+8       32    market           Pubkey
+40      8     next_order_id    u64 (monotonic counter)
+48      198   price_map        [u16; 99] (byte offsets, 0xFFFF = unallocated)
+246     1     level_count      u8 (active price levels)
+247     1     max_levels       u8 (total allocated)
+248     1     bump             u8
+249     21    reserved         [u8; 21]
+
+PRICE LEVEL (8-byte header + N × 112-byte slots):
+Offset  Size  Field           Type
++0      1     price            u8 (1-99)
++1      1     active_count     u8
++2      1     slot_count       u8 (grows by 1 on demand via realloc)
++3      5     padding          [u8; 5]
++8      112×N order_slots      OrderSlot[]
+
+ORDER SLOT (112 bytes):
+Offset  Size  Field              Type
++0      32    owner              Pubkey
++32     8     order_id           u64
++40     8     quantity           u64 (remaining)
++48     8     original_quantity  u64
++56     1     side               u8 (0=USDC_BID, 1=YES_ASK, 2=NO_BID)
++57     7     padding            [u8; 7]
++64     8     timestamp          i64 (FIFO priority)
++72     1     is_active          u8 (bool)
++73     7     padding            [u8; 7]
++80     32    rent_depositor     Pubkey (who paid SOL rent)</pre>
+
+        <h4>PriceFeed — Mock Oracle (80 bytes)</h4>
+        <pre>
+Offset  Size  Field           Type
+0       8     discriminator    [u8; 8]
+8       8     ticker           [u8; 8]
+16      8     price            u64 (USDC lamports)
+24      8     confidence       u64 (band width)
+32      8     timestamp        i64
+40      32    authority        Pubkey
+72      1     is_initialized   bool
+73      1     bump             u8
+74      6     _padding         [u8; 6]</pre>
+
+        <h4>TickerRegistry (20 + 48 × N bytes)</h4>
+        <pre>
+Base: 8 (discriminator) + 1 (bump) + 7 (padding) + 4 (vec length) = 20 bytes
+Per entry (48 bytes):
+  8     ticker         [u8; 8]
+  1     is_active      bool
+  32    pyth_feed      Pubkey (Pubkey::default() if Mock oracle)
+  7     _padding       [u8; 7]
+
+Max entries: 256 (griefing cap). Anyone can add tickers (permissionless).</pre>
+
+        <h3>9.4 Constants</h3>
+        <div class="grid grid-3">
+          <div class="card"><h4>MAX_PRICE_LEVELS</h4><p><code>99</code> — prices 1-99 cents per share</p></div>
+          <div class="card"><h4>MIN_ORDER_SIZE</h4><p><code>1,000,000</code> lamports (1 token = $1)</p></div>
+          <div class="card"><h4>USDC_LAMPORTS_PER_DOLLAR</h4><p><code>1,000,000</code> (6 decimals)</p></div>
+          <div class="card"><h4>PRICE_TO_USDC_LAMPORTS</h4><p><code>10,000</code> — price 60 → 600,000 lamports</p></div>
+          <div class="card"><h4>CRANK_BATCH_SIZE</h4><p><code>32</code> orders per crank_cancel call</p></div>
+          <div class="card"><h4>MAX_OVERRIDES</h4><p><code>3</code> settlement overrides max</p></div>
+          <div class="card"><h4>OVERRIDE_WINDOW_SECS</h4><p><code>1</code> in the current build; docs note this should be widened for production</p></div>
+          <div class="card"><h4>ADMIN_SETTLE_DELAY</h4><p><code>300s</code> (5 min) in the current program for all oracle types</p></div>
+          <div class="card"><h4>MERGE_TOTAL_CENTS</h4><p><code>100</code> — Yes + No pair = $1.00</p></div>
+        </div>
+
+        <h3>9.5 Order Sides and Types</h3>
+        <div class="grid grid-2">
+          <div class="card">
+            <h4>Raw Sides</h4>
+            <ul class="list-tight">
+              <li><code>0 = SIDE_USDC_BID</code> — Buy Yes, escrow USDC</li>
+              <li><code>1 = SIDE_YES_ASK</code> — Sell Yes, escrow Yes tokens</li>
+              <li><code>2 = SIDE_NO_BID</code> — Sell No, escrow No tokens (No-backed bid)</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h4>Order Types and Outcomes</h4>
+            <ul class="list-tight">
+              <li><code>0 = ORDER_TYPE_MARKET</code></li>
+              <li><code>1 = ORDER_TYPE_LIMIT</code></li>
+              <li><code>0 = OUTCOME_UNSETTLED</code></li>
+              <li><code>1 = OUTCOME_YES_WINS</code></li>
+              <li><code>2 = OUTCOME_NO_WINS</code></li>
+            </ul>
+          </div>
+        </div>
+
+        <h3>9.6 Position Constraints</h3>
+        <div class="callout warn">
+          <strong>ConflictingPosition:</strong> The current program blocks the main trading entry points from entering a conflicting
+          wallet state, but it does not make the broader statement "holding both is impossible" universally true. The atomic Buy No
+          path is transient, while standalone <code>mint_pair</code> can still mint both tokens. The enforced checks are:
+          <ul class="list-tight">
+            <li>Side 0 (Buy Yes): requires <code>user_no_ata.balance == 0</code></li>
+            <li>Side 2 (Sell No): requires <code>user_yes_ata.balance == 0</code></li>
+            <li><code>mint_pair</code>: requires <code>user_yes_ata.balance == 0</code></li>
+          </ul>
+        </div>
+
+        <h3>9.7 Emitted Events</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Event</th><th>Fields</th><th>Emitted By</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>FillEvent</code></td>
+                <td>market, maker, taker: Pubkey; price: u8; quantity, fee: u64; maker_side, taker_side: u8; is_merge: bool; maker_order_id: u64; timestamp: i64</td>
+                <td><code>place_order</code> (per fill)</td>
+              </tr>
+              <tr>
+                <td><code>SettlementEvent</code></td>
+                <td>market: Pubkey; ticker: [u8; 8]; strike_price, settlement_price: u64; outcome: u8; timestamp: i64</td>
+                <td><code>settle_market</code>, <code>admin_settle</code></td>
+              </tr>
+              <tr>
+                <td><code>CrankCancelEvent</code></td>
+                <td>market: Pubkey; cancelled_count: u32</td>
+                <td><code>crank_cancel</code></td>
+              </tr>
+              <tr>
+                <td><code>CrankRedeemEvent</code></td>
+                <td>market: Pubkey; redeemed_count: u32; total_usdc_redeemed: u64</td>
+                <td><code>crank_redeem</code></td>
+              </tr>
+              <tr>
+                <td><code>AutoPairBurnEvent</code></td>
+                <td>user, market: Pubkey; quantity: u64</td>
+                <td><code>redeem</code> (pair burn mode)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>9.8 Error Codes</h3>
+        <p>All codes = Rust enum variant + 6000 (Anchor offset). Hex values appear in transaction logs as <code>0x{code}</code>.</p>
+        <div class="grid grid-2">
+          <div class="card">
+            <h4>Authorization (6000-6002)</h4>
+            <ul class="list-tight">
+              <li>6000: Unauthorized — non-admin calling admin-only</li>
+              <li>6001: InvalidAuthority — oracle update from non-authority</li>
+              <li>6002: SignerMismatch</li>
+            </ul>
+            <h4>Config (6010-6016)</h4>
+            <ul class="list-tight">
+              <li>6010: ConfigAlreadyInitialized</li>
+              <li>6012: InvalidTicker</li>
+              <li>6013: InvalidMarketCloseTime</li>
+              <li>6014: InvalidStrikePrice (zero)</li>
+            </ul>
+            <h4>Market State (6020-6025)</h4>
+            <ul class="list-tight">
+              <li>6020: MarketAlreadySettled</li>
+              <li>6021: MarketNotSettled</li>
+              <li>6022: MarketPaused</li>
+              <li>6025: MarketClosed</li>
+            </ul>
+            <h4>Oracle (6040-6045)</h4>
+            <ul class="list-tight">
+              <li>6040: OracleStale</li>
+              <li>6041: OracleConfidenceTooWide</li>
+              <li>6043: OraclePriceInvalid</li>
+              <li>6044: OracleProgramMismatch</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h4>Trading (6050-6059)</h4>
+            <ul class="list-tight">
+              <li>6050: InsufficientBalance</li>
+              <li>6051: OrderBookFull</li>
+              <li>6052: InvalidPrice (not 1-99)</li>
+              <li>6053: InvalidQuantity (&lt; MIN_ORDER_SIZE)</li>
+              <li>6054: OrderNotFound</li>
+              <li>6055: OrderNotOwned</li>
+              <li>6059: ConflictingPosition</li>
+            </ul>
+            <h4>Settlement (6070-6075)</h4>
+            <ul class="list-tight">
+              <li>6070: SettlementTooEarly</li>
+              <li>6071: AdminSettleTooEarly</li>
+              <li>6072: OverrideWindowExpired</li>
+              <li>6075: MaxOverridesExceeded</li>
+            </ul>
+            <h4>Admin V2 (6150-6163)</h4>
+            <ul class="list-tight">
+              <li>6152: WithdrawalExceedsAvailable</li>
+              <li>6153: TickerAlreadyExists</li>
+              <li>6155: TickerDeactivated</li>
+              <li>6159: UnsettledMarketsExist</li>
+            </ul>
+            <h4>Sparse Book (6170-6175)</h4>
+            <ul class="list-tight">
+              <li>6172: InsufficientRentDeposit</li>
+              <li>6173: MaxLevelsReached</li>
+            </ul>
+          </div>
+        </div>
+
+        <h3>9.9 Override Window Mechanics</h3>
+        <p>
+          After settlement, the admin has a short override window to correct a bad outcome. The deadline extends
+          with each override to allow review of corrections:
+        </p>
+        <pre>
+override_deadline = settled_at + OVERRIDE_WINDOW_SECS × (override_count + 2)
+
+After 1st override:  settled_at + 2 × window
+After 2nd override:  settled_at + 3 × window
+After 3rd override:  settled_at + 4 × window  (then blocked: MaxOverridesExceeded)
+
+Redemptions blocked until: clock.unix_timestamp >= override_deadline
+Crank redeem blocked until: same condition</pre>
+
+        <h3>9.10 Crank Redeem Delegation</h3>
+        <div class="callout">
+          <strong>How auto-redemption works:</strong> During <code>mint_pair</code>, the market PDA is set as a
+          <code>delegate</code> on both the user's Yes and No ATAs. This allows <code>crank_redeem</code> to burn
+          winning tokens on behalf of users without their signature. The instruction validates that delegated_amount
+          &ge; balance and the delegate matches the market PDA. Users can always call <code>redeem</code> manually
+          without delegation.
+        </div>
+      </div>
+    </section>
+
+    <section id="admin-controls" class="section">
+      <div class="panel">
+        <h2>10. Admin Controls</h2>
+        <p>
+          The live admin UI is wallet-gated against <code>GlobalConfig.admin</code> and currently exposes three top-level tabs:
+          emergency controls, treasury and fees, and settings. The admin surface is deliberately split between operational safety,
+          financial controls, and protocol configuration.
+        </p>
+
+        <div class="grid grid-3">
+          <div class="card">
+            <h3>Emergency Controls</h3>
+            <ul class="list-tight">
+              <li><code>pause</code> / <code>unpause</code></li>
+              <li><code>circuit_breaker</code></li>
+              <li>Forced settlement panel via admin-settle flows</li>
+              <li>Used when price feeds, market state, or execution safety are suspect</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Treasury and Fees</h3>
+            <ul class="list-tight">
+              <li><code>update_fee_bps</code></li>
+              <li><code>update_strike_creation_fee</code></li>
+              <li><code>withdraw_fees</code></li>
+              <li><code>withdraw_treasury</code> subject to obligations accounting</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Settings and Governance</h3>
+            <ul class="list-tight">
+              <li><code>transfer_admin</code> and <code>accept_admin</code></li>
+              <li><code>update_config</code> for staleness thresholds, confidence bounds, reserve settings, and blackout windows</li>
+              <li>Live UI settings are focused on config and admin authority transfer; ticker lifecycle is an on-chain admin capability, not a mounted tab in the current admin page</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="callout">
+          Two important governance choices stand out in the current code. First, <code>add_ticker</code> and
+          <code>create_strike_market</code> are designed to be permissionless or fee-gated rather than strictly admin-only.
+          Second, operationally dangerous actions like pausing, forced settlement, treasury withdrawals, and ticker deactivation remain
+          admin-controlled.
+        </div>
+      </div>
+    </section>
+
+    <section id="fee-treasury" class="section">
+      <div class="panel">
+        <h2>11. Fee and Treasury Architecture</h2>
+        <p>
+          Meridian uses a three-vault financial architecture. Understanding which vault holds what, and the accounting
+          rules governing each, is critical for reasoning about solvency, withdrawal safety, and SOL rent management.
+        </p>
+
+        <div class="grid grid-3">
+          <div class="card">
+            <h3>USDC Treasury</h3>
+            <p>Seeds: <code>["treasury"]</code></p>
+            <p>Holds escrow dust swept during <code>close_market</code>. Withdrawals are hard-capped:
+              <code>available = balance - config.obligations</code>. The obligations field tracks total USDC owed
+              to winning token holders across all settled-but-not-yet-redeemed markets. This prevents the admin from
+              withdrawing funds that users are entitled to.</p>
+          </div>
+          <div class="card">
+            <h3>Fee Vault</h3>
+            <p>Seeds: <code>["fee_vault"]</code></p>
+            <p>Holds accumulated protocol trading fees. Fully withdrawable by admin via <code>withdraw_fees</code> with
+              no cap or constraint. Fees are deposited per-fill during <code>place_order</code>.</p>
+          </div>
+          <div class="card">
+            <h3>SOL Treasury</h3>
+            <p>Seeds: <code>["sol_treasury"]</code></p>
+            <p>System account (0 data bytes) that holds SOL for market creation rent reimbursement.
+              Receives rent from closed token accounts, order books, and market PDAs via <code>close_market</code>.
+              Withdrawal floor: <code>rent_exempt_minimum + operating_reserve</code>.</p>
+          </div>
+        </div>
+
+        <h3>Fee Calculation</h3>
+        <pre>
+Per fill during place_order:
+  fee = floor(gross_usdc × config.fee_bps / 10,000)
+
+In swap fills:   fee deducted from USDC transferred to maker (net = gross - fee)
+In merge fills:  fee deducted from $1 gross payout before the Yes/No split
+Fee transferred to fee_vault (config PDA signs)
+
+Max fee_bps: 1000 (10%). Set via update_fee_bps (admin-only).</pre>
+
+        <h3>Strike Creation Fee</h3>
+        <p>
+          Non-admin market creators pay <code>config.strike_creation_fee</code> in USDC, transferred from their USDC ATA
+          to the fee vault. Admin-created markets are exempt. The fee is capped at 1,000 USDC (1,000,000,000 lamports)
+          to prevent accidental bricking. Set via <code>update_strike_creation_fee</code>.
+        </p>
+
+        <h3>Market Creation Reimbursement</h3>
+        <p>
+          When the admin creates a market, the SOL rent for all 8 accounts (market PDA, 2 mints, 4 token accounts,
+          order book) is reimbursed from the SOL Treasury if funds are available:
+        </p>
+        <pre>
+available = sol_treasury.lamports - operating_reserve - rent_exempt_min
+reimburse = min(total_rent, available)
+Transfer: SOL Treasury → admin wallet</pre>
+
+        <h3>Obligations Tracking</h3>
+        <div class="callout warn">
+          When a market settles, <code>config.obligations</code> increases by <code>total_minted - total_redeemed</code>
+          (the outstanding winning token supply). Each winner redemption (manual <code>redeem</code> or <code>crank_redeem</code>)
+          decrements obligations by the redeemed amount. This counter ensures the treasury can never be drained below
+          what users are owed.
+        </div>
+      </div>
+    </section>
+
+    <section id="automation" class="section">
+      <div class="panel">
+        <h2>12. Automations and Daily Operations</h2>
+        <div class="grid grid-2">
+          <div class="card">
+            <h3>Oracle Feeder</h3>
+            <p>
+              Polls or synthesizes market prices, updates the on-chain oracle, and can trip the circuit breaker if market-state
+              anomalies appear. It is effectively the real-time bridge from stock price observation into chain-readable settlement data.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Market Initializer</h3>
+            <p>
+              Builds each day’s markets by deriving strikes, market-close timestamps, PDAs, and ALTs, then calling
+              <code>create_strike_market</code>. This is the factory for fresh tradeable contracts.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Settlement Service</h3>
+            <p>
+              Runs a reactive poller rather than a naive fixed cron. It detects expired unsettled markets, confirms close prices,
+              writes confirmed oracle values, settles, cranks, auto-redeems, closes, initializes the next session’s markets, and
+              unpauses as needed.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Automation Watchdog</h3>
+            <p>
+              The <code>automation</code> service is now a verification and fallback layer, not the primary settlement engine.
+              Its morning job checks that expected markets exist and triggers initialization only if coverage is missing.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Event Indexer</h3>
+            <p>
+              Converts Anchor log events into queryable data products for history, cost basis, PnL, VWAPs, and portfolio snapshots.
+              Trading can continue without it, but analytics and historical UX degrade.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Monitor and AMM Bot</h3>
+            <p>
+              <code>monitor</code> watches liveness, stale oracle conditions, overdue settlements, and admin balances. The AMM bot
+              seeds liquidity using quantitative pricing logic so newly created markets are tradeable immediately.
+            </p>
+          </div>
+        </div>
+        <div class="callout">
+          Not every entry under <code>services/</code> is a long-running daemon. In live mode, <code>market-initializer</code> is a
+          one-shot job that runs a single creation cycle and exits; the long-running lifecycle engine is <code>settlement</code>.
+        </div>
+      </div>
+    </section>
+
+    <section id="service-internals" class="section">
+      <div class="panel">
+        <h2>13. Service Internals</h2>
+        <p>Each service has specific polling intervals, pricing models, error handling strategies, and data schemas. This section documents the operational details that the high-level automation overview omits.</p>
+
+        <h3>13.1 Oracle Feeder</h3>
+        <div class="grid grid-2">
+          <div class="card">
+            <h4>Polling and Rate Limiting</h4>
+            <ul class="list-tight">
+              <li>Poll interval: <code>10s</code> during market hours, <code>5 min</code> when closed</li>
+              <li>Per-ticker rate limit: <code>5s</code> minimum between on-chain updates</li>
+              <li>Price conversion: <code>price × 1,000,000</code> (dollars → USDC lamports)</li>
+              <li>Confidence: <code>price × 1,000,000 × 0.001</code> (0.1% of price)</li>
+              <li>Timestamp: current <code>unix_timestamp</code> at write time</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h4>Circuit Breaker Capability</h4>
+            <ul class="list-tight">
+              <li>Monitors external market state (Yahoo <code>marketState</code> field)</li>
+              <li>If market closes before <code>market_close_unix</code>, trips <code>pause()</code> on Meridian</li>
+              <li>Handles <code>AlreadyPaused</code> (6023) gracefully</li>
+              <li>Seeds prices on startup regardless of market state</li>
+              <li>Current feeder implementation reads tickers from legacy on-chain <code>GlobalConfig.tickers</code> (or env override), even though broader market validation has moved toward <code>TickerRegistry</code></li>
+            </ul>
+          </div>
+        </div>
+
+        <h3>13.2 AMM Bot</h3>
+        <div class="grid grid-2">
+          <div class="card">
+            <h4>Pricing Model</h4>
+            <ul class="list-tight">
+              <li>Fair value: Black-Scholes binary call <code>N(d2)</code></li>
+              <li>Inputs: spot (oracle), strike, T (time to close in years), vol (30-day HV, cached 5 min), r (default 5%)</li>
+              <li>Spread: <code>spreadBps / 10000 × fairPrice</code> (default 500 bps = 5%)</li>
+              <li>Inventory skew: <code>-(inventory / maxInventory) × skewFactor × halfSpread</code></li>
+              <li>MinEdge: 1 cent between bid and ask</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h4>Execution and Safety</h4>
+            <ul class="list-tight">
+              <li>Poll interval: <code>30s</code></li>
+              <li>Per-cycle: cancel all bot orders, then place fresh bid + ask</li>
+              <li>Default quantity: <code>1,000,000</code> lamports ($1) per side</li>
+              <li>Halt conditions: <code>|inventory| > maxInventory</code> or <code>consecutiveErrors > 5</code></li>
+              <li>Skips if global pause active</li>
+              <li>Guard against overlapping polls (isPolling flag)</li>
+            </ul>
+          </div>
+        </div>
+
+        <h3>13.3 Event Indexer</h3>
+        <div class="grid grid-2">
+          <div class="card">
+            <h4>Database Schema (SQLite)</h4>
+            <pre>
+events:
+  id, type, market, data (JSON),
+  signature (unique), slot, timestamp,
+  seq, created_at
+
+checkpoints:
+  id=1 (singleton), last_signature,
+  last_slot, updated_at
+
+order_intents:
+  order_id+market+wallet (composite PK),
+  intent (buy_yes|sell_yes|buy_no|sell_no),
+  display_price (1-99), created_at</pre>
+          </div>
+          <div class="card">
+            <h4>REST API Endpoints</h4>
+            <ul class="list-tight">
+              <li><code>GET /api/events</code> — query by market, type, limit (≤500)</li>
+              <li><code>GET /api/events/latest</code> — latest 20 events</li>
+              <li><code>GET /api/events/cost-basis?wallet=</code> — per-market avg price, total qty, total cost</li>
+              <li><code>GET /api/events/market-vwaps</code> — VWAP per market</li>
+              <li><code>GET /api/events/fills?wallet=</code> — fills with viewer-perspective intent</li>
+              <li><code>GET /api/portfolio/snapshot?wallet=</code> — aggregated positions</li>
+              <li><code>GET /api/portfolio/history?wallet=&amp;days=30</code> — daily P&amp;L summaries</li>
+              <li><code>GET /api/health</code> — status, lastSlot, eventCount</li>
+              <li><code>POST /api/order-intent</code> — store user's trade intent for labeling</li>
+            </ul>
+          </div>
+        </div>
+        <div class="callout">
+          <strong>Backfill:</strong> On startup, the indexer walks backward through <code>getSignaturesForAddress</code>
+          (batches of 100, 10 parallel <code>getTransaction</code> calls) from newest to the stored checkpoint. Events are
+          parsed from Anchor program logs via base64 Borsh decoding. The live listener runs concurrently so no events are
+          missed during backfill.
+        </div>
+
+        <h3>13.4 Monitor Service</h3>
+        <p>Polls every <code>5 minutes</code> (configurable). Four health checks per cycle:</p>
+        <div class="grid grid-2">
+          <div class="card">
+            <ul class="list-tight">
+              <li><strong>Admin SOL balance:</strong> alerts if &lt; 0.1 SOL</li>
+              <li><strong>Oracle freshness:</strong> market hours only (M-F 9:30-16:00 ET), alerts if any feed &gt; 10 min stale</li>
+            </ul>
+          </div>
+          <div class="card">
+            <ul class="list-tight">
+              <li><strong>Unsettled expired markets:</strong> flags markets past close that haven't settled, logs hours overdue</li>
+              <li><strong>Closeable markets:</strong> flags settled markets &gt; 90 days old that haven't been closed</li>
+            </ul>
+          </div>
+        </div>
+
+        <h3>13.5 Settlement Service Specifics</h3>
+        <div class="grid grid-2">
+          <div class="card">
+            <h4>Detection and Confirmation</h4>
+            <ul class="list-tight">
+              <li>Poll interval: <code>60s</code></li>
+              <li>Double-confirm prices: poll twice with <code>30s</code> gap, settle once prices stabilize</li>
+              <li>Confirmation timeout: <code>30 min</code></li>
+              <li>Oracle retry for transient errors (6040 OracleStale, 6041 OracleConfidenceTooWide): up to <code>15 min</code> at <code>30s</code> intervals</li>
+              <li>Admin settle fallback: kicks in after <code>5 min</code> delay (ADMIN_SETTLE_DELAY) using last-known prices</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h4>Post-Settlement Pipeline</h4>
+            <ul class="list-tight">
+              <li>Crank cancel: batches of <code>32</code> orders, loops until book empty</li>
+              <li>Auto-redeem: <code>16 users</code> per <code>crank_redeem</code> batch (2 ATAs per user)</li>
+              <li>Close market: requires <code>yes_supply == 0 && no_supply == 0</code></li>
+              <li>Next-day init: spawns <code>market-initializer</code> as child process (<code>5 min</code> timeout)</li>
+              <li>Unpause: exponential backoff, up to <code>5 retries</code></li>
+            </ul>
+          </div>
+        </div>
+
+        <h3>13.6 Market Initializer</h3>
+        <div class="grid grid-2">
+          <div class="card">
+            <h4>Strike Selection</h4>
+            <ul class="list-tight">
+              <li><strong>Vol-aware mode:</strong> HV20 (20-day historical vol) → daily vol (÷ √252) → strikes at ±1σ, ±1.5σ, ±2σ</li>
+              <li><strong>Baseline fallback:</strong> ±3%, ±6%, ±9% + ATM (if HV20 unavailable)</li>
+              <li>Rounding: $10 increment for stocks ≥ $100, $5 for cheaper</li>
+              <li>Deduplication and sort ascending</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h4>Market Creation Flow</h4>
+            <ul class="list-tight">
+              <li>Idempotent: skips markets already on-chain</li>
+              <li>Creates all PDAs (market, 2 mints, 4 token accounts, order book)</li>
+              <li>ALT creation: <code>createLookupTable</code> + extend with 11 addresses (market accounts + TOKEN_PROGRAM + SYSTEM_PROGRAM)</li>
+              <li>DST-aware close time: 4 PM ET (or 1 PM on early-close dates, NYSE holidays hardcoded 2025-2028)</li>
+              <li><code>set_market_alt</code> called after ALT creation (one-time)</li>
+            </ul>
+          </div>
+        </div>
+
+        <h3>13.7 Automation Scheduler</h3>
+        <p>
+          <strong>Not the primary market creator.</strong> The scheduler's morning job at <code>8:30 AM ET</code> is a
+          verification-and-fallback layer. It spawns <code>verify.ts</code> to check that expected markets exist on-chain.
+          If verification fails, it spawns the full market initializer as a fallback. Under normal operation, markets are
+          created by the settlement pipeline the previous evening.
+        </p>
+        <p class="small">
+          DST handling uses <code>Intl.DateTimeFormat</code> with <code>America/New_York</code> timezone, avoiding manual
+          offset tables. The NYSE holiday list is hardcoded for 2025-2028 and must be updated annually.
+        </p>
+
+        <h3>13.8 Shared Utilities</h3>
+        <div class="grid grid-3">
+          <div class="card">
+            <h4>Pricer</h4>
+            <p>Black-Scholes N(d2) for binary options. <code>normalCdf</code> via Abramowitz &amp; Stegun approximation (error &lt; 1.5e-7). Edge cases: T=0 or σ=0 returns payoff directly.</p>
+          </div>
+          <div class="card">
+            <h4>Greeks</h4>
+            <p>Binary Δ, Γ, θ, V computed from d2 and standard normal PDF. All return 0 for degenerate inputs (T≤0, σ≤0, S≤0).</p>
+          </div>
+          <div class="card">
+            <h4>Quoter</h4>
+            <p>Two-sided quote generation with spread, inventory skew, and minEdge gap. <code>shouldHalt()</code> returns true if |inventory| exceeds max or consecutive errors exceed 5.</p>
+          </div>
+          <div class="card">
+            <h4>Volatility</h4>
+            <p>Close-to-close log returns annualized by √252. <code>historicalVolatility(bars, 30)</code> for 30-day window. <code>rollingVolatility</code> for time series.</p>
+          </div>
+          <div class="card">
+            <h4>Alerting</h4>
+            <p><code>createLogger(service)</code> with info/warn/error/critical levels. Critical and error POST to <code>ALERT_WEBHOOK_URL</code> if configured.</p>
+          </div>
+          <div class="card">
+            <h4>Market Data</h4>
+            <p><code>IMarketDataClient</code> interface with Yahoo and Synthetic implementations. Factory dispatches based on <code>MARKET_DATA_SOURCE</code> env var.</p>
+          </div>
+        </div>
+
+        <h3>13.9 Railway Deployment</h3>
+        <p>
+          All services deploy on Railway with NIXPACKS builder. Each service has its own <code>railway.toml</code>:
+          <code>npm install</code> build step, <code>npx tsx src/index.ts</code> start command, ON_FAILURE restart
+          (max 5 retries). The event indexer adds a healthcheck at <code>/api/health</code> with 120s timeout.
+        </p>
+      </div>
+    </section>
+
+    <section id="settlement-open" class="section">
+      <div class="panel">
+        <h2>14. End-of-Day Settlement and Opening Markets</h2>
+        <h3>14.1 End-of-Day Settlement Sequence</h3>
+        <ol class="list-tight">
+          <li>The settlement poller wakes every 60 seconds and scans all markets for <code>market_close_unix &lt;= now</code> while still unsettled.</li>
+          <li>It checks that the external market is actually closed. If the HTTP market-state check fails, the code proceeds cautiously but still treats on-chain time as authoritative.</li>
+          <li>It double-confirms close prices by polling twice with a 30-second gap until prices stabilize or a timeout is reached.</li>
+          <li>Confirmed close prices are written back on-chain through the <code>mock_oracle</code> program.</li>
+          <li>The service calls <code>settle_market</code> for confirmed tickers. If confirmation timed out, it can fall back to <code>admin_settle</code> using last-known prices.</li>
+          <li>Once markets are settled, the same service runs <code>crank_cancel</code> batches to refund all resting orders.</li>
+          <li>It then runs auto-redeem over winning holders where appropriate.</li>
+          <li>After the override window and supply checks allow it, it runs <code>close_market</code> to reclaim rent and sweep remaining dust paths.</li>
+        </ol>
+
+        <h3>14.2 Opening Markets / Next-Day Availability</h3>
+        <p>
+          There is no explicit on-chain <code>open_market</code> instruction. Markets are effectively open when they have been created,
+          their close timestamp is in the future, and the platform is not paused. In the current architecture, new markets are not
+          primarily created by a morning cron. Instead, the settlement pipeline spawns the market initializer after the previous day’s
+          cleanup so the next day’s markets can already exist before the next trading session.
+        </p>
+        <p>
+          The morning <code>automation</code> job is therefore a safety net, not the main path. It verifies that the expected markets
+          are present and triggers fallback creation only if the post-settlement initialization failed or was skipped.
+        </p>
+
+        <div class="callout good">
+          <strong>Operationally, Meridian “opens” by preparing future-dated markets early.</strong> The next day’s markets can be live
+          as soon as the previous day’s settlement workflow finishes and any protective pause is lifted.
+        </div>
+      </div>
+    </section>
+
+    <section id="frontend-arch" class="section">
+      <div class="panel">
+        <h2>15. Frontend Architecture</h2>
+        <p>
+          The frontend is a Next.js 14 app (<code>app/meridian-web</code>) using Tailwind CSS, React Query for server state,
+          and Solana wallet-adapter for wallet integration. It reads chain state directly, constructs versioned transactions
+          with ALT support, and uses the backend only for analytics and market data proxying.
+        </p>
+
+        <h3>15.1 Pages and Routes</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Route</th><th>Page</th><th>Purpose</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>/</code></td><td>Landing</td><td>Platform stats, "How it works", live market summary with ticker prices, CTA sections</td></tr>
+              <tr><td><code>/trade</code></td><td>Markets Grid</td><td>TickerSidebar + TickerCard grid, LiveFillTicker marquee, SyntheticControls (test mode), countdown to close</td></tr>
+              <tr><td><code>/trade/[ticker]</code></td><td>Trading Cockpit</td><td>Strike tabs, OrderTree (dual-column 99-level book), OrderModal, PriceHistory chart, HistoricalOverlay, BinaryGreeks, MyOrders, MarketInfo</td></tr>
+              <tr><td><code>/admin</code></td><td>Admin Dashboard</td><td>Wallet-gated. Tabs: Emergency Controls, Treasury &amp; Fees, Settings. Ticker management, config updates</td></tr>
+              <tr><td><code>/portfolio</code></td><td>Portfolio</td><td>Tabs: Performance (PnlTab), Positions (PositionsTab), Open Orders (OpenOrdersTab), History (TradeHistoryTab)</td></tr>
+              <tr><td><code>/history</code></td><td>Trade History</td><td>Fill history table with CSV export, EventIndexerBanner warning</td></tr>
+              <tr><td><code>/analytics</code></td><td>Analytics</td><td>Ticker selector, quote card, PriceHistory, HistoricalOverlay (return distribution), SettlementAnalytics (calibration)</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>15.2 API Routes</h3>
+        <div class="grid grid-3">
+          <div class="card">
+            <h4><code>/api/faucet/usdc</code></h4>
+            <p>POST. Rate-limited (60s per wallet). Mints 1000 USDC to user, airdrops 2 SOL if low. Guards against mainnet. Uses FAUCET_KEYPAIR or ADMIN_KEYPAIR from env.</p>
+          </div>
+          <div class="card">
+            <h4><code>/api/market-data/quotes</code></h4>
+            <p>GET. Accepts <code>symbols</code> param (comma-separated, max 20). Returns quotes via market data proxy (Yahoo or synthetic). 60s TTL cache.</p>
+          </div>
+          <div class="card">
+            <h4><code>/api/market-data/history</code></h4>
+            <p>GET. Accepts <code>symbol</code>, optional <code>start</code>/<code>end</code> (YYYY-MM-DD). Returns OHLCV daily bars via market data proxy.</p>
+          </div>
+        </div>
+
+        <h3>15.3 Key Components</h3>
+        <div class="grid grid-3">
+          <div class="card">
+            <h4>OrderTree</h4>
+            <p>Dual-column table: Yes (left, descending 99→1) vs No (right, ascending 1→99). Prices 1-99 always shown. Row click opens OrderModal. Volume bars with glow effect. Toggle between active levels and all 99.</p>
+          </div>
+          <div class="card">
+            <h4>OrderModal</h4>
+            <p>Most complex component. 4-way side toggle, position conflict warnings, sweep preview (multi-level fills), quantity input, limit/market toggle, PayoffDisplay, cost breakdown with rent estimates (~0.021 SOL). New market creation flow: builds <code>create_strike_market</code> tx, waits 1.5s, then places order.</p>
+          </div>
+          <div class="card">
+            <h4>BinaryGreeks</h4>
+            <p>Horizontal pill strip: Probability, Δ, Γ, θ, V. Black-Scholes binary option greeks computed from spot, strike, vol, time. Probability color-coded green ≥50%, red &lt;50%. Tooltips with explanations.</p>
+          </div>
+          <div class="card">
+            <h4>OraclePrice</h4>
+            <p>WebSocket subscription to price feed account. Flash animation (600ms) on price change: green (up), red (down). Session badge: Market Open/Pre-Market/After Hours/Closed. Stale warning if &gt; 10 min old.</p>
+          </div>
+          <div class="card">
+            <h4>SettlementStatus</h4>
+            <p>Lifecycle state machine: Upcoming → Live (pulsing countdown) → Settling → Override Window (pulsing, "Under Review") → Settled (outcome badge). Color-coded by phase.</p>
+          </div>
+          <div class="card">
+            <h4>RedeemPanel</h4>
+            <p>Pair burn (anytime, holding both Yes+No) and winner redemption (post-settlement, post-override). Shows value estimates and settlement status messages.</p>
+          </div>
+          <div class="card">
+            <h4>HistoricalOverlay</h4>
+            <p>Recharts histogram of daily/weekly returns with normal curve overlay. Reference lines: current price (blue), ATM strike (orange). Custom tooltip with bucket, count, theoretical normal.</p>
+          </div>
+          <div class="card">
+            <h4>LiveFillTicker</h4>
+            <p>Animated marquee of recent fills from event indexer. Format: "X Yes/No @ YYc · Ns ago". 30s scroll loop, ticks every 15s.</p>
+          </div>
+          <div class="card">
+            <h4>SyntheticControls</h4>
+            <p>Only renders in synthetic mode. Buttons trigger market-initializer and settlement-service HTTP endpoints. For testing the full daily lifecycle without waiting.</p>
+          </div>
+        </div>
+
+        <h3>15.4 Hooks</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Hook</th><th>Purpose</th><th>Key Details</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>useAnchorProgram</code></td><td>Typed Anchor Program instance</td><td>Read-only provider if no wallet. Commitment: "confirmed".</td></tr>
+              <tr><td><code>usePlaceOrder</code></td><td>Order placement with ALT + versioned tx</td><td>MAX_FILLS: 50 (with ALT), 10 (without). Buy No: atomic mint_pair + sell_yes + optional pair burn. Derives maker ATAs for remaining_accounts.</td></tr>
+              <tr><td><code>useRedeem</code></td><td>Pair burn (mode 0) or winner redemption (mode 1)</td><td>Converts BigInt → BN. Invalidates positions, markets, walletState.</td></tr>
+              <tr><td><code>useCancelOrder</code></td><td>Cancel by orderId + priceLevel</td><td>Pre-creates all 3 ATAs (USDC, Yes, No) for side-agnostic refund.</td></tr>
+              <tr><td><code>useMarkets</code></td><td>All StrikeMarket accounts</td><td>Parses ticker from u8[8]. Refetch 10s, stale 5s.</td></tr>
+              <tr><td><code>useOrderBooks</code></td><td>Batch-fetch order books</td><td><code>getMultipleAccountsInfo</code> (up to 100). Builds Yes/No views. Refetch 5s.</td></tr>
+              <tr><td><code>usePositions</code></td><td>User token positions</td><td>Fetches all SPL accounts, cross-references with market mints. Refetch 5s.</td></tr>
+              <tr><td><code>useWalletState</code></td><td>SOL + USDC balance</td><td>Dual mode: WebSocket subscriptions + 15s polling fallback. Exponential reconnect backoff (1s → 30s). WALLET_REFRESH_EVENT for immediate refresh.</td></tr>
+              <tr><td><code>useGlobalConfig</code></td><td>Admin config, fees, pause state</td><td>Refetch 60s. Decodes 7 tickers, pendingAdmin.</td></tr>
+              <tr><td><code>useTickerRegistry</code></td><td>TickerRegistry entries</td><td>Active/inactive tickers + Pyth feeds. Refetch 60s.</td></tr>
+              <tr><td><code>useTransaction</code></td><td>Sign → send → confirm lifecycle</td><td>Toast feedback at each stage. Dispatches WALLET_REFRESH_EVENT on confirm.</td></tr>
+              <tr><td><code>usePortfolioSnapshot</code></td><td>Aggregated P&amp;L</td><td>Combines event indexer cost basis with live positions. Flags approximate if mid unavailable.</td></tr>
+              <tr><td><code>useCostBasis</code></td><td>Per-market cost basis</td><td>From event indexer <code>/api/events/cost-basis?wallet=</code>. Refetch 30s.</td></tr>
+              <tr><td><code>useMarketVwaps</code></td><td>VWAP per market</td><td>From event indexer <code>/api/events/market-vwaps</code>. Stale 60s.</td></tr>
+              <tr><td><code>useWatchlist</code></td><td>Persistent ticker list</td><td>localStorage-backed. MAG7 always included. Module-level state sharing across instances.</td></tr>
+              <tr><td><code>useAnalyticsData</code></td><td>Quotes, history, indexed events</td><td>Wraps API calls with React Query. Includes useEventIndexerStatus health check.</td></tr>
+              <tr><td><code>useNetwork</code></td><td>Cluster detection</td><td>Pre-computed from RPC URL. Returns cluster, isMainnet, isDevnet, isLocalnet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>15.5 Library Utilities</h3>
+        <div class="grid grid-3">
+          <div class="card">
+            <h4>orderbook.ts</h4>
+            <p>Sparse order book deserialization. Reads price_map (u16[99]), iterates allocated levels, extracts active orders. Builds Yes/No views with aggregated depth, best bid/ask, spread. No-view inverts prices via <code>100 - P</code>.</p>
+          </div>
+          <div class="card">
+            <h4>pda.ts</h4>
+            <p>Re-exports all PDA derivation from shared module. <code>padTicker()</code>, <code>strikeToBuffer()</code>, <code>expiryDayBuffer()</code> encode seed components.</p>
+          </div>
+          <div class="card">
+            <h4>greeks.ts / pricer.ts / volatility.ts</h4>
+            <p>Re-exports from shared: Black-Scholes binary call pricing, N(d2), normalCdf/Pdf, Δ/Γ/θ/V, historicalVolatility (30-day rolling).</p>
+          </div>
+          <div class="card">
+            <h4>odds.ts</h4>
+            <p>Format conversions: cents → percentage, decimal odds (100/P), fractional odds ("2/1" with GCD reduction).</p>
+          </div>
+          <div class="card">
+            <h4>insights.ts</h4>
+            <p>Interprets delta, gamma, spread, order depth, position P&amp;L, and return distributions into user-friendly text with sentiment (bullish/bearish/neutral) and urgency levels.</p>
+          </div>
+          <div class="card">
+            <h4>distribution-math.ts</h4>
+            <p>Computes daily/weekly returns, builds frequency histograms with normal PDF overlay, σ labels per bucket. Used by HistoricalOverlay chart.</p>
+          </div>
+          <div class="card">
+            <h4>transactionErrors.ts</h4>
+            <p>Maps 70+ program error codes (6000-6175) to user-friendly messages. Extracts codes from hex logs, SendTransactionError, common wallet errors.</p>
+          </div>
+          <div class="card">
+            <h4>csv.ts / share.ts</h4>
+            <p>RFC 4180 CSV builder with browser download trigger. Share URL builders for X (Twitter) and LinkedIn with trade details.</p>
+          </div>
+          <div class="card">
+            <h4>social-proof.ts</h4>
+            <p>Simulated social proof: deterministic per-ticker-per-day via seeded RNG. Trader count ramps 15-40 at open to 150-350 at close. Win rate 55-80%.</p>
+          </div>
+        </div>
+
+        <h3>15.6 Market Data Proxy Chain</h3>
+        <div class="callout">
+          <code>market-data-proxy.ts</code> dispatches to either <code>yahoo-proxy.ts</code> (live Yahoo Finance via
+          <code>yahoo-finance2</code> npm) or <code>synthetic-proxy.ts</code> (deterministic GBM) based on the
+          <code>MARKET_DATA_SOURCE</code> env var. Both implement the same <code>getQuotes()</code> / <code>getHistory()</code>
+          interface. Yahoo responses are cached with 60s TTL. The same proxy chain is used by both the frontend API routes
+          and the backend services.
+        </div>
+
+        <h3>15.7 Ticker Universe</h3>
+        <pre>
+MAG7:         AAPL, MSFT, AMZN, NVDA, GOOGL, META, TSLA
+LARGE_CAP:    JPM, V, UNH, ... (18 stocks)
+INDEX_ETFS:   SPY, QQQ
+VOLATILITY:   VXX, UVXY
+METALS:       GLD, SLV
+FULL_UNIVERSE: MAG7 + all above (~30 tickers)</pre>
+        <p class="small">
+          The on-chain TickerRegistry allows permissionless addition of any ticker. The frontend universe constants are
+          for UI display grouping and watchlist defaults.
+        </p>
+      </div>
+    </section>
+
+    <section id="synthetic-testing" class="section">
+      <div class="panel">
+        <h2>16. Synthetic Mode and Testing</h2>
+
+        <h3>16.1 Synthetic Mode</h3>
+        <p>
+          The entire stack can run without external market data by setting <code>MARKET_DATA_SOURCE=synthetic</code>.
+          This enables full-stack testing, demos, and development without Yahoo Finance dependencies.
+        </p>
+        <div class="grid grid-2">
+          <div class="card">
+            <h4>GBM Price Generation</h4>
+            <ul class="list-tight">
+              <li>Geometric Brownian Motion: <code>S_{t+dt} = S_t · exp((μ - σ²/2)·dt + σ·√dt·Z)</code></li>
+              <li>Default vol: 30% annualized, drift: 0%</li>
+              <li>Per-symbol SeededRng instances via <code>hashSeed(globalSeed, symbol)</code></li>
+              <li>Tick interval: ~5 seconds (dt ≈ 8.5e-7 years)</li>
+              <li>Fully deterministic from <code>SYNTHETIC_SEED</code> env (default 42)</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h4>SeededRng</h4>
+            <ul class="list-tight">
+              <li>LCG (Numerical Recipes): a=1664525, c=1013904223, m=2³²</li>
+              <li><code>next()</code> ∈ [0, 1), <code>nextGaussian()</code> via Box-Muller transform</li>
+              <li>Base prices: AAPL=190, TSLA=250, AMZN=185, MSFT=420, NVDA=130, GOOGL=175, META=500</li>
+              <li>Unknown tickers default to $100</li>
+            </ul>
+          </div>
+        </div>
+        <p class="small">
+          In synthetic mode, the settlement service and market initializer run as HTTP trigger servers instead of
+          autonomous pollers. The frontend shows <code>SyntheticControls</code> buttons to trigger market open/close
+          on demand.
+        </p>
+
+        <h3>16.2 On-Chain Tests (167 tests, bankrun)</h3>
+        <p>
+          Tests use <code>solana-bankrun</code> (in-memory validator emulator) with <code>anchor-bankrun</code> for
+          Anchor compatibility. All instructions are built manually (no IDL generation) with SHA256 discriminators
+          computed via <code>SHA256("global:&lt;instruction_name&gt;")[0..8]</code>.
+        </p>
+        <div class="grid grid-3">
+          <div class="card">
+            <h4>Test Files</h4>
+            <ul class="list-tight">
+              <li><code>config-init</code> — GlobalConfig initialization, double-init rejection</li>
+              <li><code>market-creation</code> — StrikeMarket PDA, mints, vaults, duplicate rejection</li>
+              <li><code>orderbook-init</code> — Sparse header, price_map 0xFFFF, zero state</li>
+              <li><code>place-order</code> — All 3 sides, matching (swap + merge), FIFO, error cases</li>
+              <li><code>settlement</code> — Oracle settle, admin settle, override, full lifecycle</li>
+              <li><code>market-closure</code> — Clean/dirty close, vault drain to treasury</li>
+              <li><code>fee-system</code> — Fee BPS, swap/merge fee deduction, accumulation</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h4>More Tests</h4>
+            <ul class="list-tight">
+              <li><code>mint-pair</code> — 1:1 token minting, USDC → vault</li>
+              <li><code>mint-pair-position</code> — ConflictingPosition enforcement</li>
+              <li><code>admin-v2</code> — Ticker registry, admin transfer, withdrawals, config updates</li>
+              <li><code>pause-unpause</code> — Global circuit breaker</li>
+              <li><code>escrow-setup</code> — Escrow account ownership/mint verification</li>
+              <li><code>remediation</code> — Permissionless strikes, creation fees, crank_redeem</li>
+              <li><code>set-market-alt</code> — ALT address storage, one-time set</li>
+              <li><code>oracle-crud</code> — PriceFeed init/update, authority check</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h4>Test Infrastructure</h4>
+            <ul class="list-tight">
+              <li>Deterministic CU nonce to prevent bankrun "already processed" dedup</li>
+              <li><code>advanceClock()</code> for time-dependent tests (settlement, override)</li>
+              <li><code>createFundedUser()</code> — keypair + 10 SOL + USDC ATA</li>
+              <li>Manual buffer parsing for all account reads (readMarketFields, readOrderSlot)</li>
+              <li>No Anchor IDL — all instructions built from raw bytes</li>
+            </ul>
+          </div>
+        </div>
+
+        <h3>16.3 E2E Stress Test</h3>
+        <p>
+          A 3-act integration test framework in <code>scripts/e2e-stress-test/</code> that exercises the full protocol
+          with multiple concurrent agents. Configurable via CLI: <code>--seed</code>, <code>--agents</code>,
+          <code>--days</code>, <code>--concurrency</code>, <code>--tickers</code>.
+        </p>
+        <div class="grid grid-3">
+          <div class="card">
+            <h4>Act 1: Correctness Gate</h4>
+            <p>Fast-fail (~90s). Exercises all 22+ instruction types end-to-end: create, mint, trade, cancel, settle, override, redeem, crank, close, admin ops, oracle ops. Any failure aborts the run.</p>
+          </div>
+          <div class="card">
+            <h4>Act 2: Smoke Tests</h4>
+            <p>13 fully independent tests with fresh state each: mint pair, limit buy/sell, cancel, full trade flow, position locking, market order, settlement+redeem, admin override, fee accumulation, permissionless strikes, admin transfer, circuit breaker.</p>
+          </div>
+          <div class="card">
+            <h4>Act 3: Multi-Day Simulation</h4>
+            <p>N-day trading with 4 agent types: market-maker (two-sided quotes), directional (biased bets), scalper (fast small orders), strike-creator (permissionless markets). Full daily lifecycle: create → trade → settle → crank → close.</p>
+          </div>
+        </div>
+        <div class="callout good">
+          <strong>Acceptance criteria:</strong> All 22 instruction types exercised, order success rate &gt; 95%,
+          fill rate &gt; 30%, P99 latency below threshold, minimum 1 active agent per type, all 3 acts passed.
+          Generates an HTML report with metrics, TPS timeline, latency breakdown, and per-agent accounting.
+        </div>
+      </div>
+    </section>
+
+    <section id="risks" class="section">
+      <div class="panel">
+        <h2>17. Operational Notes and Risks</h2>
+        <div class="grid grid-2">
+          <div class="card">
+            <h3>Authoritative Docs vs Current Runtime</h3>
+            <p>
+              The docs and code are broadly aligned that <code>settlement</code> is the main lifecycle orchestrator, but some service
+              descriptions still sound more scheduler-centric than the current implementation. In practice, the morning automation job
+              is mostly verification/fallback, while <code>settlement</code> handles the main end-of-day and next-day transition flow.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Startup Caveat</h3>
+            <p>
+              The top-level <code>Makefile</code> <code>services</code> target currently starts
+              <code>oracle-feeder</code>, <code>amm-bot</code>, <code>event-indexer</code>, <code>automation</code>,
+              and <code>monitor</code>, but does not directly start <code>settlement</code> or the one-shot
+              <code>market-initializer</code>. Operationally that matters because <code>settlement</code> owns the critical end-of-day workflow,
+              and next-day market creation is normally triggered from that pipeline.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Oracle / Market Data Dependency</h3>
+            <p>
+              Yahoo or synthetic market data drives the feeder and settlement confirmation logic. If it is unavailable or unstable,
+              the system eventually falls back to admin-mediated settlement. That is safer than blocking indefinitely, but it raises
+              operator responsibility.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Override Window and Finality</h3>
+            <p>
+              The docs note a short override window in the current devnet-oriented build. That means practical finality arrives quickly,
+              but it also reduces the time available for admins to correct a bad oracle-derived outcome before redemptions progress.
+            </p>
+          </div>
+        </div>
+
+        <div class="callout warn">
+          The two most operationally important things to understand are: first, the settlement service is now the true lifecycle engine;
+          second, the order book cannot be reasoned about in isolation from redemption, pair minting, and vault accounting. Those pieces
+          are economically one system.
+        </div>
+      </div>
+    </section>
+
+    <section id="key-files" class="section">
+      <div class="panel">
+        <h2>18. Key Files</h2>
+        <div class="grid grid-2">
+          <div class="card">
+            <h3>Canonical Design and High-Level Docs</h3>
+            <ul class="list-tight">
+              <li><code>README.md</code></li>
+              <li><code>docs/ORDER_BOOK.md</code></li>
+              <li><code>docs/DEV_LOG.md</code></li>
+              <li><code>docs/Meridian - Binary Stock Outcome Markets on Blockchain.md</code></li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>On-Chain Core</h3>
+            <ul class="list-tight">
+              <li><code>programs/meridian/src/lib.rs</code></li>
+              <li><code>programs/meridian/src/state/order_book.rs</code></li>
+              <li><code>programs/meridian/src/state/strike_market.rs</code></li>
+              <li><code>programs/meridian/src/matching/engine.rs</code></li>
+              <li><code>programs/meridian/src/instructions/place_order/*</code></li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Frontend Trading Path</h3>
+            <ul class="list-tight">
+              <li><code>app/meridian-web/src/hooks/useMarkets.ts</code></li>
+              <li><code>app/meridian-web/src/lib/orderbook.ts</code></li>
+              <li><code>app/meridian-web/src/hooks/usePlaceOrder.ts</code></li>
+              <li><code>app/meridian-web/src/components/OrderBook.tsx</code></li>
+              <li><code>app/meridian-web/src/components/OrderModal.tsx</code></li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Operations and Automation</h3>
+            <ul class="list-tight">
+              <li><code>services/settlement/src/index.ts</code></li>
+              <li><code>services/market-initializer/src/initializer.ts</code></li>
+              <li><code>services/oracle-feeder/src/feeder.ts</code></li>
+              <li><code>services/event-indexer/src/listener.ts</code></li>
+              <li><code>services/automation/src/scheduler.ts</code></li>
+              <li><code>services/monitor/src/checker.ts</code></li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="footer">
+          This report was assembled from the indexed repository state plus direct reads of the canonical docs and implementation hotspots.
+          For the order-book model, <code>docs/ORDER_BOOK.md</code> is the primary source of truth. For the actual live runtime sequence,
+          <code>services/settlement/src/index.ts</code> and <code>app/meridian-web/src/hooks/usePlaceOrder.ts</code> are especially important.
+        </div>
+      </div>
+    </section>
+
+    <section id="glossary" class="section">
+      <div class="panel">
+        <h2>Appendix: Glossary of Abbreviations</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Abbreviation</th><th>Stands For</th><th>What It Means in Meridian</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>PDA</code></td><td>Program Derived Address</td><td>A deterministic Solana account address computed from seeds and a program ID. No private key exists, so only the owning program can sign for it. Every market, vault, escrow, mint, order book, treasury, and config account is a PDA.</td></tr>
+              <tr><td><code>ATA</code></td><td>Associated Token Account</td><td>The canonical SPL token account for a given wallet + mint pair. Where a user's Yes, No, or USDC tokens live. Computed deterministically so any service can locate a user's balance without searching.</td></tr>
+              <tr><td><code>ALT</code></td><td>Address Lookup Table</td><td>A Solana account that stores a list of frequently-used addresses, allowing versioned transactions to reference them by index (1 byte) instead of full pubkey (32 bytes). Each Meridian market creates an ALT with its 11 key accounts to compress transaction size.</td></tr>
+              <tr><td><code>SPL</code></td><td>Solana Program Library</td><td>The standard library of Solana programs. SPL Token is the program that manages fungible token mints, accounts, and transfers. Yes/No outcome tokens and USDC are all SPL tokens.</td></tr>
+              <tr><td><code>USDC</code></td><td>USD Coin</td><td>The stablecoin used as collateral throughout Meridian. On devnet, a mock USDC mint is used; on mainnet, the real Circle USDC mint. 6 decimal places (1,000,000 lamports = $1).</td></tr>
+              <tr><td><code>IDL</code></td><td>Interface Definition Language</td><td>Anchor's auto-generated JSON schema describing a program's instructions, accounts, and types. Meridian uses IDL files for frontend Anchor program instances but builds test instructions manually from raw bytes.</td></tr>
+              <tr><td><code>AMM</code></td><td>Automated Market Maker</td><td>The bot service that seeds two-sided liquidity (bid + ask) on every active market using Black-Scholes pricing with inventory skew. Polls every 30 seconds.</td></tr>
+              <tr><td><code>BPS</code></td><td>Basis Points</td><td>1/100th of a percent. Used for fee rates (<code>fee_bps</code> max 1000 = 10%), oracle confidence bands (<code>confidence_bps</code>), and AMM spread width (<code>spreadBps</code> default 500 = 5%).</td></tr>
+              <tr><td><code>BLUF</code></td><td>Bottom Line Up Front</td><td>An executive summary placed at the top of a document so readers get the key takeaway immediately.</td></tr>
+              <tr><td><code>0DTE</code></td><td>Zero Days to Expiration</td><td>Options or contracts that expire the same day they are created. All Meridian markets are 0DTE: created in the morning, settled at 4 PM ET.</td></tr>
+              <tr><td><code>MAG7</code></td><td>Magnificent Seven</td><td>The seven default tickers: AAPL, MSFT, AMZN, NVDA, GOOGL, META, TSLA. Hard-coded in the legacy <code>GlobalConfig.tickers</code> array and used as the baseline ticker set.</td></tr>
+              <tr><td><code>ATM</code></td><td>At The Money</td><td>A strike price equal (or nearest) to the current stock price. The strike selector generates ATM and OTM strikes based on historical volatility.</td></tr>
+              <tr><td><code>OTM</code></td><td>Out of The Money</td><td>A strike price away from the current stock price. For Yes: strike above current price. For No: strike below current price.</td></tr>
+              <tr><td><code>ET</code></td><td>Eastern Time</td><td>The US Eastern timezone used for all market hours. NYSE closes at 4 PM ET. DST transitions handled via <code>Intl.DateTimeFormat</code> with <code>America/New_York</code>.</td></tr>
+              <tr><td><code>GBM</code></td><td>Geometric Brownian Motion</td><td>The stochastic model used by the synthetic price generator. Produces realistic-looking price paths with configurable drift and volatility for testing without live market data.</td></tr>
+              <tr><td><code>HV</code></td><td>Historical Volatility</td><td>Annualized standard deviation of close-to-close log returns. HV20 (20-day) is used by the market initializer for vol-aware strike selection. Annualized by multiplying daily vol by &radic;252.</td></tr>
+              <tr><td><code>LCG</code></td><td>Linear Congruential Generator</td><td>The PRNG algorithm used by <code>SeededRng</code> in synthetic mode. Numerical Recipes parameters: a=1664525, c=1013904223, m=2&sup3;&sup2;.</td></tr>
+              <tr><td><code>VWAP</code></td><td>Volume-Weighted Average Price</td><td>The average fill price weighted by quantity. Computed by the event indexer as <code>sum(price &times; quantity) / sum(quantity)</code> per market.</td></tr>
+              <tr><td><code>P&amp;L</code></td><td>Profit and Loss</td><td>Unrealized P&amp;L computed as current position value (mid price &times; quantity) minus cost basis (from event indexer fill history).</td></tr>
+              <tr><td><code>OHLCV</code></td><td>Open, High, Low, Close, Volume</td><td>Standard bar format for historical price data. Fetched from Yahoo Finance (or synthetic) for price charts and volatility calculation.</td></tr>
+              <tr><td><code>CPI</code></td><td>Cross-Program Invocation</td><td>When one Solana program calls another. The meridian program uses CPI to invoke SPL Token for transfers, mints, and burns. The event listener tracks CPI depth to parse logs correctly.</td></tr>
+              <tr><td><code>FIFO</code></td><td>First In, First Out</td><td>The order matching priority within a price level. At the same price, the order with the earliest timestamp fills first.</td></tr>
+              <tr><td><code>RPC</code></td><td>Remote Procedure Call</td><td>The Solana JSON-RPC endpoint that all services and the frontend use to read chain state and submit transactions. Configurable via <code>RPC_URL</code> env var.</td></tr>
+              <tr><td><code>DST</code></td><td>Daylight Saving Time</td><td>US clock shift that affects ET offset (UTC-5 vs UTC-4). The automation scheduler handles this via <code>Intl.DateTimeFormat</code> rather than hardcoded offsets.</td></tr>
+              <tr><td><code>NYSE</code></td><td>New York Stock Exchange</td><td>The stock exchange whose trading hours (9:30 AM &ndash; 4 PM ET) and holiday calendar determine when Meridian markets are created, priced, and settled.</td></tr>
+              <tr><td><code>REST</code></td><td>Representational State Transfer</td><td>The HTTP API style used by the event indexer service. Endpoints serve fills, cost basis, VWAPs, portfolio snapshots, and health checks as JSON.</td></tr>
+              <tr><td><code>CSV</code></td><td>Comma-Separated Values</td><td>Export format for trade history. The frontend builds RFC 4180-compliant CSV files and triggers browser download.</td></tr>
+              <tr><td><code>CU</code></td><td>Compute Units</td><td>Solana's measure of transaction computational cost. Tests use unique CU limits as a deduplication nonce to prevent bankrun from rejecting identical transaction structures.</td></tr>
+              <tr><td><code>SOL</code></td><td>Solana (native token)</td><td>The native cryptocurrency of the Solana blockchain. Used to pay transaction fees and rent for on-chain accounts. The SOL Treasury PDA holds SOL for market creation rent reimbursement.</td></tr>
+              <tr><td><code>LE</code></td><td>Little-Endian</td><td>Byte order used for encoding integers in PDA seeds and on-chain account data. Strike prices are encoded as u64 LE, expiry days as u32 LE.</td></tr>
+              <tr><td><code>E2E</code></td><td>End-to-End</td><td>The 3-act stress test framework that exercises the full protocol lifecycle with multiple concurrent trading agents.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    function toggleDiagramExpand(el) {
+      var isExpanded = el.classList.contains('expanded');
+      if (isExpanded) {
+        el.classList.remove('expanded');
+        document.body.style.overflow = '';
+      } else {
+        el.classList.add('expanded');
+        document.body.style.overflow = 'hidden';
+        el.scrollTop = 0;
+      }
+    }
+
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        var expanded = document.querySelector('.diagram-zoomable.expanded');
+        if (expanded) {
+          expanded.classList.remove('expanded');
+          document.body.style.overflow = '';
+        }
+      }
+    });
+  </script>
+
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: "dark",
+      securityLevel: "loose",
+      fontSize: 16,
+      flowchart: {
+        nodeSpacing: 30,
+        rankSpacing: 50,
+        padding: 16,
+        useMaxWidth: true
+      },
+      themeVariables: {
+        background: "#111111",
+        primaryColor: "#171717",
+        primaryTextColor: "#ededed",
+        lineColor: "#60a5fa",
+        secondaryColor: "#0a0a0a",
+        tertiaryColor: "#141414",
+        fontFamily: "system-ui, -apple-system, sans-serif",
+        fontSize: "16px"
+      }
+    });
+  </script>
+</body>
+</html>

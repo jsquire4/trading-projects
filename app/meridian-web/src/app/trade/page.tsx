@@ -65,7 +65,7 @@ function UrgencyBanner({ markets }: { markets: ParsedMarket[] }) {
           </span>
         </div>
         <span className="text-xs text-amber-200/50 ml-6 sm:ml-0">
-          Settles at close — final answer, no extensions
+          Settles at close — outcome may be reviewed briefly after settlement
         </span>
       </div>
     </div>

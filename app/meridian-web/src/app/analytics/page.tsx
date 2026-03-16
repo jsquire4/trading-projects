@@ -271,7 +271,7 @@ export default function AnalyticsPage() {
                         Today&apos;s Question
                       </p>
                       <p className="text-xl font-bold text-white mb-2">
-                        Will {selectedTicker} close above{" "}
+                        Will {selectedTicker} close at or above{" "}
                         <span className="text-green-400">${Math.round(currentPrice)}</span>?
                       </p>
                       <div className="flex items-center justify-center gap-4 text-sm">

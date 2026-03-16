@@ -11,6 +11,7 @@ import { useTreasuryBalance } from "@/hooks/useTreasuryBalance";
 import { useMarkets, type ParsedMarket } from "@/hooks/useMarkets";
 import { useAnchorProgram } from "@/hooks/useAnchorProgram";
 import { useTransaction } from "@/hooks/useTransaction";
+import { useQuotes } from "@/hooks/useAnalyticsData";
 import { findGlobalConfig } from "@/lib/pda";
 
 function StatCard({
@@ -119,6 +120,7 @@ function AdminSettlePanel({ markets }: { markets: ParsedMarket[] }) {
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [settlePrice, setSettlePrice] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [settleAllProgress, setSettleAllProgress] = useState<string | null>(null);
 
   const [configPda] = findGlobalConfig();
 
@@ -150,16 +152,83 @@ function AdminSettlePanel({ markets }: { markets: ParsedMarket[] }) {
     finally { setSubmitting(null); }
   }, [program, publicKey, settlePrice, configPda, sendTransaction, queryClient]);
 
+  // Get current prices for all tickers
+  const tickers = [...new Set(unsettledMarkets.map((m) => m.ticker))];
+  const { data: quotes = [] } = useQuotes(tickers);
+  const priceMap = new Map(quotes.map((q) => [q.symbol, q.last]));
+
+  const handleSettleAll = useCallback(async () => {
+    if (!program || !publicKey) return;
+    setError(null);
+    setSettleAllProgress(`Settling 0/${unsettledMarkets.length}...`);
+
+    let settled = 0;
+    let failed = 0;
+
+    for (const market of unsettledMarkets) {
+      const price = priceMap.get(market.ticker);
+      if (!price || price <= 0) {
+        failed++;
+        continue;
+      }
+      const priceLamports = Math.round(price * 1_000_000);
+      setSettleAllProgress(`Settling ${settled + 1}/${unsettledMarkets.length} (${market.ticker} $${(Number(market.strikePrice) / 1_000_000).toFixed(0)})...`);
+
+      try {
+        const tx = await program.methods
+          .adminSettle(new BN(priceLamports))
+          .accountsPartial({
+            admin: publicKey,
+            config: configPda,
+            market: market.publicKey,
+          })
+          .transaction();
+        await sendTransaction(tx, {
+          description: `Settle ${market.ticker} @ $${price.toFixed(2)}`,
+        });
+        settled++;
+      } catch {
+        failed++;
+      }
+    }
+
+    queryClient.invalidateQueries({ queryKey: ["markets"] });
+    setSettleAllProgress(`Done: ${settled} settled, ${failed} failed`);
+    setTimeout(() => setSettleAllProgress(null), 5000);
+  }, [program, publicKey, unsettledMarkets, priceMap, configPda, sendTransaction, queryClient]);
+
   if (!program || !publicKey || unsettledMarkets.length === 0) return null;
 
   return (
     <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4 space-y-3">
       <p className="text-xs font-semibold text-amber-400">Admin Settle (Force)</p>
       <p className="text-[10px] text-amber-300/60">
-        Force-settle any market with a manual price. Use for testing or when oracle is unavailable.
+        Force-settle markets. Use for testing the full settlement → crank → redeem → init cycle.
         Requires admin_settle_delay (5 min) to have passed since market close.
       </p>
 
+      {/* Settle All button */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleSettleAll}
+          disabled={settleAllProgress !== null || tickers.some((t) => !priceMap.get(t))}
+          className="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs font-semibold text-amber-400 hover:bg-amber-500/20 disabled:opacity-30 transition-colors"
+        >
+          {settleAllProgress ?? `Settle All ${unsettledMarkets.length} Markets at Current Price`}
+        </button>
+        {tickers.map((t) => {
+          const p = priceMap.get(t);
+          return (
+            <span key={t} className="text-[10px] text-white/30 font-mono">
+              {t}: {p ? `$${p.toFixed(2)}` : "loading..."}
+            </span>
+          );
+        })}
+      </div>
+
+      <div className="border-t border-white/5 pt-3 mt-1" />
+
+      <p className="text-[10px] text-white/30">Or settle individually with a custom price:</p>
       <div className="flex items-center gap-2">
         <span className="text-xs text-white/40">Price $</span>
         <input

@@ -8,29 +8,30 @@ const DISC_SIZE = 8;
 const PUBKEY_SIZE = 32;
 
 // Header byte offsets (including 8-byte Anchor discriminator)
-const HDR_MARKET = 8;           // [8..40]  Pubkey
-const HDR_NEXT_ORDER_ID = 40;   // [40..48] u64
-const HDR_PRICE_MAP = 48;       // [48..147] [u8; 99]
-const HDR_LEVEL_COUNT = 147;    // u8
-const HDR_MAX_LEVELS = 148;     // u8
-const HDR_ORDERS_PER_LEVEL = 149; // u8
-const HEADER_SIZE = 168;
+// Must match programs/meridian/src/state/order_book.rs
+const HDR_MARKET = 8;           // [8..40]   Pubkey
+const HDR_NEXT_ORDER_ID = 40;   // [40..48]  u64
+const HDR_PRICE_MAP = 48;       // [48..246] [u16 LE; 99] — byte offsets, 0xFFFF = unallocated
+const HDR_LEVEL_COUNT = 246;    // [246] u8
+const HDR_MAX_LEVELS = 247;     // [247] u8
+const HDR_BUMP = 248;           // [248] u8
+const HEADER_SIZE = 270;        // Total header size
 
 // Level / slot sizes
 const LEVEL_HEADER_SIZE = 8;
 const ORDER_SLOT_SIZE = 112;
 
-// Slot field offsets
-const SLOT_OWNER = 0;
-const SLOT_ORDER_ID = 32;
-const SLOT_QUANTITY = 40;
-const SLOT_ORIG_QTY = 48;
-const SLOT_SIDE = 56;
-const SLOT_TIMESTAMP = 64;
-const SLOT_IS_ACTIVE = 72;
+// Slot field offsets (within a slot)
+const SLOT_OWNER = 0;           // [0..32]  Pubkey
+const SLOT_ORDER_ID = 32;       // [32..40] u64
+const SLOT_QUANTITY = 40;       // [40..48] u64
+const SLOT_ORIG_QTY = 48;       // [48..56] u64
+const SLOT_SIDE = 56;           // [56] u8
+const SLOT_TIMESTAMP = 64;      // [64..72] i64
+const SLOT_IS_ACTIVE = 72;      // [72] u8
 
 const MAX_PRICE_LEVELS = 99;
-const PRICE_UNALLOCATED = 0xFF;
+const PRICE_UNALLOCATED = 0xFFFF;
 
 // Side enum values
 export const Side = {
@@ -91,8 +92,8 @@ export interface DeserializedOrderBook {
 
 /**
  * Deserialize a sparse OrderBook account buffer into active orders.
- * The sparse layout starts with a 168-byte header containing a price_map[99]
- * that indexes into dynamically allocated levels.
+ * Layout: 270-byte header with u16 price_map storing byte offsets to
+ * variable-size levels. Each level has its own slot_count.
  */
 export function deserializeOrderBook(buffer: Buffer): DeserializedOrderBook {
   const data = new DataView(
@@ -108,24 +109,23 @@ export function deserializeOrderBook(buffer: Buffer): DeserializedOrderBook {
   // next_order_id (u64 little-endian at offset 40)
   const nextOrderId = data.getBigUint64(HDR_NEXT_ORDER_ID, true);
 
-  const ordersPerLevel = buffer[HDR_ORDERS_PER_LEVEL];
-  const entrySize = LEVEL_HEADER_SIZE + ordersPerLevel * ORDER_SLOT_SIZE;
   const orders: ActiveOrder[] = [];
 
-  // Walk price_map to find allocated levels
+  // Walk price_map (u16 LE entries) to find allocated levels
   for (let priceIdx = 0; priceIdx < MAX_PRICE_LEVELS; priceIdx++) {
-    const levelIdx = buffer[HDR_PRICE_MAP + priceIdx];
-    if (levelIdx === PRICE_UNALLOCATED) continue;
+    const mapOffset = HDR_PRICE_MAP + priceIdx * 2;
+    const loff = data.getUint16(mapOffset, true); // u16 LE byte offset
+    if (loff === PRICE_UNALLOCATED) continue;
 
-    const levelBase = HEADER_SIZE + levelIdx * entrySize;
-    // Safety: skip if level data extends beyond buffer
-    if (levelBase + entrySize > buffer.length) continue;
+    // Level header: price(1) + active_count(1) + slot_count(1) + padding(5) = 8 bytes
+    if (loff + LEVEL_HEADER_SIZE > buffer.length) continue;
+    const slotCount = buffer[loff + 2]; // LVL_SLOT_COUNT at offset 2 within level
 
     const price = priceIdx + 1; // 1-indexed
 
     // Scan all slots at this level
-    for (let s = 0; s < ordersPerLevel; s++) {
-      const slotBase = levelBase + LEVEL_HEADER_SIZE + s * ORDER_SLOT_SIZE;
+    for (let s = 0; s < slotCount; s++) {
+      const slotBase = loff + LEVEL_HEADER_SIZE + s * ORDER_SLOT_SIZE;
 
       const isActive = data.getUint8(slotBase + SLOT_IS_ACTIVE);
       if (!isActive) continue;

@@ -71,6 +71,8 @@ export interface OrderModalProps {
   orderBookData: OrderBookData | null | undefined;
   /** Callback after successful order */
   onSuccess?: (signature: string) => void;
+  /** Called when a new market is created (passes market pubkey base58) */
+  onMarketCreated?: (marketKey: string) => void;
 }
 
 interface SweepLevel {
@@ -100,6 +102,7 @@ export function OrderModal({
   altAddress,
   orderBookData,
   onSuccess,
+  onMarketCreated,
 }: OrderModalProps) {
   const { publicKey } = useWallet();
   const { connection } = useConnection();
@@ -406,6 +409,9 @@ export function OrderModal({
 
       const signature = await placeOrder(params);
       if (signature) {
+        if (!marketPubkey && resolvedMarket) {
+          onMarketCreated?.(resolvedMarket.toBase58());
+        }
         onSuccess?.(signature);
         onClose();
       } else {

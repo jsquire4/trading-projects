@@ -36,6 +36,8 @@ interface OrderTreeProps {
   marketKey: string | null;
   /** Optional content rendered right-aligned in the header (e.g. BinaryGreeks) */
   headerRight?: React.ReactNode;
+  /** Called when a new market is created via the OrderModal (passes market pubkey base58) */
+  onMarketCreated?: (marketKey: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -103,6 +105,7 @@ export function OrderTree({
   strikePrice,
   marketKey,
   headerRight,
+  onMarketCreated,
 }: OrderTreeProps) {
   const { data: orderBookData } = useOrderBook(marketKey);
   const { data: positions = [] } = usePositions();
@@ -339,6 +342,7 @@ export function OrderTree({
         marketPubkey={marketPubkey}
         altAddress={altAddress}
         orderBookData={orderBookData}
+        onMarketCreated={onMarketCreated}
       />
     </div>
   );

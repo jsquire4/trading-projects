@@ -422,6 +422,10 @@ export default function TradingCockpit({
               ticker={ticker}
               strikePrice={Math.round(customStrikePrice * 1_000_000)}
               marketKey={null}
+              onMarketCreated={(newKey) => {
+                setShowNewStrike(false);
+                setSelectedKey(newKey);
+              }}
             />
           )}
         </div>

@@ -214,12 +214,7 @@ export async function startFeeder(
   // ------ REST-based price fetch ------
 
   async function fetchAndUpdateViaREST(): Promise<void> {
-    // Skip price updates if market isn't in REGULAR session or circuit breaker is tripped
     if (circuitBreakerTripped) return;
-    if (lastKnownState !== "open" && lastKnownState !== "unknown") {
-      // Only update during regular trading hours (or when state is unknown on startup)
-      return;
-    }
 
     try {
       const quotes = await client.getQuotes(tickers);
@@ -240,14 +235,27 @@ export async function startFeeder(
   await checkMarketState();
   log.info(`Market state on startup: ${lastKnownState}`);
 
-  // Seed prices immediately via REST (if market is open)
+  // Always seed prices on startup — even when market is closed, the oracle
+  // needs a non-zero price and a fresh timestamp for the frontend to display.
   log.info("Seeding initial prices via REST API...");
   await fetchAndUpdateViaREST();
 
-  // Poll prices at configured interval
-  log.info(`Starting REST poll loop (interval: ${POLL_INTERVAL_MS}ms)`);
+  // Poll prices: fast (10s) when market is open, slow (5 min) when closed.
+  // Closed-market updates keep the oracle timestamp fresh for display.
+  const CLOSED_POLL_INTERVAL_MS = 5 * 60 * 1000;
+  let lastClosedUpdate = 0;
+  log.info(`Starting REST poll loop (open: ${POLL_INTERVAL_MS}ms, closed: ${CLOSED_POLL_INTERVAL_MS}ms)`);
   pollInterval = setInterval(() => {
-    fetchAndUpdateViaREST().catch(() => {});
+    if (lastKnownState === "open" || lastKnownState === "unknown") {
+      fetchAndUpdateViaREST().catch(() => {});
+    } else {
+      // Closed market: only update every 5 minutes
+      const now = Date.now();
+      if (now - lastClosedUpdate >= CLOSED_POLL_INTERVAL_MS) {
+        lastClosedUpdate = now;
+        fetchAndUpdateViaREST().catch(() => {});
+      }
+    }
   }, POLL_INTERVAL_MS);
 
   // Market state check at separate interval

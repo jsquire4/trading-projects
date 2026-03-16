@@ -17,9 +17,11 @@ import { PublicKey } from "@solana/web3.js";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { usePlaceOrder, type PlaceOrderParams } from "@/hooks/usePlaceOrder";
 import { usePositions } from "@/hooks/usePositions";
+import { useWalletState } from "@/hooks/useWalletState";
 import { PayoffDisplay } from "@/components/PayoffDisplay";
 import type { OrderBookData } from "@/hooks/useMarkets";
 import { Side, type ActiveOrder } from "@/lib/orderbook";
+import { extractErrorMessage } from "@/lib/transactionErrors";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -79,10 +81,12 @@ export function OrderModal({
   const { publicKey } = useWallet();
   const { placeOrder } = usePlaceOrder();
   const { data: positions = [] } = usePositions();
+  const { solBalance, usdcBalance } = useWalletState();
   const [quantity, setQuantity] = useState("");
   const [orderType, setOrderType] = useState<"limit" | "market">("limit");
   const [submitting, setSubmitting] = useState(false);
   const [activeSide, setActiveSide] = useState<OrderModalSide>(side);
+  const [error, setError] = useState<string | null>(null);
 
   // Position conflict check: on-chain blocks holding both Yes and No on the same strike.
   // Check user's token balances for this market and warn before submit.
@@ -118,6 +122,7 @@ export function OrderModal({
       setOrderType("limit");
       setSubmitting(false);
       setActiveSide(side);
+      setError(null);
     }
   }, [open, side]);
 
@@ -247,6 +252,19 @@ export function OrderModal({
   const handleSubmit = useCallback(async () => {
     if (!publicKey || !marketPubkey || quantityNum <= 0) return;
 
+    setError(null);
+
+    // Pre-submit balance validation
+    const needsUsdc = isBuy;
+    if (needsUsdc && usdcBalance !== null && totalCostUSDC > usdcBalance) {
+      setError(`Insufficient USDC. You have $${usdcBalance.toFixed(2)} but need $${totalCostUSDC.toFixed(2)}. Use the faucet to get test funds.`);
+      return;
+    }
+    if (solBalance !== null && solBalance < 0.01) {
+      setError(`Insufficient SOL for transaction fees. You have ${solBalance.toFixed(4)} SOL. Use the faucet or visit faucet.solana.com for devnet SOL.`);
+      return;
+    }
+
     setSubmitting(true);
     try {
       // Map OrderModalSide to PlaceOrderParams side
@@ -274,7 +292,12 @@ export function OrderModal({
       if (signature) {
         onSuccess?.(signature);
         onClose();
+      } else {
+        // placeOrder returns null on failure (error already toasted by useTransaction)
+        setError("Transaction failed. Check your wallet for details.");
       }
+    } catch (err) {
+      setError(extractErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -501,6 +524,16 @@ export function OrderModal({
             </div>
           )}
         </div>
+
+        {/* Error display */}
+        {error && (
+          <div className="mx-6 mb-0 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs text-red-300">
+            <div className="flex items-start gap-2">
+              <span className="text-red-400 font-bold shrink-0">Error</span>
+              <p>{error}</p>
+            </div>
+          </div>
+        )}
 
         {/* Footer */}
         <div className="px-6 py-4 border-t border-white/10 flex gap-3">

@@ -13,15 +13,38 @@
  */
 
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { useConnection } from "@solana/wallet-adapter-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { BN } from "@coral-xyz/anchor";
+import { TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { usePlaceOrder, type PlaceOrderParams } from "@/hooks/usePlaceOrder";
 import { usePositions } from "@/hooks/usePositions";
-import { useWalletState } from "@/hooks/useWalletState";
+import { useWalletState, USDC_MINT } from "@/hooks/useWalletState";
+import { useAnchorProgram } from "@/hooks/useAnchorProgram";
+import { useTransaction } from "@/hooks/useTransaction";
+import { useGlobalConfig } from "@/hooks/useGlobalConfig";
 import { PayoffDisplay } from "@/components/PayoffDisplay";
 import type { OrderBookData } from "@/hooks/useMarkets";
 import { Side, type ActiveOrder } from "@/lib/orderbook";
 import { extractErrorMessage } from "@/lib/transactionErrors";
+import {
+  findGlobalConfig,
+  findStrikeMarket,
+  findYesMint,
+  findNoMint,
+  findUsdcVault,
+  findEscrowVault,
+  findYesEscrow,
+  findNoEscrow,
+  findOrderBook,
+  findPriceFeed,
+  findFeeVault,
+  findSolTreasury,
+  findTickerRegistry,
+  padTicker,
+} from "@/lib/pda";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -79,6 +102,11 @@ export function OrderModal({
   onSuccess,
 }: OrderModalProps) {
   const { publicKey } = useWallet();
+  const { connection } = useConnection();
+  const { program } = useAnchorProgram();
+  const { sendTransaction } = useTransaction();
+  const { data: config } = useGlobalConfig();
+  const queryClient = useQueryClient();
   const { placeOrder } = usePlaceOrder();
   const { data: positions = [] } = usePositions();
   const { solBalance, usdcBalance } = useWalletState();
@@ -248,9 +276,84 @@ export function OrderModal({
     }
   }, [totalAvailable]);
 
-  // Submit
+  // Create market helper — used when marketPubkey is null (new strike)
+  const createMarket = useCallback(async (): Promise<PublicKey | null> => {
+    if (!program || !publicKey || !config) return null;
+
+    const closeUnix = (() => {
+      const now = new Date();
+      const etStr = now.toLocaleString("en-US", { timeZone: "America/New_York" });
+      const etNow = new Date(etStr);
+      const target = new Date(etNow);
+      target.setHours(16, 0, 0, 0);
+      if (etNow >= target) target.setDate(target.getDate() + 1);
+      return Math.floor(now.getTime() / 1000 + (target.getTime() - etNow.getTime()) / 1000);
+    })();
+
+    const strikeLamports = BigInt(strikePrice);
+    const expiryDay = Math.floor(closeUnix / 86400);
+    const prevCloseLamports = strikeLamports; // use strike as prev close approximation
+
+    const tickerBytes = Array.from(padTicker(ticker));
+    const [configPda] = findGlobalConfig();
+    const [market] = findStrikeMarket(ticker, strikeLamports, closeUnix);
+    const [yesMint] = findYesMint(market);
+    const [noMint] = findNoMint(market);
+    const [usdcVault] = findUsdcVault(market);
+    const [escrowVault] = findEscrowVault(market);
+    const [yesEscrow] = findYesEscrow(market);
+    const [noEscrow] = findNoEscrow(market);
+    const [orderBook] = findOrderBook(market);
+    const [oracleFeed] = findPriceFeed(ticker);
+    const [tickerRegistryAddr] = findTickerRegistry();
+    const [solTreasuryAddr] = findSolTreasury();
+
+    const isAdmin = config.admin.equals(publicKey);
+    const fee = Number(config.strikeCreationFee);
+
+    const accounts: Record<string, unknown> = {
+      creator: publicKey,
+      config: configPda,
+      market, yesMint, noMint, usdcVault, escrowVault,
+      yesEscrow, noEscrow, orderBook, oracleFeed,
+      usdcMint: USDC_MINT,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+      rent: SYSVAR_RENT_PUBKEY,
+      tickerRegistry: tickerRegistryAddr,
+      solTreasury: solTreasuryAddr,
+    };
+
+    if (!isAdmin && fee > 0) {
+      accounts.creatorUsdcAta = getAssociatedTokenAddressSync(USDC_MINT, publicKey);
+      const [feeVault] = findFeeVault();
+      accounts.feeVault = feeVault;
+    } else {
+      accounts.creatorUsdcAta = null;
+      accounts.feeVault = null;
+    }
+
+    const tx = await program.methods
+      .createStrikeMarket(
+        tickerBytes,
+        new BN(strikeLamports.toString()),
+        expiryDay,
+        new BN(closeUnix),
+        new BN(prevCloseLamports.toString()),
+      )
+      .accountsPartial(accounts)
+      .transaction();
+
+    const sig = await sendTransaction(tx, { description: `Create ${ticker} $${(strikePrice / USDC_LAMPORTS).toFixed(0)} market` });
+    if (!sig) return null;
+
+    queryClient.invalidateQueries({ queryKey: ["markets"] });
+    return market;
+  }, [program, publicKey, config, ticker, strikePrice, sendTransaction, queryClient]);
+
+  // Submit — handles both existing and new markets
   const handleSubmit = useCallback(async () => {
-    if (!publicKey || !marketPubkey || quantityNum <= 0) return;
+    if (!publicKey || quantityNum <= 0) return;
 
     setError(null);
 
@@ -260,14 +363,27 @@ export function OrderModal({
       setError(`Insufficient USDC. You have $${usdcBalance.toFixed(2)} but need $${totalCostUSDC.toFixed(2)}. Use the faucet to get test funds.`);
       return;
     }
-    if (solBalance !== null && solBalance < 0.01) {
-      setError(`Insufficient SOL for transaction fees. You have ${solBalance.toFixed(4)} SOL. Use the faucet or visit faucet.solana.com for devnet SOL.`);
+    const minSol = marketPubkey ? 0.01 : 0.05; // new market needs more SOL for rent
+    if (solBalance !== null && solBalance < minSol) {
+      setError(`Insufficient SOL. You have ${solBalance.toFixed(4)} SOL but need ~${minSol} SOL${!marketPubkey ? " (includes market creation rent)" : ""}.`);
       return;
     }
 
     setSubmitting(true);
     try {
-      // Map OrderModalSide to PlaceOrderParams side
+      // If market doesn't exist yet, create it first
+      let resolvedMarket = marketPubkey;
+      if (!resolvedMarket) {
+        resolvedMarket = await createMarket();
+        if (!resolvedMarket) {
+          setError("Market creation failed. Check your wallet for details.");
+          return;
+        }
+        // Brief delay to let the market account propagate
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+
+      // Now place the order on the (possibly just-created) market
       const placeOrderSide = (() => {
         switch (activeSide) {
           case "buy-yes": return "buy-yes" as const;
@@ -278,8 +394,8 @@ export function OrderModal({
       })();
 
       const params: PlaceOrderParams = {
-        marketPubkey,
-        marketKey: marketPubkey.toBase58(),
+        marketPubkey: resolvedMarket,
+        marketKey: resolvedMarket.toBase58(),
         side: placeOrderSide,
         orderType,
         effectivePrice: yesPrice,
@@ -293,15 +409,14 @@ export function OrderModal({
         onSuccess?.(signature);
         onClose();
       } else {
-        // placeOrder returns null on failure (error already toasted by useTransaction)
-        setError("Transaction failed. Check your wallet for details.");
+        setError("Order placement failed. The market was created — try placing the order again from the trade page.");
       }
     } catch (err) {
       setError(extractErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
-  }, [publicKey, marketPubkey, quantityNum, activeSide, orderType, yesPrice, quantityLamports, orderBookData, altAddress, placeOrder, onSuccess, onClose]);
+  }, [publicKey, marketPubkey, quantityNum, activeSide, orderType, yesPrice, quantityLamports, orderBookData, altAddress, placeOrder, onSuccess, onClose, createMarket, isBuy, usdcBalance, solBalance, totalCostUSDC]);
 
   if (!open) return null;
 
@@ -552,7 +667,12 @@ export function OrderModal({
                 : `${sideBgColor} ${sideColor} hover:opacity-80`
             } disabled:opacity-30`}
           >
-            {submitting ? "Confirming..." : `${sideLabel} ${quantityNum > 0 ? quantityNum + " contracts" : ""}`}
+            {submitting
+              ? (isNewMarket ? "Creating market..." : "Confirming...")
+              : isNewMarket
+                ? `Create Market + ${sideLabel} ${quantityNum > 0 ? quantityNum : ""}`
+                : `${sideLabel} ${quantityNum > 0 ? quantityNum + " contracts" : ""}`
+            }
           </button>
         </div>
       </div>

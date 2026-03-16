@@ -6,7 +6,7 @@
  */
 
 import http from "node:http";
-import { createLogger } from "../../shared/src/alerting.ts";
+import { createLogger } from "../../shared/src/alerting.js";
 import {
   queryEvents,
   getLatestEvents,

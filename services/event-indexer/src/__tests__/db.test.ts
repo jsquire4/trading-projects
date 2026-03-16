@@ -16,7 +16,7 @@ import {
   queryCostBasis,
   queryMarketVwaps,
   type EventRow,
-} from "../db.ts";
+} from "../db.js";
 
 function makeEvent(overrides: Partial<Omit<EventRow, "id" | "created_at">> = {}): Omit<EventRow, "id" | "created_at"> {
   return {

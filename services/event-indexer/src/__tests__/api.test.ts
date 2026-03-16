@@ -7,8 +7,8 @@ import {
   upsertCheckpoint,
   insertOrderIntent,
   getDb,
-} from "../db.ts";
-import { startApiServer } from "../api.ts";
+} from "../db.js";
+import { startApiServer } from "../api.js";
 
 let server: http.Server;
 let baseUrl: string;

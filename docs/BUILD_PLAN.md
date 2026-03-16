@@ -1738,3 +1738,19 @@ HELIUS_API_KEY=                                       # For RPC + WebSocket
 16. Add strike intraday via admin CLI
 17. Settlement retries: simulate oracle failure, verify 30s retry for 15 min, then admin alert
 18. Trade history: History page shows execution log from parsed tx events
+
+---
+
+## Final State (2026-03-15)
+
+**Corrections to the plan above:**
+
+- **Anchor version**: 0.31.1 (not 0.30.x)
+- **Oracle data source**: Yahoo Finance (not Tradier). Switched during implementation — keyless, no rate limit issues.
+- **Order book**: Sparse layout replaced the original dense ZeroCopy design. See `ORDER_BOOK.md` and `DEV_LOG.md` for rationale.
+- **Removed instructions**: `expand_config`, `treasury_redeem`, `cleanup_market` were removed as unnecessary. `close_market` handles the full lifecycle.
+- **Analytics page**: Charts (Price History, Return Distribution) and Binary Greeks moved to the trade page (`/trade/[ticker]`). Standalone analytics page removed from navigation.
+- **Market creation**: Permissionless (not admin-only). Fee mechanism gates non-admin creation.
+- **Admin settle delay**: 5 minutes (not 1 hour). Documented deviation.
+
+**All 18 verification items pass** except item 6 (Tradier → Yahoo Finance) and item 13 (analytics absorbed into trade page).

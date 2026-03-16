@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { PublicKey } from "@solana/web3.js";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { useMarkets, useOrderBook, type ParsedMarket } from "@/hooks/useMarkets";
+import { useMarkets, type ParsedMarket } from "@/hooks/useMarkets";
 import { useMyOrders } from "@/hooks/useMyOrders";
 import { useCancelOrder } from "@/hooks/useCancelOrder";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
@@ -27,35 +27,60 @@ import { getExplorerUrl } from "@/lib/network";
 function AnalyticsBanner({
   ticker,
   market,
+  children,
 }: {
   ticker: string;
   market: ParsedMarket | null;
+  /** Strike tabs rendered at the bottom of the banner */
+  children?: React.ReactNode;
 }) {
+  const strikeDollars = market ? (Number(market.strikePrice) / 1_000_000).toFixed(0) : null;
+  const totalMinted = market ? Number(market.totalMinted) / 1_000_000 : 0;
+  const totalRedeemed = market ? Number(market.totalRedeemed) / 1_000_000 : 0;
+  const openInterest = totalMinted - totalRedeemed;
+
   return (
-    <div className="rounded-xl border border-white/10 bg-white/5 px-5 py-4 space-y-3">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-4">
-          <Link
-            href="/trade"
-            className="text-white/30 hover:text-white/60 transition-colors text-sm"
-          >
-            &larr;
-          </Link>
-          <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-xl font-bold text-white">{ticker}</h1>
-              {market?.isSettled && (
-                <span className="px-2 py-0.5 rounded bg-accent/20 text-accent text-[10px] font-medium">
-                  SETTLED
-                </span>
-              )}
+    <div className="relative rounded-xl border border-white/10 overflow-hidden">
+      {/* Animated gradient background */}
+      <div className="absolute inset-0 bg-gradient-to-r from-green-500/5 via-blue-500/5 to-purple-500/5" />
+      <div className="absolute inset-0 bg-gradient-to-b from-transparent to-black/20" />
+
+      <div className="relative px-5 py-5 space-y-4">
+        {/* Main row: ticker+price LEFT, stats+settlement RIGHT */}
+        <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+          {/* Left: ticker + price */}
+          <div className="flex items-start gap-4">
+            <Link
+              href="/trade"
+              className="text-white/30 hover:text-white/60 transition-colors text-lg mt-2"
+            >
+              &larr;
+            </Link>
+            <div>
+              <div className="flex items-baseline gap-3 mb-1">
+                <h1 className="text-3xl font-bold bg-gradient-to-r from-green-400 via-blue-400 to-purple-400 bg-clip-text text-transparent">{ticker}</h1>
+                {strikeDollars && (
+                  <span className="text-sm font-mono text-white/30">Strike ${strikeDollars}</span>
+                )}
+                {market?.isSettled && (
+                  <span className="px-2 py-0.5 rounded bg-accent/20 text-accent text-xs font-medium">SETTLED</span>
+                )}
+              </div>
+              <OraclePrice ticker={ticker} />
             </div>
-            <OraclePrice ticker={ticker} />
           </div>
-        </div>
-        <div className="flex items-center gap-3">
+
+          {/* Right: stats + settlement countdown */}
           {market && (
-            <>
+            <div className="flex items-center gap-3 shrink-0">
+              <div className="rounded-lg bg-white/5 border border-white/10 px-4 py-2.5 text-center">
+                <p className="text-[10px] text-white/40 uppercase tracking-wider">Open Interest</p>
+                <p className="text-lg font-mono font-bold text-white tabular-nums">{openInterest > 0 ? `$${openInterest.toLocaleString()}` : "—"}</p>
+              </div>
+              <div className="rounded-lg bg-white/5 border border-white/10 px-4 py-2.5 text-center">
+                <p className="text-[10px] text-white/40 uppercase tracking-wider">Minted</p>
+                <p className="text-lg font-mono font-bold text-white tabular-nums">{totalMinted > 0 ? `$${totalMinted.toLocaleString()}` : "—"}</p>
+              </div>
               <SettlementStatus
                 marketCloseUnix={Number(market.marketCloseUnix)}
                 isSettled={market.isSettled}
@@ -65,9 +90,16 @@ function AnalyticsBanner({
                 strikePrice={Number(market.strikePrice)}
               />
               <SettleButton market={market} />
-            </>
+            </div>
           )}
         </div>
+
+        {/* Strike tabs — passed as children, rendered at bottom of banner */}
+        {children && (
+          <div className="border-t border-white/5 pt-3">
+            {children}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -89,15 +121,11 @@ function MyOrdersPanel({
   if (!publicKey || markets.length === 0) return null;
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/5 overflow-hidden">
-      <div className="px-4 py-3 border-b border-white/10">
-        <h3 className="text-sm font-semibold text-white/80">My Orders — {ticker}</h3>
-      </div>
-      <div className="divide-y divide-white/5">
-        {markets.map((m) => (
-          <MarketOrderRows key={m.publicKey.toBase58()} market={m} />
-        ))}
-      </div>
+    <div className="space-y-3">
+      <h3 className="text-sm font-semibold text-white/60">My Orders — {ticker}</h3>
+      {markets.map((m) => (
+        <MarketOrderRows key={m.publicKey.toBase58()} market={m} />
+      ))}
     </div>
   );
 }
@@ -107,9 +135,9 @@ function MarketOrderRows({ market }: { market: ParsedMarket }) {
   const marketKey = market.publicKey.toBase58();
   const { orders } = useMyOrders(marketKey);
   const { cancelOrder, cancellingId } = useCancelOrder(marketKey);
-  const strikeDollars = (Number(market.strikePrice) / 1_000_000).toFixed(0);
 
   if (orders.length === 0) return null;
+  const strikeDollars = (Number(market.strikePrice) / 1_000_000).toFixed(0);
 
   const sideLabels: Record<number, string> = { 0: "Buy Yes", 1: "Sell Yes", 2: "Sell No" };
   const sideColors: Record<number, string> = {
@@ -118,37 +146,39 @@ function MarketOrderRows({ market }: { market: ParsedMarket }) {
     2: "text-red-400",
   };
 
+  const sideBorders: Record<number, string> = {
+    0: "border-green-500/20",
+    1: "border-amber-500/20",
+    2: "border-red-500/20",
+  };
+
   return (
     <>
       {orders.map((order) => {
         const qty = Number(order.quantity) / 1_000_000;
         const origQty = Number(order.originalQuantity) / 1_000_000;
         const filled = origQty - qty;
-        const impliedProb = order.side === 0 ? order.priceLevel : order.side === 2 ? 100 - order.priceLevel : order.priceLevel;
         const isCancelling = cancellingId === order.orderId.toString();
 
         return (
-          <div key={`${marketKey}-${order.orderId}`} className="flex items-center justify-between px-4 py-2 text-xs hover:bg-white/[0.02]">
-            <div className="flex items-center gap-3">
-              <span className="text-white/40 font-mono">${strikeDollars}</span>
-              <span className={`font-medium ${sideColors[order.side] ?? "text-white/50"}`}>
-                {sideLabels[order.side] ?? "Unknown"}
-              </span>
-              <span className="text-white/50 font-mono">{order.priceLevel}¢</span>
-              <span className="text-white/30">{impliedProb}%</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-white/50 font-mono tabular-nums">
-                {filled > 0 ? `${filled.toFixed(0)}/${origQty.toFixed(0)}` : qty.toFixed(0)}
-              </span>
-              <button
-                onClick={() => cancelOrder(order.orderId, order.priceLevel)}
-                disabled={isCancelling}
-                className="text-red-400/60 hover:text-red-400 disabled:text-white/20 transition-colors"
-              >
-                {isCancelling ? "..." : "✕"}
-              </button>
-            </div>
+          <div
+            key={`${marketKey}-${order.orderId}`}
+            className={`inline-flex items-center gap-2 rounded-lg border bg-white/5 px-3 py-1.5 text-sm ${sideBorders[order.side] ?? "border-white/10"}`}
+          >
+            <span className={`font-semibold ${sideColors[order.side] ?? "text-white/50"}`}>
+              {sideLabels[order.side] ?? "?"}
+            </span>
+            <span className="text-white/60 font-mono">{order.priceLevel}¢</span>
+            <span className="text-white/50 font-mono tabular-nums">
+              ×{filled > 0 ? `${filled.toFixed(0)}/${origQty.toFixed(0)}` : qty.toFixed(0)}
+            </span>
+            <button
+              onClick={() => cancelOrder(order.orderId, order.priceLevel)}
+              disabled={isCancelling}
+              className="text-red-400/50 hover:text-red-400 disabled:text-white/20 transition-colors ml-1"
+            >
+              {isCancelling ? "..." : "✕"}
+            </button>
           </div>
         );
       })}
@@ -174,8 +204,9 @@ function StrikeTabs({
   showingNewStrike: boolean;
 }) {
   return (
-    <div className="flex items-center gap-2 overflow-x-auto pb-1">
-      <span className="text-xs text-white/40 shrink-0">Strike:</span>
+    <div className="space-y-2">
+      <span className="text-sm font-semibold text-amber-400">Select Strike</span>
+      <div className="flex items-center gap-2 overflow-x-auto pb-1">
       {markets.map((m) => {
         const strike = (Number(m.strikePrice) / 1_000_000).toFixed(0);
         const key = m.publicKey.toBase58();
@@ -185,10 +216,10 @@ function StrikeTabs({
           <button
             key={key}
             onClick={() => onSelect(key)}
-            className={`px-3 py-1 rounded-md text-sm font-mono transition-all shrink-0 ${
+            className={`px-4 py-2 rounded-lg text-sm font-mono font-medium transition-all shrink-0 ${
               isSelected
-                ? "bg-accent/20 text-accent border border-accent/30"
-                : "bg-white/5 text-white/50 border border-white/10 hover:text-white/80"
+                ? "bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-[0_0_12px_rgba(245,158,11,0.15)]"
+                : "bg-white/5 text-white/50 border border-white/10 hover:text-white/80 hover:border-white/20"
             }`}
           >
             ${strike}
@@ -197,7 +228,7 @@ function StrikeTabs({
       })}
       <button
         onClick={onNewStrike}
-        className={`px-3 py-1 rounded-md text-sm font-medium transition-all shrink-0 ${
+        className={`px-4 py-2 rounded-lg text-sm font-medium transition-all shrink-0 ${
           showingNewStrike
             ? "bg-accent/20 text-accent border border-accent/30"
             : "bg-white/5 text-white/50 border border-dashed border-white/20 hover:text-white/80 hover:border-white/30"
@@ -205,6 +236,7 @@ function StrikeTabs({
       >
         + New Strike
       </button>
+      </div>
     </div>
   );
 }
@@ -314,57 +346,21 @@ export default function TradingCockpit({
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Analytics Banner */}
-      <AnalyticsBanner ticker={ticker} market={market} />
-
-      {/* Binary Greeks */}
-      {market && currentPrice > 0 && (
-        <BinaryGreeks
-          spotPrice={currentPrice}
-          strikePrice={Number(market.strikePrice) / 1_000_000}
-          volatility={0.30}
-          timeToExpiry={(() => {
-            const now = Math.floor(Date.now() / 1000);
-            const close = Number(market.marketCloseUnix);
-            const remaining = Math.max(close - now, 60);
-            return remaining / (365.25 * 24 * 3600);
-          })()}
+      {/* 1. Analytics Banner — hero with strike tabs inside */}
+      <AnalyticsBanner ticker={ticker} market={market}>
+        <StrikeTabs
+          markets={tickerMarkets}
+          selectedKey={activeKey}
+          onSelect={(key) => {
+            setSelectedKey(key);
+            setShowNewStrike(false);
+          }}
+          onNewStrike={handleNewStrike}
+          showingNewStrike={showNewStrike}
         />
-      )}
+      </AnalyticsBanner>
 
-      {/* Price History + Return Distribution — compact */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 rounded-xl border border-white/10 bg-white/[0.03] p-4 overflow-hidden">
-          <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mb-2">Price History</h3>
-          <div className="h-[200px] overflow-hidden">
-            <PriceHistory ticker={ticker} />
-          </div>
-        </div>
-        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 overflow-hidden">
-          <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mb-2">Distribution</h3>
-          <div className="h-[200px] overflow-hidden">
-            <HistoricalOverlay
-              ticker={ticker}
-              currentPrice={currentPrice > 0 ? currentPrice : undefined}
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* My Orders (all strikes) */}
-      <MyOrdersPanel ticker={ticker} markets={tickerMarkets} />
-
-      {/* Strike Tabs */}
-      <StrikeTabs
-        markets={tickerMarkets}
-        selectedKey={activeKey}
-        onSelect={(key) => {
-          setSelectedKey(key);
-          setShowNewStrike(false);
-        }}
-        onNewStrike={handleNewStrike}
-        showingNewStrike={showNewStrike}
-      />
+      {/* Greeks are passed into OrderTree headerRight below */}
 
       {/* New Strike mode — strike selection + empty OrderTree */}
       {showNewStrike && (
@@ -431,7 +427,7 @@ export default function TradingCockpit({
         </div>
       )}
 
-      {/* Order Tree */}
+      {/* 4. Order Tree — the action center */}
       {market && activeKey && !showNewStrike && (
         <OrderTree
           marketPubkey={market.publicKey}
@@ -439,9 +435,39 @@ export default function TradingCockpit({
           ticker={ticker}
           strikePrice={Number(market.strikePrice)}
           marketKey={activeKey}
+          headerRight={currentPrice > 0 ? (
+            <BinaryGreeks
+              spotPrice={currentPrice}
+              strikePrice={Number(market.strikePrice) / 1_000_000}
+              volatility={0.30}
+              timeToExpiry={(() => {
+                const now = Math.floor(Date.now() / 1000);
+                const close = Number(market.marketCloseUnix);
+                const remaining = Math.max(close - now, 60);
+                return remaining / (365.25 * 24 * 3600);
+              })()}
+            />
+          ) : undefined}
         />
       )}
 
+      {/* 5. Price History — full width */}
+      <div className="rounded-xl border border-white/10 bg-white/[0.03] p-5">
+        <h3 className="text-sm font-semibold text-white/60 mb-3">{ticker} Price History</h3>
+        <PriceHistory ticker={ticker} />
+      </div>
+
+      {/* 6. Return Distribution — full width */}
+      <div className="rounded-xl border border-white/10 bg-white/[0.03] p-5">
+        <h3 className="text-sm font-semibold text-white/60 mb-3">{ticker} Return Distribution</h3>
+        <HistoricalOverlay
+          ticker={ticker}
+          currentPrice={currentPrice > 0 ? currentPrice : undefined}
+        />
+      </div>
+
+      {/* 7. My Orders — bottom */}
+      <MyOrdersPanel ticker={ticker} markets={tickerMarkets} />
     </div>
   );
 }

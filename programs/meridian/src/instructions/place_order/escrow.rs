@@ -111,8 +111,11 @@ pub(super) fn refund_unfilled<'info>(
 
     match side {
         SIDE_USDC_BID => {
+            // Ceiling division to match escrow deposit (ceil(qty * price / 100))
             let refund = unfilled
                 .checked_mul(price as u64)
+                .ok_or(MeridianError::ArithmeticOverflow)?
+                .checked_add(99)
                 .ok_or(MeridianError::ArithmeticOverflow)?
                 .checked_div(100)
                 .ok_or(MeridianError::DivisionByZero)?;

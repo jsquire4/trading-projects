@@ -107,15 +107,12 @@ function buildBuyNoMakerAccounts(
     (o) => o.side === Side.NoBackedBid && o.priceLevel <= 100 - yesSellPrice,
   );
 
-  const allBids: { order: ActiveOrder; isMerge: boolean }[] = [];
-  for (let level = 99; level >= 1; level--) {
-    for (const o of usdcBids.filter((b) => b.priceLevel === level)) {
-      allBids.push({ order: o, isMerge: false });
-    }
-    for (const o of noBids.filter((b) => b.priceLevel === level)) {
-      allBids.push({ order: o, isMerge: true });
-    }
-  }
+  // Build sorted bid list in O(N log N) instead of O(99 × N)
+  const allBids: { order: ActiveOrder; isMerge: boolean }[] = [
+    ...usdcBids.map((o) => ({ order: o, isMerge: false })),
+    ...noBids.map((o) => ({ order: o, isMerge: true })),
+  ];
+  allBids.sort((a, b) => b.order.priceLevel - a.order.priceLevel);
 
   for (const { order, isMerge } of allBids) {
     if (makerAccounts.length >= maxFills) break;
@@ -156,15 +153,12 @@ function buildStandardMakerAccounts(
     const noBids = orders.filter(
       (o) => o.side === Side.NoBackedBid && o.priceLevel <= 100 - priceU8,
     );
-    const allBids: { order: ActiveOrder; isMerge: boolean }[] = [];
-    for (let level = 99; level >= 1; level--) {
-      for (const o of usdcBids.filter((b) => b.priceLevel === level)) {
-        allBids.push({ order: o, isMerge: false });
-      }
-      for (const o of noBids.filter((b) => b.priceLevel === level)) {
-        allBids.push({ order: o, isMerge: true });
-      }
-    }
+    // O(N log N) sort instead of O(99 × N) filter loop
+    const allBids: { order: ActiveOrder; isMerge: boolean }[] = [
+      ...usdcBids.map((o) => ({ order: o, isMerge: false })),
+      ...noBids.map((o) => ({ order: o, isMerge: true })),
+    ];
+    allBids.sort((a, b) => b.order.priceLevel - a.order.priceLevel);
     matchableOrders = allBids;
   } else if (sideU8 === Side.NoBackedBid) {
     // Sell No: matches against Yes asks (merge)

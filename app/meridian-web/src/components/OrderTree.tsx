@@ -10,6 +10,7 @@
 
 import { useMemo, useState, useCallback } from "react";
 import { useOrderBook, type OrderBookData } from "@/hooks/useMarkets";
+import { usePositions } from "@/hooks/usePositions";
 import { Side } from "@/lib/orderbook";
 import { OrderModal, type OrderModalSide } from "./OrderModal";
 import { PublicKey } from "@solana/web3.js";
@@ -33,6 +34,8 @@ interface OrderTreeProps {
   ticker: string;
   strikePrice: number;
   marketKey: string | null;
+  /** Optional content rendered right-aligned in the header (e.g. BinaryGreeks) */
+  headerRight?: React.ReactNode;
 }
 
 // ---------------------------------------------------------------------------
@@ -99,14 +102,25 @@ export function OrderTree({
   ticker,
   strikePrice,
   marketKey,
+  headerRight,
 }: OrderTreeProps) {
   const { data: orderBookData } = useOrderBook(marketKey);
+  const { data: positions = [] } = usePositions();
   const [showAllLevels, setShowAllLevels] = useState(false);
   const [modalState, setModalState] = useState<{
     open: boolean;
     side: OrderModalSide;
     yesPrice: number;
   }>({ open: false, side: "buy-yes", yesPrice: 50 });
+
+  // User's position on this market — determines smart modal defaults
+  const userPosition = useMemo(() => {
+    if (!marketPubkey) return null;
+    const key = marketPubkey.toBase58();
+    return positions.find((p) => p.market.publicKey.toBase58() === key) ?? null;
+  }, [positions, marketPubkey]);
+  const holdsYes = userPosition ? userPosition.yesBal > BigInt(0) : false;
+  const holdsNo = userPosition ? userPosition.noBal > BigInt(0) : false;
 
   const allRows = useMemo(() => buildRows(orderBookData), [orderBookData]);
 
@@ -131,51 +145,65 @@ export function OrderTree({
   const strikeDollars = (strikePrice / USDC_LAMPORTS).toFixed(0);
 
   return (
-    <div className="rounded-xl border border-white/10 overflow-hidden bg-gradient-to-b from-white/[0.03] to-transparent">
-      {/* Question header */}
-      <div className="px-5 pt-5 pb-4 text-center border-b border-white/10">
-        <p className="text-[11px] uppercase tracking-[0.2em] text-white/30 mb-1.5">
-          Today&apos;s Question
-        </p>
-        <h2 className="text-lg font-bold text-white">
-          Will <span className="text-accent">{ticker}</span> close above{" "}
-          <span className="text-green-400">${strikeDollars}</span> today?
-        </h2>
+    <div className="rounded-xl border border-white/10 bg-gradient-to-b from-white/[0.03] to-transparent">
+      {/* Market question header — question left, greeks right */}
+      <div className="px-5 pt-5 pb-4 border-b border-white/10 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+        <div>
+          <h2 className="text-2xl font-bold text-white">
+            Will <span className="bg-gradient-to-r from-green-400 via-blue-400 to-purple-400 bg-clip-text text-transparent drop-shadow-[0_0_8px_rgba(96,165,250,0.3)]">{ticker}</span> close above{" "}
+            <span className="bg-gradient-to-r from-emerald-400 to-green-300 bg-clip-text text-transparent drop-shadow-[0_0_8px_rgba(52,211,153,0.3)]">${strikeDollars}</span>?
+          </h2>
+          <p className="text-sm text-white/40 mt-1">$1 payout per winning contract</p>
+        </div>
+        {headerRight && (
+          <div className="shrink-0">{headerRight}</div>
+        )}
       </div>
 
-      {/* Column headers */}
-      <div className="grid grid-cols-[1fr_56px_56px_1fr] border-b border-white/10 bg-white/[0.02]">
-        <div className="px-4 py-2.5 text-right">
-          <span className="text-sm font-bold text-green-400">YES</span>
-          <span className="text-[10px] text-white/30 ml-1.5">depth</span>
+      {/* Empty state — no table, just the CTA */}
+      {!hasAnyOrders && !showAllLevels ? (
+        <div className="px-6 py-10 flex items-center justify-center">
+          <button
+            onClick={() => setShowAllLevels(true)}
+            className="group/cta relative overflow-hidden inline-flex items-center gap-2 rounded-xl border border-accent/30 bg-accent/10 px-6 py-3 text-sm font-semibold text-accent hover:bg-accent/20 hover:scale-105 transition-all shadow-[0_0_20px_rgba(59,130,246,0.1)]"
+          >
+            <div className="absolute inset-0 -translate-x-full group-hover/cta:translate-x-full transition-transform duration-700 bg-gradient-to-r from-transparent via-white/[0.06] to-transparent" />
+            <span className="relative">No Orders Yet, Start One</span>
+          </button>
         </div>
-        <div className="flex items-center justify-center border-x border-white/5">
-          <span className="text-[10px] text-white/25 font-medium">YES ¢</span>
-        </div>
-        <div className="flex items-center justify-center border-r border-white/5">
-          <span className="text-[10px] text-white/25 font-medium">NO ¢</span>
-        </div>
-        <div className="px-4 py-2.5">
-          <span className="text-sm font-bold text-red-400">NO</span>
-          <span className="text-[10px] text-white/30 ml-1.5">depth</span>
-        </div>
-      </div>
-
-      {/* Order rows */}
-      <div className="max-h-[480px] overflow-y-auto">
-        {visibleRows.length === 0 && !showAllLevels ? (
-          <div className="px-6 py-10 text-center space-y-4">
-            <div className="text-white/30 text-sm">
-              No open orders on this strike yet.
+      ) : (
+        <>
+          {/* Column headers */}
+          <div className="grid grid-cols-[1fr_64px_64px_1fr] border-b border-white/10 bg-white/[0.02]">
+            <div className="px-4 py-3 text-right">
+              <span className="text-base font-bold text-green-400">YES</span>
+              <span className="text-xs text-white/30 ml-2">depth</span>
             </div>
-            <button
-              onClick={() => setShowAllLevels(true)}
-              className="inline-flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/10 px-5 py-2.5 text-sm font-semibold text-accent hover:bg-accent/20 transition-colors"
-            >
-              No Orders Yet, Start One
-            </button>
+            <div className="flex items-center justify-center border-x border-white/5">
+              <span className="text-xs text-white/30 font-medium">YES ¢</span>
+            </div>
+            <div className="flex items-center justify-center border-r border-white/5">
+              <span className="text-xs text-white/30 font-medium">NO ¢</span>
+            </div>
+            <div className="px-4 py-3">
+              <span className="text-base font-bold text-red-400">NO</span>
+              <span className="text-xs text-white/30 ml-2">depth</span>
+            </div>
           </div>
-        ) : (
+
+          {/* Order rows */}
+          <div className="max-h-[480px] overflow-y-auto">
+            {visibleRows.length === 0 && !showAllLevels ? (
+              <div className="px-6 py-10 text-center space-y-4">
+                <div className="text-white/30 text-sm">No open orders on this strike yet.</div>
+                <button
+                  onClick={() => setShowAllLevels(true)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/10 px-5 py-2.5 text-sm font-semibold text-accent hover:bg-accent/20 transition-colors"
+                >
+                  Be the first — place an order
+                </button>
+              </div>
+            ) : (
           visibleRows.map((row) => {
             const yesIntensity = row.yesQty / maxQty;
             const noIntensity = row.noQty / maxQty;
@@ -183,25 +211,38 @@ export function OrderTree({
             return (
               <div
                 key={row.yesPrice}
-                className="grid grid-cols-[1fr_56px_56px_1fr] border-b border-white/[0.04] last:border-b-0 group/row hover:bg-white/[0.02] transition-colors"
+                className="grid grid-cols-[1fr_64px_64px_1fr] border-b border-white/[0.04] last:border-b-0 group/row hover:bg-white/[0.02] transition-colors"
               >
                 {/* YES side — click to trade */}
                 <button
-                  onClick={() => handleRowClick(row.yesQty > 0 ? "buy-yes" : "sell-yes", row.yesPrice)}
+                  onClick={() => handleRowClick(holdsYes ? "sell-yes" : "buy-yes", row.yesPrice)}
                   className="relative text-right pr-4 py-2 cursor-pointer group/yes"
                   title={row.yesQty > 0 ? `Buy Yes @ ${row.yesPrice}¢` : `Sell Yes @ ${row.yesPrice}¢`}
                 >
-                  {/* Volume bar */}
+                  {/* Volume bar — pulses when high volume */}
                   <div
-                    className="absolute inset-y-0 right-0 bg-green-500/20 group-hover/yes:bg-green-500/30 transition-all rounded-l-sm"
+                    className={`absolute inset-y-0 right-0 group-hover/yes:bg-green-500/30 transition-all rounded-l-sm ${
+                      yesIntensity > 0.6
+                        ? "bg-green-500/30 animate-pulse"
+                        : yesIntensity > 0.3
+                        ? "bg-green-500/25"
+                        : "bg-green-500/15"
+                    }`}
                     style={{ width: `${Math.max(0, yesIntensity * 100)}%` }}
                   />
+                  {/* Glow effect for high volume */}
+                  {yesIntensity > 0.5 && (
+                    <div
+                      className="absolute inset-y-0 right-0 bg-gradient-to-l from-green-400/10 to-transparent animate-pulse pointer-events-none"
+                      style={{ width: `${Math.max(0, yesIntensity * 60)}%` }}
+                    />
+                  )}
                   <div className="relative flex items-center justify-end gap-2">
                     {row.yesOrders > 0 && (
-                      <span className="text-[10px] text-white/25 tabular-nums">{row.yesOrders}×</span>
+                      <span className="text-xs text-white/30 tabular-nums">{row.yesOrders}×</span>
                     )}
                     {row.yesQty > 0 ? (
-                      <span className="text-sm font-mono font-medium text-green-400/90 group-hover/yes:text-green-300 tabular-nums transition-colors">
+                      <span className="text-base font-mono font-semibold text-green-400 group-hover/yes:text-green-300 tabular-nums transition-colors">
                         {formatQty(row.yesQty)}
                       </span>
                     ) : (
@@ -212,30 +253,49 @@ export function OrderTree({
                   </div>
                 </button>
 
-                {/* YES price cell */}
-                <div className="flex items-center justify-center text-sm font-mono font-medium text-white/50 bg-white/[0.015] border-x border-white/[0.04] tabular-nums">
+                {/* YES price cell — clickable */}
+                <button
+                  onClick={() => handleRowClick(holdsYes ? "sell-yes" : "buy-yes", row.yesPrice)}
+                  className="flex items-center justify-center text-base font-mono font-semibold tabular-nums border-x border-white/[0.04] bg-white/[0.015] text-white/60 hover:bg-green-500/20 hover:text-green-300 hover:scale-105 transition-all duration-150 cursor-pointer"
+                >
                   {row.yesPrice}
-                </div>
+                </button>
 
-                {/* NO price cell */}
-                <div className="flex items-center justify-center text-sm font-mono font-medium text-white/50 bg-white/[0.015] border-r border-white/[0.04] tabular-nums">
+                {/* NO price cell — clickable */}
+                <button
+                  onClick={() => handleRowClick(holdsNo ? "sell-no" : "buy-no", row.yesPrice)}
+                  className="flex items-center justify-center text-base font-mono font-semibold tabular-nums border-r border-white/[0.04] bg-white/[0.015] text-white/60 hover:bg-red-500/20 hover:text-red-300 hover:scale-105 transition-all duration-150 cursor-pointer"
+                >
                   {row.noPrice}
-                </div>
+                </button>
 
                 {/* NO side — click to trade */}
                 <button
-                  onClick={() => handleRowClick(row.noQty > 0 ? "buy-no" : "sell-no", row.yesPrice)}
+                  onClick={() => handleRowClick(holdsNo ? "sell-no" : "buy-no", row.yesPrice)}
                   className="relative text-left pl-4 py-2 cursor-pointer group/no"
                   title={row.noQty > 0 ? `Buy No @ ${row.noPrice}¢` : `Sell No @ ${row.noPrice}¢`}
                 >
-                  {/* Volume bar */}
+                  {/* Volume bar — pulses when high volume */}
                   <div
-                    className="absolute inset-y-0 left-0 bg-red-500/20 group-hover/no:bg-red-500/30 transition-all rounded-r-sm"
+                    className={`absolute inset-y-0 left-0 group-hover/no:bg-red-500/30 transition-all rounded-r-sm ${
+                      noIntensity > 0.6
+                        ? "bg-red-500/30 animate-pulse"
+                        : noIntensity > 0.3
+                        ? "bg-red-500/25"
+                        : "bg-red-500/15"
+                    }`}
                     style={{ width: `${Math.max(0, noIntensity * 100)}%` }}
                   />
+                  {/* Glow effect for high volume */}
+                  {noIntensity > 0.5 && (
+                    <div
+                      className="absolute inset-y-0 left-0 bg-gradient-to-r from-red-400/10 to-transparent animate-pulse pointer-events-none"
+                      style={{ width: `${Math.max(0, noIntensity * 60)}%` }}
+                    />
+                  )}
                   <div className="relative flex items-center gap-2">
                     {row.noQty > 0 ? (
-                      <span className="text-sm font-mono font-medium text-red-400/90 group-hover/no:text-red-300 tabular-nums transition-colors">
+                      <span className="text-base font-mono font-semibold text-red-400 group-hover/no:text-red-300 tabular-nums transition-colors">
                         {formatQty(row.noQty)}
                       </span>
                     ) : (
@@ -244,7 +304,7 @@ export function OrderTree({
                       </span>
                     )}
                     {row.noOrders > 0 && (
-                      <span className="text-[10px] text-white/25 tabular-nums">×{row.noOrders}</span>
+                      <span className="text-xs text-white/30 tabular-nums">×{row.noOrders}</span>
                     )}
                   </div>
                 </button>
@@ -252,16 +312,18 @@ export function OrderTree({
             );
           })
         )}
-      </div>
+          </div>
+        </>
+      )}
 
       {/* Expand / Collapse toggle */}
       {(hasAnyOrders || showAllLevels) && (
-        <div className="border-t border-white/10">
+        <div className="border-t border-white/10 py-4 flex justify-center">
           <button
             onClick={() => setShowAllLevels(!showAllLevels)}
-            className="w-full text-center text-xs text-white/30 hover:text-white/50 py-2.5 transition-colors"
+            className="rounded-lg border border-white/20 bg-white/5 hover:bg-white/10 px-6 py-2 text-sm font-medium text-white/60 hover:text-white/80 transition-colors"
           >
-            {showAllLevels ? "Show active levels only" : `Show all 99 levels`}
+            {showAllLevels ? "Show active levels only" : "Show all 99 levels"}
           </button>
         </div>
       )}

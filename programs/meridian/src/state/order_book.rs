@@ -13,12 +13,9 @@ pub const CRANK_BATCH_SIZE: usize = 32;
 /// Maximum settlement overrides
 pub const MAX_OVERRIDES: u8 = 3;
 /// Override window duration in seconds.
-/// TODO: For mainnet deployment, increase to 300 (5 min) to give admin
-/// time to dispute incorrect settlements. Currently 1s for devnet/test
-/// compatibility. Consider making this a config parameter instead of a constant.
-#[cfg(not(feature = "stress-test"))]
-pub const OVERRIDE_WINDOW_SECS: i64 = 1;
-#[cfg(feature = "stress-test")]
+/// MAINNET TODO: Increase to 300 (5 min) to give admin time to dispute
+/// incorrect oracle settlements. Currently 1s for devnet/test speed.
+/// Should be moved to GlobalConfig as an admin-configurable parameter.
 pub const OVERRIDE_WINDOW_SECS: i64 = 1;
 
 /// Admin settle delay in seconds (5 minutes after market close; 5s in stress-test builds)

@@ -186,15 +186,15 @@ export function HistoricalOverlay({
     <div className="w-full space-y-3">
       {/* Period toggle */}
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-zinc-300">
+        <h3 className="text-base font-semibold text-white/70">
           {period === "daily" ? "Daily" : "Weekly"} Return Distribution
         </h3>
-        <div className="flex gap-1 bg-white/5 rounded p-0.5">
+        <div className="flex gap-1 bg-white/5 rounded-lg p-1">
           {(["daily", "weekly"] as Period[]).map((p) => (
             <button
               key={p}
               onClick={() => setPeriod(p)}
-              className={`px-2.5 py-1 text-xs rounded transition-colors ${
+              className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${
                 p === period
                   ? "bg-white/10 text-white"
                   : "text-white/40 hover:text-white/60"
@@ -206,28 +206,37 @@ export function HistoricalOverlay({
         </div>
       </div>
 
-      {/* Stats summary */}
+      {/* Stats summary — flashy cards */}
       <div className="grid grid-cols-3 gap-3">
-        <div className="rounded-lg bg-white/5 border border-white/10 px-3 py-2">
-          <p className="text-[10px] text-white/40">Mean {periodLabel} return (&#956;)</p>
-          <p className={`text-lg font-bold tabular-nums ${mu >= 0 ? "text-green-400" : "text-red-400"}`}>
-            {mu >= 0 ? "+" : ""}{mu.toFixed(3)}%
-          </p>
-          <p className="text-[10px] text-white/25 tabular-nums">&#956; = {mu.toFixed(4)}</p>
+        <div className={`relative rounded-lg border px-4 py-3 overflow-hidden ${mu >= 0 ? "border-green-500/20" : "border-red-500/20"}`}>
+          <div className={`absolute inset-0 ${mu >= 0 ? "bg-gradient-to-br from-green-500/10 to-transparent" : "bg-gradient-to-br from-red-500/10 to-transparent"}`} />
+          <div className="relative">
+            <p className="text-sm text-white/50 font-medium">Mean {periodLabel} return</p>
+            <p className={`text-2xl font-bold font-mono tabular-nums ${mu >= 0 ? "text-green-400" : "text-red-400"}`}>
+              {mu >= 0 ? "+" : ""}{mu.toFixed(3)}%
+            </p>
+            <p className="text-sm text-white/30 tabular-nums mt-0.5">μ = {mu.toFixed(4)}</p>
+          </div>
         </div>
-        <div className="rounded-lg bg-white/5 border border-white/10 px-3 py-2">
-          <p className="text-[10px] text-white/40">Std deviation (&#963;)</p>
-          <p className="text-lg font-bold tabular-nums text-white/80">
-            {sigma.toFixed(3)}%
-          </p>
-          <p className="text-[10px] text-white/25 tabular-nums">&#963; = {sigma.toFixed(4)}</p>
+        <div className="relative rounded-lg border border-purple-500/20 px-4 py-3 overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-br from-purple-500/10 to-transparent" />
+          <div className="relative">
+            <p className="text-sm text-white/50 font-medium">Std deviation</p>
+            <p className="text-2xl font-bold font-mono tabular-nums text-purple-300">
+              {sigma.toFixed(3)}%
+            </p>
+            <p className="text-sm text-white/30 tabular-nums mt-0.5">σ = {sigma.toFixed(4)}</p>
+          </div>
         </div>
-        <div className="rounded-lg bg-white/5 border border-white/10 px-3 py-2">
-          <p className="text-[10px] text-white/40">Observations (n)</p>
-          <p className="text-lg font-bold tabular-nums text-white/80">
-            {returns.length}
-          </p>
-          <p className="text-[10px] text-white/25 tabular-nums">&#956; &#177; 1&#963; = [{(mu - sigma).toFixed(2)}%, {(mu + sigma).toFixed(2)}%]</p>
+        <div className="relative rounded-lg border border-blue-500/20 px-4 py-3 overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 to-transparent" />
+          <div className="relative">
+            <p className="text-sm text-white/50 font-medium">Observations</p>
+            <p className="text-2xl font-bold font-mono tabular-nums text-blue-300">
+              {returns.length}
+            </p>
+            <p className="text-sm text-white/30 tabular-nums mt-0.5">μ ± 1σ = [{(mu - sigma).toFixed(2)}%, +{(mu + sigma).toFixed(2)}%]</p>
+          </div>
         </div>
       </div>
 
@@ -237,6 +246,26 @@ export function HistoricalOverlay({
           data={chartData}
           margin={{ top: 20, right: 16, bottom: 4, left: 8 }}
         >
+          {/* Gradient defs for bars and line glow */}
+          <defs>
+            <linearGradient id="distBarGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#6366f1" stopOpacity={0.85} />
+              <stop offset="100%" stopColor="#4c1d95" stopOpacity={0.3} />
+            </linearGradient>
+            <linearGradient id="distLineGradient" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stopColor="#a855f7" stopOpacity={0.5} />
+              <stop offset="50%" stopColor="#c084fc" stopOpacity={1} />
+              <stop offset="100%" stopColor="#a855f7" stopOpacity={0.5} />
+            </linearGradient>
+            <filter id="distLineGlow">
+              <feGaussianBlur stdDeviation="2.5" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+
           <CartesianGrid {...GRID_STYLE} />
 
           <XAxis
@@ -271,21 +300,22 @@ export function HistoricalOverlay({
             x={chartData.find((d) => d.center >= 0 && d.center < binWidth)?.label}
             stroke={COLORS.neutral}
             strokeDasharray="4 4"
-            label={{ value: "0%", fill: COLORS.axisText, fontSize: 10, position: "top" }}
+            label={{ value: "0%", fill: COLORS.axisText, fontSize: 13, position: "top" }}
           />
 
           <Bar
             dataKey="frequency"
-            fill={COLORS.accent}
-            opacity={0.7}
-            radius={[2, 2, 0, 0]}
+            fill="url(#distBarGradient)"
+            radius={[3, 3, 0, 0]}
             name="frequency"
           />
 
           <Line
+            type="monotone"
             dataKey="normal"
-            stroke={COLORS.secondary}
-            strokeWidth={2}
+            stroke="url(#distLineGradient)"
+            strokeWidth={2.5}
+            filter="url(#distLineGlow)"
             dot={false}
             name="normal"
           />
@@ -294,45 +324,45 @@ export function HistoricalOverlay({
 
       {/* Projection */}
       {projection && currentPrice && currentPrice > 0 && (
-        <div className="rounded-lg bg-white/5 border border-white/10 px-4 py-3 space-y-1.5">
-          <p className="text-xs text-white/50 font-medium">
-            Forward projection at mean {periodLabel} return of{" "}
-            <span className={mu >= 0 ? "text-green-400" : "text-red-400"}>
+        <div className="rounded-lg bg-white/5 border border-white/10 px-5 py-4 space-y-2">
+          <p className="text-sm text-white/50 font-medium">
+            Projection at{" "}
+            <span className={`font-mono font-bold ${mu >= 0 ? "text-green-400" : "text-red-400"}`}>
               {mu >= 0 ? "+" : ""}{mu.toFixed(3)}%
             </span>{" "}
-            from {formatDollar(currentPrice)} today:
+            mean {periodLabel} return from {formatDollar(currentPrice)}:
           </p>
-          <div className="grid grid-cols-3 gap-4 text-sm">
+          <div className="grid grid-cols-3 gap-4">
             <div>
-              <span className="text-white/40 text-xs">1 week</span>
-              <p className="font-mono font-medium text-white/80">
+              <span className="text-white/40 text-sm">1 week</span>
+              <p className="text-lg font-mono font-bold text-white tabular-nums">
                 {formatDollar(projection.weekPrice)}
               </p>
-              <p className="text-[10px] text-white/30">{dates.week}</p>
+              <p className="text-xs text-white/30">{dates.week}</p>
             </div>
             <div>
-              <span className="text-white/40 text-xs">1 month</span>
-              <p className="font-mono font-medium text-white/80">
+              <span className="text-white/40 text-sm">1 month</span>
+              <p className="text-lg font-mono font-bold text-white tabular-nums">
                 {formatDollar(projection.monthPrice)}
               </p>
-              <p className="text-[10px] text-white/30">{dates.month}</p>
+              <p className="text-xs text-white/30">{dates.month}</p>
             </div>
             <div>
-              <span className="text-white/40 text-xs">1 year</span>
-              <p className="font-mono font-medium text-white/80">
+              <span className="text-white/40 text-sm">1 year</span>
+              <p className="text-lg font-mono font-bold text-white tabular-nums">
                 {formatDollar(projection.yearPrice)}
               </p>
-              <p className="text-[10px] text-white/30">{dates.year}</p>
+              <p className="text-xs text-white/30">{dates.year}</p>
             </div>
           </div>
-          <p className="text-[10px] text-white/25">
+          <p className="text-xs text-white/25">
             Annualized: {projection.annualizedPct >= 0 ? "+" : ""}{projection.annualizedPct.toFixed(1)}%.
             {" "}Based on {returns.length} {periodLabel} observations. Past performance is not indicative of future results.
           </p>
         </div>
       )}
 
-      <p className="text-[10px] text-zinc-600">
+      <p className="text-xs text-white/30">
         {returns.length} {period} returns over ~{Math.round(returns.length * (period === "daily" ? 1 : 5) / 252 * 12)} months.
         {" "}Purple curve: fitted normal distribution (μ={mu.toFixed(3)}%, σ={sigma.toFixed(3)}%).
       </p>

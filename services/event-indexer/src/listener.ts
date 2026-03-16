@@ -12,7 +12,7 @@ import {
   type Context,
 } from "@solana/web3.js";
 import { BorshCoder, type Idl } from "@coral-xyz/anchor";
-import { createLogger } from "../../shared/src/alerting.ts";
+import { createLogger } from "../../shared/src/alerting.js";
 import {
   insertEventsBatch,
   upsertCheckpoint,

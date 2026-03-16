@@ -37,31 +37,44 @@ One order book per market. One matching engine. Three order side types. No separ
 
 ## Account Schema
 
-### OrderBook (ZeroCopy, ~126 KB)
+### OrderBook (Sparse, variable size)
+
+> **Note**: The original dense layout (16 fixed slots per level, ~126KB) was replaced in Phase 6 with a sparse layout. Markets now start at 270 bytes and grow on demand.
 
 ```
-market: Pubkey             // 32 — parent StrikeMarket PDA
-next_order_id: u64         // 8  — monotonically incrementing counter
-levels: [PriceLevel; 99]   // 99 price levels (index 0 = price 1, index 98 = price 99)
-bump: u8                   // 1  — PDA bump
+Header (270 bytes):
+  [0..8]     discriminator       // Anchor discriminator
+  [8..40]    market: Pubkey      // parent StrikeMarket PDA
+  [40..48]   next_order_id: u64  // monotonically incrementing counter
+  [48..246]  price_map: [u16; 99]// byte offset per price level, 0xFFFF = unallocated
+  [246]      level_count: u8     // active levels with orders
+  [247]      max_levels: u8      // allocated level count (monotonically increasing)
+  [248]      bump: u8            // PDA bump
+  [249..270] _reserved
 ```
 
 PDA seeds: `[b"order_book", market.key().as_ref()]`
 
-One OrderBook per StrikeMarket. Created during `create_strike_market`. Closed during `close_market` (Phase 6).
+One OrderBook per StrikeMarket. Created inline by `create_strike_market` (270 bytes). Grows via `realloc` when new price levels or order slots are needed. Closed during `close_market`.
 
-### PriceLevel
+### Price Map
+
+The `price_map` is a `[u16; 99]` array mapping price (1-99) to byte offsets within the level data region. Values are byte offsets relative to the end of the 270-byte header. `0xFFFF` (`PRICE_UNALLOCATED`) means no level exists at that price.
+
+This replaces the old fixed-index scheme. Levels are no longer at predictable offsets — they're allocated sequentially as needed, and the price map provides O(1) lookup.
+
+### Level Header (8 bytes)
 
 ```
-orders: [OrderSlot; 16]    // 16 fixed slots per level
-count: u8                  // number of active orders at this level
+price: u8           // price level (1-99)
+active_count: u8    // number of active (unfilled/uncancelled) orders
+slot_count: u8      // total allocated slots (grows by 1 via realloc)
+_padding: [u8; 5]
 ```
 
-99 levels × 16 slots = 1,584 maximum concurrent orders per market. Each level maps to a price point: index 0 = price 1 ($0.01), index 98 = price 99 ($0.99).
+Each level starts with 1 slot. When all slots are full, `expand_level` adds 1 more slot via `realloc`. No fixed cap per level — grows until the account hits Solana's 10MB limit (theoretical ~89K orders per book).
 
-If all 16 slots at a level are active, new orders at that level are rejected with `OrderBookFull` (error 6051). This is a documented known limitation — sufficient for prototype scale.
-
-### OrderSlot (~73 bytes)
+### OrderSlot (112 bytes)
 
 ```
 owner: Pubkey              // 32 — wallet that placed the order
@@ -69,10 +82,14 @@ order_id: u64              // 8  — unique ID from next_order_id
 quantity: u64              // 8  — remaining quantity (token lamports, 6 decimals)
 original_quantity: u64     // 8  — quantity at placement (for fill tracking)
 side: u8                   // 1  — 0=USDC bid, 1=Yes ask, 2=No-backed bid
+_side_padding: [u8; 7]     // 7  — alignment
 timestamp: i64             // 8  — Clock::get() at placement
-is_active: bool            // 1  — false = slot is empty/cancelled/filled
+is_active: u8              // 1  — 0 = empty/cancelled/filled, 1 = active
 _padding: [u8; 7]          // 7  — alignment
+rent_depositor: Pubkey     // 32 — wallet that paid SOL rent for this slot
 ```
+
+The `rent_depositor` field (added in sparse redesign) tracks who paid the SOL rent for each order slot, enabling rent refunds on cancel/close to the correct wallet.
 
 **`side` field values**:
 | Value | Name | User Intent | Collateral |
@@ -81,7 +98,7 @@ _padding: [u8; 7]          // 7  — alignment
 | 1 | Yes ask | Sell Yes | Yes tokens |
 | 2 | No-backed bid | Sell No | No tokens |
 
-The `side` field replaced the original `is_bid: bool` to support three order types on one book. This is the key schema change that enables the No-backed bid paradigm.
+**Why sparse over dense**: Dense layout allocated ~126KB per market regardless of activity. Most markets have <10 active orders across 3-5 price levels. Sparse layout costs ~270 bytes for an empty market + ~120 bytes per order. A market with 20 orders costs ~2.7KB instead of ~126KB. Market creation rent dropped from ~0.89 SOL to ~0.019 SOL.
 
 ### FillEvent (emitted via `emit!`, not stored on-chain)
 

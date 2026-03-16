@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { BN } from "@coral-xyz/anchor";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useConnection } from "@solana/wallet-adapter-react";
@@ -68,9 +68,11 @@ export function CreateMarketForm() {
   const [error, setError] = useState<string | null>(null);
 
   // Auto-select first ticker when registry loads
-  if (!ticker && activeTickers.length > 0) {
-    setTicker(activeTickers[0]);
-  }
+  useEffect(() => {
+    if (!ticker && activeTickers.length > 0) {
+      setTicker(activeTickers[0]);
+    }
+  }, [ticker, activeTickers]);
 
   const submitting = step !== "idle";
 

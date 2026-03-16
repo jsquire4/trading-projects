@@ -12,7 +12,10 @@ if (!process.env.NEXT_PUBLIC_USDC_MINT) {
 const USDC_MINT = new PublicKey(process.env.NEXT_PUBLIC_USDC_MINT);
 const FAUCET_AMOUNT = 1_000 * 1_000_000; // 1000 USDC (6 decimals)
 
-// In-memory rate limit: wallet address -> last served timestamp
+// In-memory rate limit: wallet address -> last served timestamp.
+// NOTE: This resets on serverless cold starts (Railway, Vercel). Acceptable for
+// devnet/localnet faucet — not a security mechanism, just abuse throttling.
+// For production, use Redis or KV-backed rate limiting.
 const rateLimitMap = new Map<string, number>();
 const RATE_LIMIT_MS = 60_000; // 60 seconds
 

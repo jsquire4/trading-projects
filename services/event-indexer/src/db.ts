@@ -8,7 +8,7 @@
 import Database from "better-sqlite3";
 import path from "node:path";
 import fs from "node:fs";
-import { createLogger } from "../../shared/src/alerting.ts";
+import { createLogger } from "../../shared/src/alerting.js";
 
 const log = createLogger("event-indexer:db");
 

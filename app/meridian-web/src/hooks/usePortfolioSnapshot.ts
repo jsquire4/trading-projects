@@ -137,14 +137,11 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
     const value = positions.reduce((sum, p) => {
       const marketKey = p.market.publicKey.toBase58();
       let yesMid: number;
-      let noMid: number;
       if (p.market.isSettled) {
         yesMid = p.market.outcome === 1 ? 1.0 : 0.0;
-        noMid = 1 - yesMid;
       } else {
         const mid = midPrices?.get(marketKey);
         yesMid = mid ?? 0.5;
-        noMid = 1 - yesMid;
         if (mid === undefined) fallback = true;
       }
       return sum + calcPositionValue(Number(p.yesBal) / 1_000_000, Number(p.noBal) / 1_000_000, yesMid);
@@ -238,13 +235,10 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
     for (const pos of positions) {
       const marketKey = pos.market.publicKey.toBase58();
       let yesMid: number;
-      let noMid: number;
       if (pos.market.isSettled) {
         yesMid = pos.market.outcome === 1 ? 1.0 : 0.0;
-        noMid = 1 - yesMid;
       } else {
         yesMid = midPrices?.get(marketKey) ?? 0.5;
-        noMid = 1 - yesMid;
       }
       const currentVal = calcPositionValue(Number(pos.yesBal) / 1_000_000, Number(pos.noBal) / 1_000_000, yesMid);
       const cost = costByMarket.get(marketKey) ?? 0;

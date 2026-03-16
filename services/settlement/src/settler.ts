@@ -179,3 +179,58 @@ export async function settleMarkets(
 
   return result;
 }
+
+/**
+ * Admin-settle markets whose tickers failed price confirmation.
+ * Uses the last known price from Yahoo Finance as the settlement price.
+ * This is the fallback path — only called when oracle-based settlement times out.
+ */
+export async function adminSettleMarkets(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  program: Program<any>,
+  markets: MarketInfo[],
+  lastKnownPrices: Map<string, number>,
+): Promise<SettlementResult> {
+  const result: SettlementResult = { settled: [], failed: [] };
+  const [configPda] = findGlobalConfig();
+
+  for (const market of markets) {
+    const ticker = tickerFromBytes(market.account.ticker);
+    if (market.account.isSettled) continue;
+
+    const price = lastKnownPrices.get(ticker);
+    if (!price || price <= 0) {
+      log.critical(`No last-known price for ${ticker} — cannot admin_settle`);
+      result.failed.push({ market, error: "No last-known price for admin_settle" });
+      continue;
+    }
+
+    const priceLamports = Math.round(price * 1_000_000);
+
+    try {
+      log.info(`Admin-settling ${ticker} with last-known price $${price.toFixed(2)}`);
+      await program.methods
+        .adminSettle(new BN(priceLamports))
+        .accounts({
+          admin: program.provider.publicKey!,
+          config: configPda,
+          market: market.publicKey,
+        })
+        .rpc();
+
+      log.info(`Admin-settled ${ticker} successfully`);
+      result.settled.push(market);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      // AdminSettleTooEarly means the delay hasn't passed yet — retry on next cycle
+      if (errMsg.includes("AdminSettleTooEarly")) {
+        log.warn(`Admin settle too early for ${ticker} — will retry next cycle`);
+      } else {
+        log.critical(`Admin settle failed for ${ticker}: ${errMsg}`);
+      }
+      result.failed.push({ market, error: errMsg });
+    }
+  }
+
+  return result;
+}

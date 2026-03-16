@@ -112,9 +112,12 @@ pub fn handle_cancel_order(
     // Refund based on order side
     match cancelled.side {
         SIDE_USDC_BID => {
+            // Ceiling division to match escrow deposit
             let refund = cancelled
                 .quantity
                 .checked_mul(cancelled.price as u64)
+                .ok_or(MeridianError::ArithmeticOverflow)?
+                .checked_add(99)
                 .ok_or(MeridianError::ArithmeticOverflow)?
                 .checked_div(100)
                 .ok_or(MeridianError::DivisionByZero)?;

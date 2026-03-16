@@ -114,11 +114,15 @@ pub fn handle_crank_cancel<'info>(
 
         match order.side {
             SIDE_USDC_BID => {
+                // Ceiling division to match escrow deposit
                 let refund = order
                     .quantity
                     .checked_mul(order.price as u64)
                     .ok_or(MeridianError::ArithmeticOverflow)?
-                    / 100;
+                    .checked_add(99)
+                    .ok_or(MeridianError::ArithmeticOverflow)?
+                    .checked_div(100)
+                    .ok_or(MeridianError::DivisionByZero)?;
 
                 token::transfer(
                     CpiContext::new_with_signer(

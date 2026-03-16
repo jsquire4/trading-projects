@@ -52,8 +52,8 @@ import {
   MOCK_ORACLE_PROGRAM_ID,
 } from "./shared";
 import { createMarketDataClient } from "../services/shared/src/market-data";
-import { binaryCallPrice, probToCents } from "../services/amm-bot/src/pricer";
-import { generateQuotes } from "../services/amm-bot/src/quoter";
+import { binaryCallPrice, probToCents } from "../services/shared/src/pricer";
+import { generateQuotes } from "../services/shared/src/quoter";
 
 // Fallback prices — only used if market data API is unavailable
 const MAG7_FALLBACK: Record<string, number> = {

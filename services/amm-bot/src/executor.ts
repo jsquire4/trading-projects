@@ -123,8 +123,13 @@ export async function cancelBotOrders(
   // bottleneck. Future improvement: batch multiple cancel_order instructions into
   // a single versioned transaction using Address Lookup Tables.
 
-  // Iterate all 99 price levels (index 0 = price 1, index 98 = price 99)
-  for (let levelIdx = 0; levelIdx < 99; levelIdx++) {
+  // Iterate price levels from the deserialized order book.
+  // NOTE: With the sparse order book layout, Anchor's auto-deserialization may
+  // return a truncated or empty `levels` array. The AMM bot relies on
+  // `create-test-markets.ts` for initial liquidity seeding; this cancel loop
+  // is best-effort and will gracefully skip if the layout doesn't match.
+  const levelCount = Array.isArray(obAccount.levels) ? (obAccount.levels as any[]).length : 99;
+  for (let levelIdx = 0; levelIdx < levelCount; levelIdx++) {
     const level = (obAccount.levels as any)[levelIdx];
     if (!level || level.count === 0) continue;
 

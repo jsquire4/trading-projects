@@ -14,8 +14,8 @@
  */
 
 import { Connection, PublicKey } from "@solana/web3.js";
-import { createLogger } from "../../shared/src/alerting.ts";
-import { MERIDIAN_PROGRAM_ID } from "../../shared/src/pda.ts";
+import { createLogger } from "../../shared/src/alerting.js";
+import { MERIDIAN_PROGRAM_ID } from "../../shared/src/pda.js";
 import { initDb, closeDb } from "./db.js";
 import { runBackfill } from "./backfill.js";
 import { startLiveListener, stopLiveListener } from "./listener.js";

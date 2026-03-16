@@ -37,7 +37,7 @@ import {
   MOCK_ORACLE_PROGRAM_ID,
 } from "../../shared/src/pda.js";
 
-import { settleMarkets, MarketInfo } from "./settler.js";
+import { settleMarkets, adminSettleMarkets, MarketInfo } from "./settler.js";
 import { crankCancelAll } from "./cranker.js";
 import { autoRedeemAll } from "./redeemer.js";
 import { closeEligibleMarkets } from "./closer.js";
@@ -96,6 +96,8 @@ interface PriceConfirmation {
   confirmed: Map<string, number>;
   /** Tickers that timed out without confirming */
   timedOut: string[];
+  /** Last known prices for all tickers (for admin_settle fallback) */
+  lastKnownPrices?: Map<string, number>;
 }
 
 /**
@@ -186,6 +188,7 @@ async function doubleConfirmPrices(
   return {
     confirmed,
     timedOut: [...remaining],
+    lastKnownPrices: previousPrices,
   };
 }
 
@@ -545,18 +548,16 @@ async function runSettlementCycle(
   // ---- Phase 2: Double-confirm closing prices ----
   const priceResult = await doubleConfirmPrices(marketData, activeTickers);
 
-  // Handle timed-out tickers with admin_settle fallback
+  // Handle timed-out tickers — will attempt admin_settle after oracle-based settlement
   if (priceResult.timedOut.length > 0) {
-    log.critical(`Price confirmation timed out for: ${priceResult.timedOut.join(", ")} — will use admin_settle fallback`);
-    // For timed-out tickers, use the last known price from the confirmed map
-    // (they'll be handled by the existing admin_settle retry logic in settler.ts)
+    log.critical(`Price confirmation timed out for: ${priceResult.timedOut.join(", ")} — will attempt admin_settle fallback`);
   }
 
-  if (priceResult.confirmed.size === 0 && priceResult.timedOut.length > 0) {
+  if (priceResult.confirmed.size === 0 && priceResult.timedOut.length === 0) {
     return {
       ok: false,
-      error: `All ${priceResult.timedOut.length} tickers failed price confirmation`,
-      summary: { timedOut: priceResult.timedOut },
+      error: "No tickers had confirmed prices and none timed out",
+      summary: {},
     };
   }
 
@@ -567,8 +568,24 @@ async function runSettlementCycle(
   const allMarkets = await loadAllMarkets(meridianProgram);
   const settlementResult = await settleExpiredMarkets(meridianProgram, allMarkets, priceResult.confirmed);
 
+  // ---- Phase 4b: Admin-settle timed-out tickers ----
+  if (priceResult.timedOut.length > 0 && priceResult.lastKnownPrices) {
+    const timedOutMarkets = allMarkets.filter((m) => {
+      if (m.account.isSettled) return false;
+      const ticker = tickerFromBytes(m.account.ticker);
+      return priceResult.timedOut.includes(ticker);
+    });
+    if (timedOutMarkets.length > 0) {
+      const adminResult = await adminSettleMarkets(meridianProgram, timedOutMarkets, priceResult.lastKnownPrices);
+      settlementResult.settled.push(...adminResult.settled);
+      settlementResult.failed.push(...adminResult.failed);
+    }
+  }
+
   // ---- Phase 5 + 5.5: Crank cancel + auto-redeem ----
-  await crankAndRedeem(meridianProgram, allMarkets, settlementResult, usdcMint);
+  // Re-fetch markets to pick up newly settled ones (including admin-settled)
+  const refreshedMarkets = await loadAllMarkets(meridianProgram);
+  await crankAndRedeem(meridianProgram, refreshedMarkets, settlementResult, usdcMint);
 
   // ---- Phase 6: Close eligible markets ----
   await closeMarkets(meridianProgram, adminKeypair, connection);

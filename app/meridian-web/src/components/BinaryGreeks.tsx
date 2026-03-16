@@ -1,58 +1,85 @@
 "use client";
 
 /**
- * BinaryGreeks — displays delta, gamma, theta, vega for the selected strike.
- *
- * Uses the shared binary option greeks math. Shows values as a compact
- * horizontal row with tooltip explanations.
+ * BinaryGreeks — flashy horizontal strip with animated pills and tooltips.
+ * Sits between strike tabs and the order tree. Makes trading feel exciting.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { binaryDelta, binaryGamma, binaryTheta, binaryVega, normalCdf, d2 } from "@/lib/greeks";
 
 interface BinaryGreeksProps {
-  /** Current spot price in dollars */
   spotPrice: number;
-  /** Strike price in dollars */
   strikePrice: number;
-  /** Annual volatility (decimal, e.g. 0.30) */
   volatility: number;
-  /** Time to expiry in years (e.g. 6.5 hours = 6.5/8760) */
   timeToExpiry: number;
 }
 
-const GREEK_LABELS: { key: string; label: string; description: string; format: (v: number) => string }[] = [
-  {
-    key: "prob",
-    label: "P(ITM)",
-    description: "Probability the option finishes in-the-money",
-    format: (v) => `${(v * 100).toFixed(1)}%`,
-  },
-  {
-    key: "delta",
-    label: "Delta",
-    description: "Price sensitivity to a $1 move in the underlying",
-    format: (v) => v.toFixed(4),
-  },
-  {
-    key: "gamma",
-    label: "Gamma",
-    description: "Rate of change of delta per $1 move",
-    format: (v) => v.toFixed(5),
-  },
-  {
-    key: "theta",
-    label: "Theta",
-    description: "Daily time decay (cents lost per day)",
-    format: (v) => `${(v * 365 * 100).toFixed(2)}¢/day`,
-  },
-  {
-    key: "vega",
-    label: "Vega",
-    description: "Sensitivity to a 1% change in volatility",
-    format: (v) => (v * 100).toFixed(3),
-  },
-];
+interface GreekDef {
+  key: string;
+  symbol: string;
+  shortLabel?: string;
+  symbolColor?: string;
+  label: string;
+  description: string;
+  format: (v: number) => string;
+  gradient: string;
+  borderGlow: string;
+}
+
+function GreekPill({ def, value }: { def: GreekDef; value: number }) {
+  const [showTooltip, setShowTooltip] = useState(false);
+
+  return (
+    <div
+      className="relative group"
+      onMouseEnter={() => setShowTooltip(true)}
+      onMouseLeave={() => setShowTooltip(false)}
+      onClick={() => setShowTooltip((p) => !p)}
+    >
+      {/* Pill body — overflow-hidden for shimmer only */}
+      <div className={`relative flex items-center gap-1.5 rounded-lg border px-3 py-1.5 cursor-help transition-all duration-300 hover:scale-[1.03] ${def.borderGlow}`}>
+        <div className="absolute inset-0 rounded-lg overflow-hidden">
+          <div className={`absolute inset-0 opacity-50 group-hover:opacity-80 transition-opacity ${def.gradient}`} />
+          <div className="absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-700 bg-gradient-to-r from-transparent via-white/[0.08] to-transparent" />
+        </div>
+
+        <span className={`relative text-sm font-bold transition-colors ${def.symbolColor ?? "text-white/60 group-hover:text-white/80"}`}>{def.symbol}</span>
+        {def.shortLabel && (
+          <span className="relative text-[10px] text-white/35 hidden sm:inline">{def.shortLabel}</span>
+        )}
+        <span className="relative text-sm font-mono font-bold tabular-nums text-white group-hover:text-white transition-colors">
+          {def.format(value)}
+        </span>
+      </div>
+
+      {/* Tooltip — rendered OUTSIDE the pill, not clipped */}
+      {showTooltip && (
+        <div
+          className="fixed z-[9999] w-64 rounded-xl border border-white/20 bg-[#111] shadow-2xl shadow-black/50 px-4 py-3 text-xs"
+          style={{
+            // Position above the pill using JS since fixed positioning needs coordinates
+            pointerEvents: "none",
+          }}
+          ref={(el) => {
+            if (!el) return;
+            const pill = el.parentElement?.querySelector("[class*=cursor-help]");
+            if (!pill) return;
+            const rect = pill.getBoundingClientRect();
+            el.style.left = `${rect.left + rect.width / 2 - 128}px`;
+            el.style.top = `${rect.top - el.offsetHeight - 8}px`;
+          }}
+        >
+          <div className="flex items-center gap-2 mb-1.5">
+            <span className={`text-sm ${def.symbolColor ?? ""}`}>{def.symbol}</span>
+            <span className="font-bold text-white text-sm">{def.label}</span>
+          </div>
+          <p className="text-white/60 leading-relaxed">{def.description}</p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function BinaryGreeks({
   spotPrice,
@@ -82,42 +109,69 @@ export function BinaryGreeks({
     };
   }, [spotPrice, strikePrice, volatility, timeToExpiry]);
 
-  if (!greeks) {
-    return (
-      <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
-        <p className="text-xs text-white/30 text-center">Greeks unavailable — waiting for market data</p>
-      </div>
-    );
-  }
+  if (!greeks) return null;
 
-  const probColor = greeks.prob >= 0.5 ? "text-green-400" : "text-red-400";
+  const bullish = greeks.prob >= 0.5;
+
+  const defs: GreekDef[] = [
+    {
+      key: "prob",
+      symbol: "●",
+      symbolColor: bullish ? "text-green-400" : "text-red-400",
+      shortLabel: "Implied Probability",
+      label: "Implied Probability",
+      description: `The market thinks there's a ${(greeks.prob * 100).toFixed(0)}% chance Yes wins. ${bullish ? "Odds favor the bulls!" : "Bears have the edge."} Derived from Black-Scholes using current price, strike, and volatility.`,
+      format: (v) => `${(v * 100).toFixed(1)}%`,
+      gradient: bullish ? "bg-gradient-to-r from-green-500/20 to-emerald-500/10" : "bg-gradient-to-r from-red-500/20 to-orange-500/10",
+      borderGlow: bullish ? "border-green-500/30 shadow-[0_0_15px_rgba(34,197,94,0.15)]" : "border-red-500/30 shadow-[0_0_15px_rgba(239,68,68,0.15)]",
+    },
+    {
+      key: "delta",
+      symbol: "Δ",
+      label: "Delta — Price Sensitivity",
+      description: "How much your contract moves per $1 stock move. High delta = you're riding the wave. Low delta = you're watching from shore.",
+      format: (v) => v.toFixed(4),
+      gradient: "bg-gradient-to-r from-blue-500/15 to-cyan-500/10",
+      borderGlow: "border-blue-500/20 hover:shadow-[0_0_12px_rgba(59,130,246,0.15)]",
+    },
+    {
+      key: "gamma",
+      symbol: "Γ",
+      label: "Gamma — Acceleration",
+      description: "How fast delta changes. Near expiry with high gamma, one big stock move can flip your contract from worthless to winner. The 0DTE special.",
+      format: (v) => v.toFixed(5),
+      gradient: "bg-gradient-to-r from-purple-500/15 to-violet-500/10",
+      borderGlow: "border-purple-500/20 hover:shadow-[0_0_12px_rgba(168,85,247,0.15)]",
+    },
+    {
+      key: "theta",
+      symbol: "θ",
+      label: "Theta — Time Decay",
+      description: "The clock is ticking. This is how much value bleeds away each day. For 0DTE contracts, theta is your biggest enemy if you're holding — and your best friend if you're selling.",
+      format: (v) => `${(v * 365 * 100).toFixed(1)}¢`,
+      gradient: "bg-gradient-to-r from-amber-500/15 to-yellow-500/10",
+      borderGlow: "border-amber-500/20 hover:shadow-[0_0_12px_rgba(245,158,11,0.15)]",
+    },
+    {
+      key: "vega",
+      symbol: "V",
+      label: "Vega — Volatility Edge",
+      description: "How much you gain or lose when volatility spikes. Earnings? Fed announcement? High vega means you're positioned for chaos.",
+      format: (v) => (v * 100).toFixed(3),
+      gradient: "bg-gradient-to-r from-pink-500/15 to-rose-500/10",
+      borderGlow: "border-pink-500/20 hover:shadow-[0_0_12px_rgba(236,72,153,0.15)]",
+    },
+  ];
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03] overflow-hidden">
-      <div className="px-4 py-2.5 border-b border-white/10">
-        <h3 className="text-xs font-semibold text-white/50 uppercase tracking-wider">Binary Greeks</h3>
-      </div>
-      <div className="grid grid-cols-5 divide-x divide-white/5">
-        {GREEK_LABELS.map((g) => {
-          const value = greeks[g.key as keyof typeof greeks];
-          const isProb = g.key === "prob";
-
-          return (
-            <div
-              key={g.key}
-              className="px-3 py-3 text-center group relative"
-              title={g.description}
-            >
-              <div className="text-[10px] text-white/30 uppercase tracking-wider mb-1">
-                {g.label}
-              </div>
-              <div className={`text-sm font-mono font-medium tabular-nums ${isProb ? probColor : "text-white/80"}`}>
-                {g.format(value)}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+    <div className="flex items-center gap-2 overflow-x-auto py-1 scrollbar-hide">
+      {defs.map((def) => (
+        <GreekPill
+          key={def.key}
+          def={def}
+          value={greeks[def.key as keyof typeof greeks]}
+        />
+      ))}
     </div>
   );
 }

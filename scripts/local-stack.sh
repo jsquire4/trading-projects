@@ -129,15 +129,43 @@ if grep -q "FAUCET_KEYPAIR" "$ENV_FILE" 2>/dev/null; then
 fi
 echo ""
 
-info "[2/4] Initializing GlobalConfig..."
+info "[2/5] Initializing GlobalConfig..."
 (cd "$REPO_ROOT" && npx ts-node scripts/init-config.ts)
 echo ""
 
-info "[3/4] Initializing oracle feeds (7 tickers)..."
+info "[3/5] Initializing TickerRegistry + adding 7 tickers..."
+(cd "$REPO_ROOT" && RPC_URL="$LOCAL_RPC" npx tsx scripts/init-ticker-registry.ts)
+# Add each ticker to the registry (idempotent — add_ticker skips if already active)
+for TICKER in AAPL MSFT GOOGL AMZN NVDA META TSLA; do
+  (cd "$REPO_ROOT" && npx ts-node -e "
+    const { Connection, Keypair, Transaction, sendAndConfirmTransaction } = require('@solana/web3.js');
+    const { PublicKey } = require('@solana/web3.js');
+    const { buildAddTickerIx, padTicker } = require('./tests/helpers/instructions');
+    const { findGlobalConfig } = require('./services/shared/src/pda');
+    const fs = require('fs');
+    (async () => {
+      const conn = new Connection('$LOCAL_RPC', 'confirmed');
+      const admin = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync('$HOME/.config/solana/id.json', 'utf8'))));
+      const [configPda] = findGlobalConfig();
+      const [registryPda] = PublicKey.findProgramAddressSync([Buffer.from('tickers')], new PublicKey('G5zZw1GMzqwjfbRMjTi2qUXDwoUwLw83hjEuwLfVCZvy'));
+      try {
+        const ix = buildAddTickerIx({ payer: admin.publicKey, config: configPda, tickerRegistry: registryPda, ticker: padTicker('$TICKER') });
+        await sendAndConfirmTransaction(conn, new Transaction().add(ix), [admin], { commitment: 'confirmed' });
+        console.log('  Added $TICKER');
+      } catch (err: any) {
+        if (err.message && err.message.includes('already')) { console.log('  $TICKER already active'); }
+        else { console.log('  $TICKER: ' + (err.message || String(err)).slice(0, 80)); }
+      }
+    })();
+  ")
+done
+echo ""
+
+info "[4/5] Initializing oracle feeds (7 tickers)..."
 (cd "$REPO_ROOT" && npx ts-node scripts/init-oracle-feeds.ts)
 echo ""
 
-info "[4/4] Creating test markets..."
+info "[5/5] Creating test markets..."
 # ALT creation can fail on first run if slot goes stale during OrderBook allocation.
 # Retry once — second run skips market creation (idempotent) and gets a fresh slot for ALT.
 if ! (cd "$REPO_ROOT" && npx ts-node scripts/create-test-markets.ts); then

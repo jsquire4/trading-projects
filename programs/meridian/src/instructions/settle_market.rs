@@ -189,7 +189,11 @@ pub fn handle_settle_market(ctx: Context<SettleMarket>) -> Result<()> {
         .ok_or(MeridianError::ArithmeticOverflow)?;
 
     // ── Track obligations: winning token supply owed to holders ──
-    // Outstanding = total_minted - total_redeemed (pair burns already deducted)
+    // Outstanding = total_minted - total_redeemed (pair burns already deducted).
+    // This intentionally includes escrowed tokens (resting orders) because those
+    // tokens still represent a USDC claim — the user will cancel and redeem after
+    // crank_cancel runs. The obligations value is conservative during the crank
+    // window and converges to exact after crank_cancel + crank_redeem complete.
     let outstanding = market.total_minted
         .checked_sub(market.total_redeemed)
         .ok_or(MeridianError::ArithmeticOverflow)?;

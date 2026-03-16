@@ -626,7 +626,7 @@ export function buildAdminSettleIx(
 
   const keys = [
     { pubkey: params.admin, isSigner: true, isWritable: true },
-    { pubkey: params.config, isSigner: false, isWritable: false },
+    { pubkey: params.config, isSigner: false, isWritable: true },
     { pubkey: params.market, isSigner: false, isWritable: true },
   ];
 

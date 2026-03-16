@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { parseEventsFromLogs, type ParsedEvent } from "../listener.ts";
+import { parseEventsFromLogs, type ParsedEvent } from "../listener.js";
 
 /**
  * The real BorshCoder requires a valid Anchor IDL and decodes base64-encoded

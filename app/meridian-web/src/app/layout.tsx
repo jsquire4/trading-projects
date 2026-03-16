@@ -28,12 +28,12 @@ export default function RootLayout({
               <Link href="/" className="text-lg sm:text-xl font-bold tracking-tight text-gradient shrink-0">
                 Meridian
               </Link>
-              <NetworkBadge />
               <Nav />
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <NavPnl />
               <NavBalance />
+              <NetworkBadge />
               <WalletButton />
             </div>
           </header>

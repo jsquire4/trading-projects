@@ -91,18 +91,47 @@ echo "[6/8] Creating mock USDC mint (idempotent)..."
 echo ""
 
 # ── Step 7: Initialize GlobalConfig and oracle feeds ─────────────────────────
-echo "[7/8] Initializing on-chain accounts (idempotent)..."
+echo "[7/9] Initializing on-chain accounts (idempotent)..."
 
 echo "  [7a] GlobalConfig..."
 (cd "$REPO_ROOT" && npx ts-node scripts/init-config.ts)
 echo ""
 
-echo "  [7b] Oracle price feeds..."
+echo "  [7b] TickerRegistry..."
+(cd "$REPO_ROOT" && npx tsx scripts/init-ticker-registry.ts)
+# Add each ticker to the registry
+for TICKER in AAPL MSFT GOOGL AMZN NVDA META TSLA; do
+  (cd "$REPO_ROOT" && npx ts-node -e "
+    const { Connection, Keypair, Transaction, sendAndConfirmTransaction } = require('@solana/web3.js');
+    const { PublicKey } = require('@solana/web3.js');
+    const { buildAddTickerIx, padTicker } = require('./tests/helpers/instructions');
+    const { findGlobalConfig } = require('./services/shared/src/pda');
+    const fs = require('fs');
+    (async () => {
+      const conn = new Connection(process.env.RPC_URL || 'https://api.devnet.solana.com', 'confirmed');
+      const admin = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(process.env.HOME + '/.config/solana/id.json', 'utf8'))));
+      const [configPda] = findGlobalConfig();
+      const [registryPda] = PublicKey.findProgramAddressSync([Buffer.from('tickers')], new PublicKey('G5zZw1GMzqwjfbRMjTi2qUXDwoUwLw83hjEuwLfVCZvy'));
+      try {
+        const ix = buildAddTickerIx({ payer: admin.publicKey, config: configPda, tickerRegistry: registryPda, ticker: padTicker('$TICKER') });
+        await sendAndConfirmTransaction(conn, new Transaction().add(ix), [admin], { commitment: 'confirmed' });
+        console.log('  Added $TICKER');
+      } catch (err: any) {
+        if (err.message && err.message.includes('already')) { console.log('  $TICKER already active'); }
+        else { console.log('  $TICKER: ' + (err.message || String(err)).slice(0, 80)); }
+      }
+    })();
+  ")
+done
+echo ""
+
+# ── Step 8: Oracle feeds ─────────────────────────────────────────────────────
+echo "[8/9] Oracle price feeds..."
 (cd "$REPO_ROOT" && npx ts-node scripts/init-oracle-feeds.ts)
 echo ""
 
-# ── Step 8: Create test markets ──────────────────────────────────────────────
-echo "[8/8] Creating test markets (idempotent)..."
+# ── Step 9: Create test markets ──────────────────────────────────────────────
+echo "[9/9] Creating test markets (idempotent)..."
 (cd "$REPO_ROOT" && npx ts-node scripts/create-test-markets.ts)
 echo ""
 
@@ -110,6 +139,6 @@ echo ""
 echo "=== Deploy complete ==="
 echo "    Programs:  2 (meridian, mock_oracle)"
 echo "    Feeds:     7 (AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA)"
-echo "    Markets:   1 (AAPL strike market)"
+echo "    Markets:   MAG7 strike markets"
 echo "    Cluster:   ${CLUSTER}"
 echo "    Wallet:    $(solana address)"

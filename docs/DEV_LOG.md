@@ -636,25 +636,103 @@ The only technically viable path (Path 1, pure HyperEVM) amounts to using HyperL
 
 ---
 
-## README Progress
+## 2026-03-15: Final State — Submission
 
-*Updated incrementally as implementation progresses. Will be finalized in Phase 5.*
+### Architecture Changes Since Phase 1
 
-### Current state: Pre-implementation
-- Repo scaffolded with README.md and .gitignore
-- Build plan finalized (`Build_plan.md`)
-- Spec and implementation docs in `docs/`
+**Sparse Order Book (Phase 6 redesign)**:
+The original dense order book (32 fixed slots per level, 80-byte slots, ~127KB per market) was replaced with a sparse layout. Markets now start with a 270-byte header only. Levels are allocated on demand (1 slot per level, growing by 1 via realloc). Slot size increased to 112 bytes (added 32-byte `rent_depositor` field). Price map changed from `[u8; 99]` (level indices) to `[u16 LE; 99]` (byte offsets), with `0xFFFF` sentinel for unallocated. This reduces market creation cost from ~0.89 SOL to ~0.019 SOL.
 
-### Prerequisites (known)
-- Rust 1.75+
-- Solana CLI 1.18+
-- Anchor CLI 0.30.x
-- Node.js 18+ (LTS)
-- Yarn
-- Tradier API key (brokerage account)
-- Phantom or Solflare wallet (for browser testing)
+**Settlement Pipeline**:
+The spec's cron-based settlement ("4:05 PM ET trigger") was replaced with a reactive polling architecture. The settlement service polls every 60 seconds, detects expired unsettled markets, runs double-confirmation of prices (two matching polls 30s apart), then executes the full chain: `settle_market` → `crank_cancel` (batch) → `crank_redeem` (batch) → `close_market`. This is more robust than time-triggered settlement — it self-heals if a cycle fails.
 
-### Quick start (target)
-```bash
-make dev   # build + deploy + init + frontend + services
+**Treasury Architecture**:
+Three treasury PDAs instead of one:
+- **USDC Treasury** (`seeds: ["treasury"]`) — holds escrow dust from closed markets
+- **SOL Treasury** (`seeds: ["sol_treasury"]`) — holds SOL for market creation rent float (reimburses admin-created markets)
+- **Fee Vault** (`seeds: ["fee_vault"]`) — protocol trading fees (fee_bps applied to both sides of every fill)
+
+**Obligations Tracking**:
+`GlobalConfig.obligations` tracks total USDC owed to winning token holders. Incremented by `settle_market` (outstanding = total_minted - total_redeemed), decremented by `redeem` and `crank_redeem`. `withdraw_treasury` enforces `available = balance - obligations`. This prevents admin from draining USDC that belongs to users.
+
+**TickerRegistry**:
+Replaced the legacy `GlobalConfig.tickers` array (7 fixed slots) with a dynamic `TickerRegistry` PDA. Permissionless `add_ticker` instruction grows the registry via realloc. `deactivate_ticker` soft-deletes entries. `create_strike_market` validates against the registry when it exists on-chain, falling back to GlobalConfig only for pre-migration compatibility.
+
+**Removed Instructions**:
+- `expand_config` — v2 fields initialized directly in `initialize_config`
+- `treasury_redeem` — pair burn (mode=0 redeem) covers the same use case
+- `cleanup_market` — `close_market` handles full cleanup when mint supplies are zero
+- Per-market `is_paused` / `is_closed` fields — global pause is sufficient
+
+### Frontend
+
+**Trade Page** (`/trade/[ticker]`):
+- OrderTree: dual-column order book (YES left, NO right) with the binary question as header
+- OrderModal: all 4 trade paths (Buy Yes, Sell Yes, Buy No, Sell No) via toggle
+- Position conflict enforcement: blocks buying Yes when holding No and vice versa
+- PayoffDisplay: "You pay $X. You win $1.00 if [STOCK] closes above [STRIKE]."
+- Binary Greeks: Delta, Gamma, Theta, Vega, P(ITM) computed live from Black-Scholes
+- Price History chart + Return Distribution histogram inline
+- Permissionless market creation: OrderModal bundles `create_strike_market` + `place_order` for new strikes
+
+**Portfolio Page** (`/portfolio`):
+- 3-column position card grid with colored glow (green=Yes/winner, red=No/loser)
+- Redeem buttons for settled winners, pair burn for hedged positions
+- P&L tracking via event indexer cost basis API
+
+**Admin** (`/admin`):
+- Admin tab only visible when connected wallet matches `GlobalConfig.admin`
+- Circuit breaker, fee management, treasury withdrawals
+
+### Testing — Final Numbers
+
+| Suite | Count |
+|-------|-------|
+| On-chain (bankrun) | 167 |
+| Frontend (Vitest) | 114 |
+| AMM bot | 75 |
+| Market initializer | 19 |
+| Event indexer | 55 |
+| **Total** | **354** |
+
+### Deployment Scripts
+
+- `make local` — one command: starts validator, initializes all on-chain state (config, ticker registry, oracle feeds, 37 markets with liquidity), starts 5 services + frontend
+- `scripts/deploy-devnet.sh` — 9-step idempotent script: SOL check, deps, build, deploy both programs, USDC mint, config, ticker registry, oracle feeds, test markets
+- `scripts/local-stack.sh` — verified working: 37/37 markets created, 0 failures
+
+### Data Source Change
+
+Switched from Tradier brokerage API to Yahoo Finance (unofficial `yahoo-finance2` npm). Tradier required API keys and had account-level rate limits. Yahoo Finance is keyless and sufficient for devnet. The oracle-feeder also supports synthetic mode (`MARKET_DATA_SOURCE=synthetic`) for development when markets are closed.
+
+### Spec Deviations (Final)
+
+| Spec Requirement | Implementation | Rationale |
+|---|---|---|
+| Admin settle delay: 1 hour | 5 minutes (300s), 5s in stress-test builds | 1 hour is too long for a devnet demo. Configurable constant. |
+| Add Strike: admin-only | Permissionless with optional fee | More aligned with DeFi ethos. Fee mechanism gates abuse. |
+| Morning job at 8:00 AM | Market creation runs post-settlement (~4:05 PM) or on-demand | Reactive > scheduled. Markets ready before next trading day. |
+| Settlement retry every 30s for 15 min | Double-confirm every 30s, 30-min timeout | More conservative — prevents settling on transient price spikes. |
+| Override window: 1 hour | 1 second (devnet), TODO: configurable for mainnet | Instant finality preferred for testing. Documented for mainnet. |
+
+---
+
+## Known Limitations (Submission)
+
+### On-Chain
+- **Mock oracle only.** `settle_market` gates on `oracle_type == 0`. Pyth integration (type=1) requires `admin_settle` fallback. Not a blocker for devnet — the mock oracle is functionally equivalent.
+- **Override window is 1 second.** Admin has minimal time to dispute oracle settlements. Intentional for devnet speed. Should be configurable for mainnet.
+- **Early close dates hardcoded through 2028.** NYSE half-day schedule in `automation/src/timezone.ts`. Falls back to 4 PM if stale.
+
+### Services
+- **Yahoo Finance is the sole market data source.** Unofficial API, no SLA. If Yahoo is down, oracle prices go stale and settlement falls back to `admin_settle` after 30-minute timeout.
+- **Market state detection relies on single AAPL quote.** If AAPL is halted, the system thinks the market is closed. Should query multiple tickers for consensus.
+
+### Frontend
+- **`todayPnl` is all-time unrealized P&L**, not intraday. The label is documented; true daily P&L requires intraday snapshots not yet implemented.
+
+### Not Implemented (Conscious Decisions)
+- **Pyth oracle integration**: Deferred to post-submission. Mock oracle provides identical functional behavior.
+- **Mainnet deployment**: Bonus objective. All code is mainnet-ready — config swap only.
+- **AMM bot on mainnet**: Not needed at 2-3 user scale. Users provide their own liquidity.
 ```

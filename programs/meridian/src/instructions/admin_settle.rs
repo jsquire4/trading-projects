@@ -9,6 +9,7 @@ pub struct AdminSettle<'info> {
     pub admin: Signer<'info>,
 
     #[account(
+        mut,
         has_one = admin @ MeridianError::Unauthorized,
     )]
     pub config: Box<Account<'info, GlobalConfig>>,
@@ -59,6 +60,15 @@ pub fn handle_admin_settle(ctx: Context<AdminSettle>, settlement_price: u64) -> 
     market.settlement_price = settlement_price;
     market.settled_at = settled_at;
     market.override_deadline = override_deadline;
+
+    // Track obligations: winning token supply owed to holders (same as settle_market)
+    let outstanding = market.total_minted
+        .checked_sub(market.total_redeemed)
+        .ok_or(MeridianError::ArithmeticOverflow)?;
+    let config = &mut ctx.accounts.config;
+    config.obligations = config.obligations
+        .checked_add(outstanding)
+        .ok_or(MeridianError::ArithmeticOverflow)?;
 
     msg!(
         "Admin settled market {} | price={} strike={} outcome={} settled_at={} override_deadline={}",

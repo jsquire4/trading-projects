@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { PublicKey } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { useMarkets, type ParsedMarket } from "./useMarkets";
 
@@ -52,8 +52,8 @@ export function usePositions() {
         const noBal = balances.get(noKey) ?? BigInt(0);
 
         if (yesBal > BigInt(0) || noBal > BigInt(0)) {
-          const yesAta = await getAssociatedTokenAddress(market.yesMint, publicKey);
-          const noAta = await getAssociatedTokenAddress(market.noMint, publicKey);
+          const yesAta = getAssociatedTokenAddressSync(market.yesMint, publicKey);
+          const noAta = getAssociatedTokenAddressSync(market.noMint, publicKey);
           positions.push({ market, yesBal, noBal, yesAta, noAta });
         }
       }

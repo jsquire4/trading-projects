@@ -90,43 +90,60 @@ export function OraclePrice({ ticker }: OraclePriceProps) {
   }, [connection, ticker, handleAccountChange]);
 
   const priceDollars = feed ? (feed.price / 1_000_000).toFixed(2) : "--";
-  const confidenceDollars = feed ? (feed.confidence / 1_000_000).toFixed(4) : null;
-  // After hours, the oracle updates every 5 min. Use a 10-min threshold to
-  // avoid showing STALE between normal closed-market update cycles.
   const oracleAgeSecs = feed ? (Date.now() / 1000 - feed.timestamp) : 0;
-  const isStale = feed ? oracleAgeSecs > 600 : false; // 10 minutes
-  const isAfterHours = feed ? oracleAgeSecs > 60 && oracleAgeSecs <= 600 : false;
+  const isStale = feed ? oracleAgeSecs > 600 : false;
 
-  const flashClass =
-    direction === "up"
-      ? "text-yes transition-colors duration-300"
-      : direction === "down"
-        ? "text-no transition-colors duration-300"
-        : "text-white transition-colors duration-300";
+  // Determine market session from current ET time, not oracle age
+  const marketSession = (() => {
+    const now = new Date();
+    const etParts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      weekday: "short",
+    }).formatToParts(now);
+    const hour = parseInt(etParts.find((p) => p.type === "hour")?.value ?? "0", 10);
+    const min = parseInt(etParts.find((p) => p.type === "minute")?.value ?? "0", 10);
+    const day = etParts.find((p) => p.type === "weekday")?.value ?? "";
+    const etMinutes = hour * 60 + min;
+    const isWeekend = day === "Sat" || day === "Sun";
+
+    if (isWeekend) return "closed" as const;
+    if (etMinutes >= 570 && etMinutes < 960) return "open" as const;       // 9:30 AM - 4:00 PM
+    if (etMinutes >= 240 && etMinutes < 570) return "premarket" as const;  // 4:00 AM - 9:30 AM
+    if (etMinutes >= 960 && etMinutes < 1200) return "afterhours" as const; // 4:00 PM - 8:00 PM
+    return "closed" as const;
+  })();
+
+  const sessionBadge = isStale
+    ? { label: "STALE", icon: "⚠️", bg: "bg-yellow-500/15 border-yellow-500/30", text: "text-yellow-400" }
+    : marketSession === "open"
+    ? { label: "Market Open", icon: "📈", bg: "bg-green-500/10 border-green-500/20", text: "text-green-400" }
+    : marketSession === "premarket"
+    ? { label: "Pre-Market", icon: "🌅", bg: "bg-orange-500/10 border-orange-500/20", text: "text-orange-300" }
+    : marketSession === "afterhours"
+    ? { label: "After Hours", icon: "🌙", bg: "bg-indigo-500/10 border-indigo-500/20", text: "text-indigo-300" }
+    : { label: "Market Closed", icon: "🔒", bg: "bg-white/5 border-white/10", text: "text-white/40" };
+
+  // Color the price based on direction
+  const priceColor = direction === "up"
+    ? "text-green-400"
+    : direction === "down"
+    ? "text-red-400"
+    : "text-white";
 
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-xs text-white/50">{ticker}</span>
-      <span className={`text-lg font-mono font-bold ${flashClass}`}>
+    <div className="flex items-baseline gap-3 flex-wrap">
+      <span className={`text-3xl font-mono font-bold transition-colors duration-300 ${priceColor}`}>
         ${priceDollars}
       </span>
-      {confidenceDollars && (
-        <span className="text-[10px] text-white/30" title="Oracle confidence interval">
-          +/-${confidenceDollars}
-        </span>
-      )}
-      {isStale && (
-        <span className="text-[10px] font-medium text-yellow-400" title="Oracle price is stale (>10 min old)">
-          STALE
-        </span>
-      )}
-      {isAfterHours && !isStale && (
-        <span className="text-[10px] font-medium text-white/40" title="Market closed — price from last session">
-          After Hours
-        </span>
-      )}
+      <span className={`inline-flex items-center gap-1.5 text-sm font-medium px-2.5 py-1 rounded-lg border ${sessionBadge.bg} ${sessionBadge.text}`}>
+        <span>{sessionBadge.icon}</span>
+        {sessionBadge.label}
+      </span>
       {feed && (
-        <span className={`text-[10px] ${isStale ? "text-yellow-400/50" : "text-white/30"}`}>
+        <span className="text-xs text-white/30">
           {new Date(feed.timestamp * 1000).toLocaleTimeString()}
         </span>
       )}

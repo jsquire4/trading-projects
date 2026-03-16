@@ -91,7 +91,11 @@ export function OraclePrice({ ticker }: OraclePriceProps) {
 
   const priceDollars = feed ? (feed.price / 1_000_000).toFixed(2) : "--";
   const confidenceDollars = feed ? (feed.confidence / 1_000_000).toFixed(4) : null;
-  const isStale = feed ? (Date.now() / 1000 - feed.timestamp) > 60 : false;
+  // After hours, the oracle updates every 5 min. Use a 10-min threshold to
+  // avoid showing STALE between normal closed-market update cycles.
+  const oracleAgeSecs = feed ? (Date.now() / 1000 - feed.timestamp) : 0;
+  const isStale = feed ? oracleAgeSecs > 600 : false; // 10 minutes
+  const isAfterHours = feed ? oracleAgeSecs > 60 && oracleAgeSecs <= 600 : false;
 
   const flashClass =
     direction === "up"
@@ -112,8 +116,13 @@ export function OraclePrice({ ticker }: OraclePriceProps) {
         </span>
       )}
       {isStale && (
-        <span className="text-[10px] font-medium text-yellow-400" title="Oracle price is stale (>60s old)">
+        <span className="text-[10px] font-medium text-yellow-400" title="Oracle price is stale (>10 min old)">
           STALE
+        </span>
+      )}
+      {isAfterHours && !isStale && (
+        <span className="text-[10px] font-medium text-white/40" title="Market closed — price from last session">
+          After Hours
         </span>
       )}
       {feed && (

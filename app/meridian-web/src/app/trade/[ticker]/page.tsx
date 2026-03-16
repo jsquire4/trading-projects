@@ -15,6 +15,9 @@ import { OraclePrice } from "@/components/OraclePrice";
 import { SettlementStatus } from "@/components/SettlementStatus";
 import { SettleButton } from "@/components/SettleButton";
 import { OrderTree } from "@/components/OrderTree";
+import { PriceHistory } from "@/components/analytics/PriceHistory";
+import { HistoricalOverlay } from "@/components/analytics/HistoricalOverlay";
+import { BinaryGreeks } from "@/components/BinaryGreeks";
 import { getExplorerUrl } from "@/lib/network";
 
 // ---------------------------------------------------------------------------
@@ -314,6 +317,40 @@ export default function TradingCockpit({
       {/* Analytics Banner */}
       <AnalyticsBanner ticker={ticker} market={market} />
 
+      {/* Binary Greeks */}
+      {market && currentPrice > 0 && (
+        <BinaryGreeks
+          spotPrice={currentPrice}
+          strikePrice={Number(market.strikePrice) / 1_000_000}
+          volatility={0.30}
+          timeToExpiry={(() => {
+            const now = Math.floor(Date.now() / 1000);
+            const close = Number(market.marketCloseUnix);
+            const remaining = Math.max(close - now, 60);
+            return remaining / (365.25 * 24 * 3600);
+          })()}
+        />
+      )}
+
+      {/* Price History + Return Distribution — compact */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+          <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mb-2">Price History</h3>
+          <div className="h-[180px]">
+            <PriceHistory ticker={ticker} />
+          </div>
+        </div>
+        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+          <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mb-2">Distribution</h3>
+          <div className="h-[180px]">
+            <HistoricalOverlay
+              ticker={ticker}
+              currentPrice={currentPrice > 0 ? currentPrice : undefined}
+            />
+          </div>
+        </div>
+      </div>
+
       {/* My Orders (all strikes) */}
       <MyOrdersPanel ticker={ticker} markets={tickerMarkets} />
 
@@ -404,6 +441,7 @@ export default function TradingCockpit({
           marketKey={activeKey}
         />
       )}
+
     </div>
   );
 }

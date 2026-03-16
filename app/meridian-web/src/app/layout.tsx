@@ -5,6 +5,7 @@ import { WalletButton } from "@/components/WalletButton";
 import { NavPnl } from "@/components/NavPnl";
 import { NavBalance } from "@/components/NavBalance";
 import { NetworkBadge } from "@/components/NetworkBadge";
+import { Nav } from "@/components/Nav";
 import { Toaster } from "sonner";
 import "./globals.css";
 
@@ -12,14 +13,6 @@ export const metadata: Metadata = {
   title: "Meridian — Binary Stock Outcomes",
   description: "Trade binary stock outcome markets on Solana",
 };
-
-const navLinks = [
-  { href: "/trade", label: "Trade" },
-  { href: "/portfolio", label: "Portfolio" },
-  { href: "/history", label: "History" },
-  { href: "/analytics", label: "Analytics" },
-  { href: "/admin", label: "Admin" },
-];
 
 export default function RootLayout({
   children,
@@ -36,17 +29,7 @@ export default function RootLayout({
                 Meridian
               </Link>
               <NetworkBadge />
-              <nav className="flex gap-3 sm:gap-6 overflow-x-auto scrollbar-hide">
-                {navLinks.map((link) => (
-                  <Link
-                    key={link.href}
-                    href={link.href}
-                    className="text-xs sm:text-sm text-white/60 hover:text-white transition-colors whitespace-nowrap shrink-0"
-                  >
-                    {link.label}
-                  </Link>
-                ))}
-              </nav>
+              <Nav />
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <NavPnl />

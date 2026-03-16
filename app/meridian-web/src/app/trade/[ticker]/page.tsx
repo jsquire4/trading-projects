@@ -334,15 +334,15 @@ export default function TradingCockpit({
 
       {/* Price History + Return Distribution — compact */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+        <div className="lg:col-span-2 rounded-xl border border-white/10 bg-white/[0.03] p-4 overflow-hidden">
           <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mb-2">Price History</h3>
-          <div className="h-[180px]">
+          <div className="h-[200px] overflow-hidden">
             <PriceHistory ticker={ticker} />
           </div>
         </div>
-        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 overflow-hidden">
           <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mb-2">Distribution</h3>
-          <div className="h-[180px]">
+          <div className="h-[200px] overflow-hidden">
             <HistoricalOverlay
               ticker={ticker}
               currentPrice={currentPrice > 0 ? currentPrice : undefined}

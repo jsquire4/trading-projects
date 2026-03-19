@@ -1180,7 +1180,7 @@ Max entries: 256 (griefing cap). Anyone can add tickers (permissionless).</pre>
           <div class="card"><h4>PRICE_TO_USDC_LAMPORTS</h4><p><code>10,000</code> — price 60 → 600,000 lamports</p></div>
           <div class="card"><h4>CRANK_BATCH_SIZE</h4><p><code>32</code> orders per crank_cancel call</p></div>
           <div class="card"><h4>MAX_OVERRIDES</h4><p><code>3</code> settlement overrides max</p></div>
-          <div class="card"><h4>OVERRIDE_WINDOW_SECS</h4><p><code>1</code> in the current build; docs note this should be widened for production</p></div>
+          <div class="card"><h4>override_window_secs</h4><p>Default <code>1</code>; admin-configurable via <code>update_config</code> (1–3600s). Stored in <code>GlobalConfig</code>. Existing accounts with field=0 fall back to 1s.</p></div>
           <div class="card"><h4>ADMIN_SETTLE_DELAY</h4><p><code>300s</code> (5 min) in the current program for all oracle types</p></div>
           <div class="card"><h4>MERGE_TOTAL_CENTS</h4><p><code>100</code> — Yes + No pair = $1.00</p></div>
         </div>
@@ -1322,16 +1322,20 @@ Max entries: 256 (griefing cap). Anyone can add tickers (permissionless).</pre>
 
         <h3>9.9 Override Window Mechanics</h3>
         <p>
-          After settlement, the admin has a short override window to correct a bad outcome. The deadline extends
-          with each override to allow review of corrections:
+          After settlement, the admin has a short override window to correct a bad outcome. The deadline is the
+          maximum of two formulas to guarantee it is always in the future:
         </p>
         <pre>
-override_deadline = settled_at + OVERRIDE_WINDOW_SECS × (override_count + 2)
+override_deadline = max(
+  clock.unix_timestamp + override_window_secs,    // always in the future
+  settled_at + override_window_secs × (count + 2) // caps total extension
+)
 
-After 1st override:  settled_at + 2 × window
-After 2nd override:  settled_at + 3 × window
-After 3rd override:  settled_at + 4 × window  (then blocked: MaxOverridesExceeded)
+After 1st override:  max(now + window, settled_at + 2 × window)
+After 2nd override:  max(now + window, settled_at + 3 × window)
+After 3rd override:  max(now + window, settled_at + 4 × window) (then blocked: MaxOverridesExceeded)
 
+override_window_secs: configurable via update_config (default 1s, range 1–3600s)
 Redemptions blocked until: clock.unix_timestamp >= override_deadline
 Crank redeem blocked until: same condition</pre>
 
@@ -1456,9 +1460,9 @@ Transfer: SOL Treasury → admin wallet</pre>
         <h3>Obligations Tracking</h3>
         <div class="callout warn">
           When a market settles, <code>config.obligations</code> increases by <code>total_minted - total_redeemed</code>
-          (the outstanding winning token supply). Each winner redemption (manual <code>redeem</code> or <code>crank_redeem</code>)
-          decrements obligations by the redeemed amount. This counter ensures the treasury can never be drained below
-          what users are owed.
+          (the outstanding winning token supply). Both winner redemptions (<code>redeem</code> mode 1, <code>crank_redeem</code>)
+          and pair burns (<code>redeem</code> mode 0) decrement obligations via <code>saturating_sub</code>. This counter
+          ensures the treasury can never be drained below what users are owed.
         </div>
       </div>
     </section>
@@ -1490,17 +1494,21 @@ Transfer: SOL Treasury → admin wallet</pre>
             </p>
           </div>
           <div class="card">
-            <h3>Automation Watchdog</h3>
+            <h3>Automation Scheduler</h3>
             <p>
-              The <code>automation</code> service is now a verification and fallback layer, not the primary settlement engine.
-              Its morning job checks that expected markets exist and triggers initialization only if coverage is missing.
+              Three scheduled jobs: <strong>8:30 AM ET</strong> morning health check (verifies markets exist, fallback creates if missing),
+              <strong>4:05 PM ET</strong> settlement trigger (POSTs to settlement service as belt-and-suspenders backup),
+              and <strong>midnight</strong> timer recalculation for DST handling.
             </p>
           </div>
           <div class="card">
-            <h3>Event Indexer</h3>
+            <h3>Event Indexer + Signals</h3>
             <p>
               Converts Anchor log events into queryable data products for history, cost basis, PnL, VWAPs, and portfolio snapshots.
-              Trading can continue without it, but analytics and historical UX degrade.
+              Also computes the <strong>Meridian Index</strong> (aggregate MAG7 sentiment, 0–100) and
+              <strong>Time-Weighted Conviction Scores</strong> (per-wallet prediction credentialing). Snapshots the index
+              every 5 minutes. Exposes signals via <code>/api/index/*</code>, <code>/api/conviction/*</code>, and
+              <code>/api/signals/smart-money</code>.
             </p>
           </div>
           <div class="card">
@@ -1512,8 +1520,9 @@ Transfer: SOL Treasury → admin wallet</pre>
           </div>
         </div>
         <div class="callout">
-          Not every entry under <code>services/</code> is a long-running daemon. In live mode, <code>market-initializer</code> is a
-          one-shot job that runs a single creation cycle and exits; the long-running lifecycle engine is <code>settlement</code>.
+          All services under <code>services/</code> are long-running daemons. <code>market-initializer</code> runs an initial
+          creation cycle on startup, then stays alive as an HTTP trigger server (POST <code>/trigger</code>) for on-demand
+          market creation by the settlement pipeline or admin UI.
         </div>
       </div>
     </section>
@@ -1648,7 +1657,7 @@ order_intents:
               <li>Crank cancel: batches of <code>32</code> orders, loops until book empty</li>
               <li>Auto-redeem: <code>16 users</code> per <code>crank_redeem</code> batch (2 ATAs per user)</li>
               <li>Close market: requires <code>yes_supply == 0 && no_supply == 0</code></li>
-              <li>Next-day init: spawns <code>market-initializer</code> as child process (<code>5 min</code> timeout)</li>
+              <li>Next-day init: triggers <code>market-initializer</code> via HTTP POST to <code>/trigger</code> (<code>5 min</code> timeout)</li>
               <li>Unpause: exponential backoff, up to <code>5 retries</code></li>
             </ul>
           </div>
@@ -1679,10 +1688,11 @@ order_intents:
 
         <h3>13.7 Automation Scheduler</h3>
         <p>
-          <strong>Not the primary market creator.</strong> The scheduler's morning job at <code>8:30 AM ET</code> is a
-          verification-and-fallback layer. It spawns <code>verify.ts</code> to check that expected markets exist on-chain.
-          If verification fails, it spawns the full market initializer as a fallback. Under normal operation, markets are
-          created by the settlement pipeline the previous evening.
+          Three DST-aware scheduled jobs: <strong>8:30 AM ET</strong> morning health check (spawns <code>verify.ts</code>,
+          fallback creates markets if missing), <strong>4:05 PM ET</strong> settlement trigger (POSTs to settlement service
+          with 10-minute timeout, handles 409 "already in progress" gracefully), and <strong>midnight</strong> timer
+          recalculation. All timers use <code>getNextETTime()</code> with DST-aware offset detection via
+          <code>Intl.DateTimeFormat</code>.
         </p>
         <p class="small">
           DST handling uses <code>Intl.DateTimeFormat</code> with <code>America/New_York</code> timezone, avoiding manual
@@ -1783,6 +1793,7 @@ order_intents:
               <tr><td><code>/portfolio</code></td><td>Portfolio</td><td>Tabs: Performance (PnlTab), Positions (PositionsTab), Open Orders (OpenOrdersTab), History (TradeHistoryTab)</td></tr>
               <tr><td><code>/history</code></td><td>Trade History</td><td>Fill history table with CSV export, EventIndexerBanner warning</td></tr>
               <tr><td><code>/analytics</code></td><td>Analytics</td><td>Ticker selector, quote card, PriceHistory, HistoricalOverlay (return distribution), SettlementAnalytics (calibration)</td></tr>
+              <tr><td><code>/signals</code></td><td>Signals</td><td>Meridian Index gauge (0–100), intraday history chart, per-ticker VWAP breakdown, Smart Money Flow table, Conviction Leaderboard. NavIndexWidget badge in header.</td></tr>
             </tbody>
           </table>
         </div>
@@ -1839,7 +1850,7 @@ order_intents:
           </div>
           <div class="card">
             <h4>SyntheticControls</h4>
-            <p>Only renders in synthetic mode. Buttons trigger market-initializer and settlement-service HTTP endpoints. For testing the full daily lifecycle without waiting.</p>
+            <p>Only renders in synthetic mode. Includes "Open Market" / "Close Market" trigger buttons and a 5-button market clock override (Auto, Pre-Market, Open, After Hours, Closed). Phase changes auto-trigger market initialization. Overrides auto-reset to "auto" after 30 minutes.</p>
           </div>
         </div>
 
@@ -1966,12 +1977,14 @@ FULL_UNIVERSE: MAG7 + all above (~30 tickers)</pre>
           </div>
         </div>
         <p class="small">
-          In synthetic mode, the settlement service and market initializer run as HTTP trigger servers instead of
-          autonomous pollers. The frontend shows <code>SyntheticControls</code> buttons to trigger market open/close
-          on demand.
+          In synthetic mode, all services run both autonomous pollers and HTTP trigger servers. The frontend shows
+          <code>SyntheticControls</code> with market clock override buttons (Auto, Pre-Market, Open, After Hours, Closed)
+          that set the settlement service's market phase — enabling full lifecycle testing without waiting for real market
+          hours. The "Settle All" admin button triggers backend settlement (no wallet signatures needed). Overrides
+          auto-reset to "auto" after 30 minutes. Phase changes auto-trigger market initialization if no markets exist.
         </p>
 
-        <h3>16.2 On-Chain Tests (167 tests, bankrun)</h3>
+        <h3>16.2 On-Chain Tests (167+ tests, bankrun)</h3>
         <p>
           Tests use <code>solana-bankrun</code> (in-memory validator emulator) with <code>anchor-bankrun</code> for
           Anchor compatibility. All instructions are built manually (no IDL generation) with SHA256 discriminators

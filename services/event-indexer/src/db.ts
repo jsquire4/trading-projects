@@ -80,6 +80,24 @@ export function initDb(dbPath?: string): Database.Database {
       PRIMARY KEY (order_id, market, wallet)
     );
     CREATE INDEX IF NOT EXISTS idx_order_intents_wallet ON order_intents(wallet);
+
+    CREATE TABLE IF NOT EXISTS market_tickers (
+      market     TEXT PRIMARY KEY,
+      ticker     TEXT NOT NULL,
+      strike     INTEGER NOT NULL,
+      close_unix INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_mt_ticker ON market_tickers(ticker);
+
+    CREATE TABLE IF NOT EXISTS index_snapshots (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp  INTEGER NOT NULL,
+      value      REAL NOT NULL,
+      dispersion REAL NOT NULL,
+      tickers    TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_snapshots_ts ON index_snapshots(timestamp);
   `);
 
   // Migration: add seq column to existing databases and fix unique index
@@ -159,4 +177,33 @@ export {
   type FillWithIntent,
   type PortfolioPosition,
   type DailySummary,
+};
+
+// --------------- Re-exports from signals.ts ---------------
+import {
+  upsertMarketTicker,
+  computeMeridianIndex,
+  computeConvictionScores,
+  computeConvictionLeaders,
+  computeSmartMoney,
+  insertIndexSnapshot,
+  queryIndexSnapshots,
+  type MeridianIndexResult,
+  type ConvictionResult,
+  type ConvictionLeader,
+  type SmartMoneySignal,
+} from "./signals.js";
+
+export {
+  upsertMarketTicker,
+  computeMeridianIndex,
+  computeConvictionScores,
+  computeConvictionLeaders,
+  computeSmartMoney,
+  insertIndexSnapshot,
+  queryIndexSnapshots,
+  type MeridianIndexResult,
+  type ConvictionResult,
+  type ConvictionLeader,
+  type SmartMoneySignal,
 };

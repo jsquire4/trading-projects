@@ -18,6 +18,12 @@ import {
   queryFillsWithIntent,
   queryPortfolioSnapshot,
   queryPortfolioHistory,
+  upsertMarketTicker,
+  computeMeridianIndex,
+  computeConvictionScores,
+  computeConvictionLeaders,
+  computeSmartMoney,
+  queryIndexSnapshots,
 } from "./db.js";
 
 const log = createLogger("event-indexer:api");
@@ -309,6 +315,48 @@ export function startApiServer(port: number): http.Server {
         handleEvents(req, res, url);
       } else if (pathname === "/api/health") {
         handleHealth(req, res);
+
+      // ---- Signals endpoints ----
+      } else if (pathname === "/api/index/current") {
+        jsonResponse(res, 200, computeMeridianIndex(), req);
+      } else if (pathname === "/api/index/history") {
+        const p = parseQuery(url);
+        const period = p.period === "daily" ? "daily" : "intraday";
+        const days = Math.min(90, Math.max(1, parseInt(p.days ?? "7", 10) || 7));
+        const periodSecs = period === "intraday" ? 24 * 3600 : days * 86400;
+        jsonResponse(res, 200, { snapshots: queryIndexSnapshots({ periodSeconds: periodSecs }), period, days }, req);
+      } else if (pathname === "/api/conviction/leaders") {
+        const p = parseQuery(url);
+        const limit = Math.min(100, Math.max(1, parseInt(p.limit ?? "20", 10) || 20));
+        jsonResponse(res, 200, { leaders: computeConvictionLeaders(limit) }, req);
+      } else if (pathname.startsWith("/api/conviction/")) {
+        const wallet = pathname.slice("/api/conviction/".length);
+        if (!/^[A-HJ-NP-Za-km-z1-9]{32,44}$/.test(wallet)) {
+          jsonResponse(res, 400, { error: "Invalid wallet address" }, req);
+        } else {
+          const results = computeConvictionScores(wallet);
+          jsonResponse(res, 200, results[0] ?? { wallet, score: 0, trades: 0, winRate: 0, byTicker: [] }, req);
+        }
+      } else if (pathname === "/api/signals/smart-money") {
+        jsonResponse(res, 200, { signals: computeSmartMoney() }, req);
+      } else if (pathname === "/api/market-tickers" && req.method === "POST") {
+        let body = "";
+        req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+        req.on("error", () => { jsonResponse(res, 400, { error: "Request stream error" }, req); });
+        req.on("end", () => {
+          try {
+            const { market, ticker, strike, close_unix } = JSON.parse(body);
+            if (!market || !ticker) {
+              jsonResponse(res, 400, { error: "Missing market or ticker" }, req);
+              return;
+            }
+            upsertMarketTicker({ market, ticker: String(ticker), strike: Number(strike ?? 0), close_unix: Number(close_unix ?? 0) });
+            jsonResponse(res, 200, { ok: true }, req);
+          } catch {
+            jsonResponse(res, 400, { error: "Invalid JSON" }, req);
+          }
+        });
+
       } else {
         jsonResponse(res, 404, { error: "Not found" }, req);
       }

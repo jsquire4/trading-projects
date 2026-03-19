@@ -8,6 +8,7 @@ const baseLinks = [
   { href: "/trade", label: "Trade" },
   { href: "/portfolio", label: "Portfolio" },
   { href: "/history", label: "History" },
+  { href: "/signals", label: "Signals" },
 ];
 
 export function Nav() {

@@ -6,6 +6,7 @@ import { NavPnl } from "@/components/NavPnl";
 import { NavBalance } from "@/components/NavBalance";
 import { NetworkBadge } from "@/components/NetworkBadge";
 import { Nav } from "@/components/Nav";
+import { NavIndexWidget } from "@/components/NavIndexWidget";
 import { Toaster } from "sonner";
 import "./globals.css";
 
@@ -31,6 +32,7 @@ export default function RootLayout({
               <Nav />
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              <NavIndexWidget />
               <NavPnl />
               <NavBalance />
               <NetworkBadge />

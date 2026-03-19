@@ -17,6 +17,7 @@ import {
   insertEventsBatch,
   upsertCheckpoint,
   signatureExists,
+  upsertMarketTicker,
 } from "./db.js";
 
 const log = createLogger("event-indexer:listener");
@@ -209,6 +210,24 @@ export function createLiveListener(
               };
             });
             insertEventsBatch(rows);
+
+            // Auto-populate market_tickers from settlement events
+            for (const row of rows) {
+              if (row.type === "settlement") {
+                try {
+                  const d = JSON.parse(row.data);
+                  if (d.ticker) {
+                    upsertMarketTicker({
+                      market: row.market,
+                      ticker: String(d.ticker).toUpperCase(),
+                      strike: Number(d.strikePrice ?? 0),
+                      close_unix: row.timestamp,
+                    });
+                  }
+                } catch { /* non-fatal */ }
+              }
+            }
+
             // Checkpoint AFTER successful insert to avoid loss on insert failure
             upsertCheckpoint(signature, slot);
 

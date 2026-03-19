@@ -16,7 +16,7 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { createLogger } from "../../shared/src/alerting.js";
 import { MERIDIAN_PROGRAM_ID } from "../../shared/src/pda.js";
-import { initDb, closeDb } from "./db.js";
+import { initDb, closeDb, insertIndexSnapshot, computeMeridianIndex } from "./db.js";
 import { runBackfill } from "./backfill.js";
 import { startLiveListener, stopLiveListener } from "./listener.js";
 import { startApiServer } from "./api.js";
@@ -60,9 +60,26 @@ async function main(): Promise<void> {
     });
   });
 
+  // 6. Meridian Index snapshot every 5 minutes
+  const SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000;
+  const snapshotInterval = setInterval(() => {
+    try {
+      const result = computeMeridianIndex();
+      const tickerMap: Record<string, { vwap: number; volume: number }> = {};
+      for (const t of result.tickers) {
+        tickerMap[t.ticker] = { vwap: t.vwap, volume: t.volume };
+      }
+      insertIndexSnapshot(result.value, result.dispersion, tickerMap);
+      log.info("Index snapshot", { value: result.value.toFixed(1), dispersion: result.dispersion.toFixed(1) });
+    } catch (err) {
+      log.error("Failed to save index snapshot", { error: String(err) });
+    }
+  }, SNAPSHOT_INTERVAL_MS);
+
   // Graceful shutdown
   const shutdown = async () => {
     log.info("Shutting down...");
+    clearInterval(snapshotInterval);
     server.close();
     await stopLiveListener(connection);
     closeDb();

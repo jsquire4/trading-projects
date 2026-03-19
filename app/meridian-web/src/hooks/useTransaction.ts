@@ -88,16 +88,20 @@ export function useTransaction(): UseTransactionReturn {
         // --- Sign ---
         toastId = toast.loading(`${label}: Awaiting signature...`);
 
-        // Fetch blockhash — for legacy transactions, set on the tx.
-        // For versioned transactions, the blockhash is already baked in by the builder.
-        const { blockhash, lastValidBlockHeight } =
-          await connection.getLatestBlockhash("confirmed");
-
         const isVersioned = "version" in tx;
+        let blockhash: string;
+        let lastValidBlockHeight: number;
+
         if (!isVersioned) {
+          // Legacy tx: fetch blockhash and set on the transaction
+          ({ blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed"));
           tx.recentBlockhash = blockhash;
-          tx.lastValidBlockHeight = lastValidBlockHeight;
+          (tx as any).lastValidBlockHeight = lastValidBlockHeight;
           tx.feePayer = provider.wallet.publicKey;
+        } else {
+          // Versioned tx: blockhash already baked in by buildVersionedTx — skip RPC call
+          blockhash = (tx as any).message.recentBlockhash;
+          lastValidBlockHeight = 0; // confirmTransaction uses signature-only polling
         }
 
         const signed = await provider.wallet.signTransaction(tx);

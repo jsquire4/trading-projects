@@ -48,7 +48,7 @@ function PositionCard({ position, totalCost, avgPriceCents, now, book }: {
   const canRedeem = isSettled && isWinner && !inOverrideWindow && winnerBal > BigInt(0);
 
   const hedgedPairs = Math.min(yesBal, noBal);
-  const canPairBurn = hedgedPairs > 0 && !isSettled;
+  const canPairBurn = hedgedPairs > 0; // pair-burn is valid even after settlement
 
   const minutesLeft = Math.max(0, remaining / 60);
   const side = yesBal >= noBal ? "yes" : "no";

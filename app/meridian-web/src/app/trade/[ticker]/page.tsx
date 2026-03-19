@@ -254,15 +254,13 @@ export default function TradingCockpit({
   const searchParams = useSearchParams();
   const { data: allMarkets = [], isLoading: marketsLoading } = useMarkets();
 
-  // Filter markets for this ticker — exclude settled AND expired-but-unsettled
-  const nowUnix = Math.floor(Date.now() / 1000);
+  // Filter markets for this ticker — include expired-but-unsettled (settling phase)
   const tickerMarkets = useMemo(
     () =>
       allMarkets
-        .filter((m) => m.ticker === ticker)
-        .filter((m) => !m.isSettled && Number(m.marketCloseUnix) > nowUnix)
+        .filter((m) => m.ticker === ticker && !m.isSettled)
         .sort((a, b) => Number(a.strikePrice) - Number(b.strikePrice)),
-    [allMarkets, ticker, nowUnix],
+    [allMarkets, ticker],
   );
 
   // Selected market

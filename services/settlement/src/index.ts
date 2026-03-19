@@ -71,6 +71,14 @@ const UNPAUSE_BASE_DELAY_MS = 2_000;
 // ---------------------------------------------------------------------------
 
 async function confirmMarketClosed(marketData: IMarketDataClient): Promise<boolean> {
+  // Check admin override first
+  const override = getMarketStateOverride();
+  if (override !== "auto") {
+    const isClosed = override === "postmarket" || override === "closed";
+    log.info(`Market state override active: "${override}" → ${isClosed ? "proceeding" : "waiting"}`);
+    return isClosed;
+  }
+
   try {
     const clock = await marketData.getMarketClock();
     const state = clock.state.toLowerCase();
@@ -710,7 +718,19 @@ async function startPollingLoop(): Promise<never> {
 }
 
 // ---------------------------------------------------------------------------
-// Synthetic mode: HTTP trigger server (unchanged)
+// Market state override — allows admin to force market phase for testing
+// ---------------------------------------------------------------------------
+
+type MarketPhase = "auto" | "premarket" | "open" | "postmarket" | "closed";
+let marketStateOverride: MarketPhase = "auto";
+
+/** Returns the overridden market state, or null if set to "auto" (use real clock). */
+export function getMarketStateOverride(): MarketPhase {
+  return marketStateOverride;
+}
+
+// ---------------------------------------------------------------------------
+// HTTP trigger + admin server
 // ---------------------------------------------------------------------------
 
 function startTriggerServer(): void {
@@ -724,12 +744,56 @@ function startTriggerServer(): void {
 
   const triggerToken = process.env.SETTLEMENT_TRIGGER_TOKEN ?? null;
 
+  const VALID_PHASES: MarketPhase[] = ["auto", "premarket", "open", "postmarket", "closed"];
+
   const server = http.createServer(async (req, res) => {
+    // CORS headers for admin page access
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+    if (req.method === "OPTIONS") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
     // Health endpoint for Railway and inter-service checks
     if (req.url === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, service: "settlement" }));
       return;
+    }
+
+    // Market state override endpoint — GET returns current, POST sets it
+    if (req.url === "/market-state") {
+      if (req.method === "GET") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ state: marketStateOverride }));
+        return;
+      }
+      if (req.method === "POST") {
+        let body = "";
+        req.on("data", (chunk) => { body += chunk; });
+        req.on("end", () => {
+          try {
+            const { state } = JSON.parse(body);
+            if (!VALID_PHASES.includes(state)) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: `Invalid state. Valid: ${VALID_PHASES.join(", ")}` }));
+              return;
+            }
+            marketStateOverride = state;
+            log.info(`Market state override set to: ${state}`);
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ ok: true, state: marketStateOverride }));
+          } catch {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Invalid JSON body. Expected: {\"state\": \"...\"}" }));
+          }
+        });
+        return;
+      }
     }
 
     if (req.url !== "/trigger") {

@@ -422,8 +422,12 @@ fn allocate_new_level<'info>(
     // Initialize the new level at the end
     {
         let mut ob_data = ob_info.try_borrow_mut_data()?;
-        let new_max = ob_data[HDR_MAX_LEVELS].saturating_add(1);
-        ob_data[HDR_MAX_LEVELS] = new_max;
+        let cur_max = ob_data[HDR_MAX_LEVELS] as usize;
+        require!(
+            cur_max < MAX_PRICE_LEVELS,
+            MeridianError::MaxLevelsReached
+        );
+        ob_data[HDR_MAX_LEVELS] = (cur_max + 1) as u8;
         // init_level writes the level header and updates price_map
         init_level(&mut ob_data, current_len, price);
     }

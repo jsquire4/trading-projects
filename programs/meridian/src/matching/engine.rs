@@ -201,6 +201,10 @@ fn match_at_level_both_sides(
             if cnt > 0 {
                 set_level_count(data, loff, cnt - 1);
             }
+            // Free level if fully drained by matching
+            if level_count(data, loff) == 0 {
+                free_level(data, loff);
+            }
         } else {
             set_slot_quantity(data, loff, s, order_qty - fill_qty);
         }
@@ -265,6 +269,10 @@ fn match_at_level_for_side(
             let cnt = level_count(data, loff);
             if cnt > 0 {
                 set_level_count(data, loff, cnt - 1);
+            }
+            // Free level if fully drained by matching
+            if level_count(data, loff) == 0 {
+                free_level(data, loff);
             }
         } else {
             set_slot_quantity(data, loff, s, order_qty - fill_qty);

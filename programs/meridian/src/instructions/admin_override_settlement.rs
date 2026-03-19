@@ -58,12 +58,17 @@ pub fn handle_admin_override_settlement(
     // Apply the override
     market.settlement_price = new_settlement_price;
     market.outcome = new_outcome;
-    // Cap total extension: settled_at + override_window * (override_count + 2)
+    // New deadline must always be in the future. Use max of:
+    //   a) now + override_window (guarantees future)
+    //   b) settled_at + override_window * (count + 2) (caps total extension)
     let override_window = config.override_window();
+    let from_now = clock.unix_timestamp
+        .checked_add(override_window)
+        .ok_or(MeridianError::ArithmeticOverflow)?;
     let deadline_multiplier = (market.override_count as i64)
         .checked_add(2)
         .ok_or(MeridianError::ArithmeticOverflow)?;
-    market.override_deadline = market
+    let capped = market
         .settled_at
         .checked_add(
             override_window
@@ -71,6 +76,7 @@ pub fn handle_admin_override_settlement(
                 .ok_or(MeridianError::ArithmeticOverflow)?,
         )
         .ok_or(MeridianError::ArithmeticOverflow)?;
+    market.override_deadline = from_now.max(capped);
     market.override_count += 1;
 
     msg!(

@@ -2336,7 +2336,7 @@ describe("Settlement Lifecycle", () => {
     // ---------------------------------------------------------------------------
     // Test 14: Manual cancel_order still works post-settlement
     // ---------------------------------------------------------------------------
-    it("manual cancel_order works post-settlement (refunds escrow)", async () => {
+    it("cancel_order rejected post-settlement (MarketAlreadySettled)", async () => {
 
       const clock = await ctx.context.banksClient.getClock();
       const now = Number(clock.unixTimestamp);
@@ -2420,7 +2420,7 @@ describe("Settlement Lifecycle", () => {
       const m = await readMarket(ctx, ma.market);
       expect(m.isSettled).to.be.true;
 
-      // Now manually cancel the resting order post-settlement
+      // Now attempt to cancel the resting order post-settlement — should fail
       const cancelIx = buildCancelOrderIx({
         user: cancelUser.publicKey,
         config,
@@ -2435,14 +2435,16 @@ describe("Settlement Lifecycle", () => {
         price: 40,
         orderId: new BN(orderId),
       });
-      await provider.sendAndConfirm!(
-        new Transaction().add(uniqueCuIx(), cancelIx),
-        [cancelUser],
-      );
-
-      // Verify escrow was refunded: 10 tokens * 40/100 = 4 USDC = 4_000_000
-      const usdcAfterCancel = await getTokenBalance(ctx, cancelUserUsdcAta);
-      expect(usdcAfterCancel - usdcAfterPlace).to.equal(4_000_000);
+      try {
+        await provider.sendAndConfirm!(
+          new Transaction().add(uniqueCuIx(), cancelIx),
+          [cancelUser],
+        );
+        expect.fail("Should have thrown MarketAlreadySettled");
+      } catch (err: any) {
+        // Error 6020 = MarketAlreadySettled (0x1784)
+        expect(err.message || String(err)).to.include("6020");
+      }
     });
 
     // ---------------------------------------------------------------------------

@@ -191,6 +191,15 @@ pub fn handle_create_strike_market(
     // controlling settlement prices.
     if config.oracle_type == 0 {
         let feed_data = ctx.accounts.oracle_feed.try_borrow_data()?;
+        // Verify oracle discriminator: sha256("account:PriceFeed")[..8]
+        {
+            use anchor_lang::solana_program::hash::hash;
+            let expected = hash(b"account:PriceFeed");
+            require!(
+                feed_data.len() >= 8 && feed_data[..8] == expected.to_bytes()[..8],
+                MeridianError::InvalidOracleDiscriminator
+            );
+        }
         if feed_data.len() >= 72 {
             // PriceFeed layout: discriminator(8) + ticker(8) + price(8) + confidence(8) + timestamp(8) + authority(32)
             let authority_bytes: [u8; 32] = feed_data[40..72].try_into().unwrap();

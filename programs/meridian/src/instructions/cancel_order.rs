@@ -20,6 +20,7 @@ pub struct CancelOrder<'info> {
         has_one = yes_escrow @ MeridianError::InvalidEscrow,
         has_one = no_escrow @ MeridianError::InvalidEscrow,
         has_one = order_book @ MeridianError::InvalidOrderBook,
+        constraint = !market.is_settled @ MeridianError::MarketAlreadySettled,
     )]
     pub market: Box<Account<'info, StrikeMarket>>,
 

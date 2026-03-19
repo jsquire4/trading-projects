@@ -166,12 +166,21 @@ fn handle_pair_burn(ctx: Context<Redeem>, quantity: u64) -> Result<()> {
         .checked_add(quantity)
         .ok_or(MeridianError::ArithmeticOverflow)?;
 
+    // Pair burn removes one Yes + one No token from circulation.
+    // If the market is settled, this reduces the outstanding obligations
+    // (which were set to total_minted - total_redeemed at settlement time).
+    // Without this, obligations would be permanently inflated after pair burns,
+    // locking treasury USDC that is no longer owed to anyone.
+    let config = &mut ctx.accounts.config;
+    config.obligations = config.obligations.saturating_sub(quantity);
+
     msg!(
-        "Pair burn redeemed: user={}, market={}, quantity={}, total_redeemed={}",
+        "Pair burn redeemed: user={}, market={}, quantity={}, total_redeemed={}, obligations={}",
         ctx.accounts.user.key(),
         market_key,
         quantity,
         market.total_redeemed,
+        config.obligations,
     );
 
     Ok(())

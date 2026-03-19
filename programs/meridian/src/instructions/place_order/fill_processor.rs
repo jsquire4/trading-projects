@@ -350,6 +350,11 @@ fn process_swap_fill<'info>(
             ),
             fill.quantity,
         )?;
+    } else {
+        // SIDE_NO_BID non-merge fills should never reach process_swap_fill —
+        // the matching engine always marks NO_BID fills as merges. This guard
+        // prevents silent zero-transfer if that invariant is ever violated.
+        return err!(MeridianError::InvalidSide);
     }
 
     Ok((improvement, total_fee))

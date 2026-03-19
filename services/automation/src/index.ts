@@ -1,14 +1,14 @@
 /**
  * Automation Scheduler — Entry Point
  *
- * Long-running service that orchestrates daily market-initializer and
- * settlement triggers on a DST-aware ET schedule.
+ * Long-running service that orchestrates daily health checks and settlement
+ * triggers on a DST-aware ET schedule.
  *
  * Schedule (all times America/New_York):
- *   08:00  Trigger market-initializer
- *   08:30  Verify markets created
- *   16:05  Trigger settlement service
- *   16:10  Verify settlement completed
+ *   08:30  Morning health check — verify markets exist, fallback create if missing
+ *   16:05  Settlement trigger — POST to settlement service as backup
+ *          (settlement service also has its own 60s polling loop)
+ *   00:01  Midnight recalc — reschedule timers for next day
  */
 
 import { createLogger } from "../../shared/src/alerting.js";

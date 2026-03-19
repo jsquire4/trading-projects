@@ -30,15 +30,18 @@ const SERVICES_ROOT = resolve(__dirname, "..", "..");
 export class Scheduler {
   private running = false;
   private healthCheckTimer: ReturnType<typeof setTimeout> | null = null;
+  private settlementTimer: ReturnType<typeof setTimeout> | null = null;
   private midnightTimer: ReturnType<typeof setTimeout> | null = null;
   private lastRunDate: string | null = null;
+  private lastSettlementDate: string | null = null;
 
   async start(): Promise<void> {
     this.running = true;
-    log.info("Scheduler starting (watchdog mode — morning health check only)");
+    log.info("Scheduler starting (health check + settlement trigger)");
     await this.scheduleHealthCheck();
+    await this.scheduleSettlementTrigger();
     this.scheduleMidnightRecalc();
-    log.info("Scheduler started — waiting for next health check");
+    log.info("Scheduler started — health check + settlement trigger armed");
   }
 
   stop(): void {
@@ -46,6 +49,10 @@ export class Scheduler {
     if (this.healthCheckTimer) {
       clearTimeout(this.healthCheckTimer);
       this.healthCheckTimer = null;
+    }
+    if (this.settlementTimer) {
+      clearTimeout(this.settlementTimer);
+      this.settlementTimer = null;
     }
     if (this.midnightTimer) {
       clearTimeout(this.midnightTimer);
@@ -178,9 +185,96 @@ export class Scheduler {
     this.reschedule();
   }
 
+  // --------------------------------------------------------------------------
+  // Settlement trigger — 16:05 ET daily
+  // --------------------------------------------------------------------------
+
+  private async scheduleSettlementTrigger(): Promise<void> {
+    if (this.settlementTimer) {
+      clearTimeout(this.settlementTimer);
+      this.settlementTimer = null;
+    }
+
+    // 16:05 ET — 5 minutes after market close
+    const nextRun = getNextETTime(16, 5);
+    const delayMs = nextRun.getTime() - Date.now();
+
+    if (delayMs <= 0) {
+      log.warn("Settlement trigger time is in the past, skipping to tomorrow");
+      return;
+    }
+
+    const delayHrs = (delayMs / 3_600_000).toFixed(1);
+    log.info(`Next settlement trigger: ${nextRun.toISOString()} (in ${delayHrs}h)`);
+
+    this.settlementTimer = setTimeout(() => this.triggerSettlement(), delayMs);
+  }
+
+  private async triggerSettlement(): Promise<void> {
+    if (!this.running) return;
+
+    const todayET = getTodayET();
+
+    // Prevent double execution
+    if (this.lastSettlementDate === todayET) {
+      log.warn(`Settlement trigger already ran today (${todayET}), skipping`);
+      this.reschedule();
+      return;
+    }
+
+    const marketDay = await isMarketDay();
+    if (!marketDay) {
+      log.info(`Skipping settlement trigger — not a market day (${todayET})`);
+      this.lastSettlementDate = todayET;
+      this.reschedule();
+      return;
+    }
+
+    log.info(`Triggering settlement for ${todayET}`);
+
+    // POST to settlement service trigger endpoint
+    const settlementUrl = process.env.SETTLEMENT_URL ?? "http://127.0.0.1:4002";
+    const triggerToken = process.env.SETTLEMENT_TRIGGER_TOKEN ?? null;
+
+    try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (triggerToken) {
+        headers["Authorization"] = `Bearer ${triggerToken}`;
+      }
+
+      const response = await fetch(`${settlementUrl}/trigger`, {
+        method: "POST",
+        headers,
+      });
+
+      const body = await response.text();
+
+      if (response.ok) {
+        log.info(`Settlement triggered successfully: ${body}`);
+      } else if (response.status === 409) {
+        // Settlement already in progress (polling loop caught it first) — this is fine
+        log.info("Settlement already in progress (poller beat us) — no action needed");
+      } else {
+        log.error(`Settlement trigger failed (HTTP ${response.status}): ${body}`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error(`Failed to reach settlement service: ${msg}`, {
+        url: settlementUrl,
+        date: todayET,
+      });
+    }
+
+    this.lastSettlementDate = todayET;
+    this.reschedule();
+  }
+
   private reschedule(): void {
     if (!this.running) return;
     this.scheduleHealthCheck();
+    this.scheduleSettlementTrigger();
   }
 
   private scheduleMidnightRecalc(): void {
@@ -192,8 +286,9 @@ export class Scheduler {
 
     this.midnightTimer = setTimeout(async () => {
       if (!this.running) return;
-      log.info("Midnight recalculation — rescheduling health check");
+      log.info("Midnight recalculation — rescheduling health check + settlement trigger");
       await this.scheduleHealthCheck();
+      await this.scheduleSettlementTrigger();
       this.scheduleMidnightRecalc();
     }, delayMs);
   }

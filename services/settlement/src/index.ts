@@ -12,7 +12,7 @@
 //   7. Auto-create next-day markets
 //   8. Unpause (autonomous retry)
 //
-// Also supports synthetic mode via HTTP trigger server (unchanged).
+// Also exposes an HTTP trigger server for manual/scheduler-triggered settlement.
 // ---------------------------------------------------------------------------
 
 import http from "node:http";
@@ -539,10 +539,26 @@ async function runSettlementCycle(
   log.info(`Active tickers: ${activeTickers.join(", ")}`);
 
   // ---- Phase 1: Confirm market is actually closed ----
-  const isClosed = await confirmMarketClosed(marketData);
-  if (!isClosed) {
-    log.warn("Market appears still open — aborting settlement cycle (will retry next poll)");
-    return { ok: true, summary: { message: "Market still open, waiting" } };
+  // Load markets first to check how stale the oldest expired market is.
+  // If any market expired more than 2 hours ago, it's from a previous trading
+  // day — skip the Yahoo market-state check and settle immediately. The Yahoo
+  // check only guards against settling same-day markets while the market is
+  // still open.
+  const allMarketsPreCheck = await loadAllMarkets(meridianProgram);
+  const nowUnix = Math.floor(Date.now() / 1000);
+  const STALE_THRESHOLD_S = 2 * 60 * 60; // 2 hours
+  const oldestExpiredAge = allMarketsPreCheck
+    .filter((m) => !m.account.isSettled && m.account.marketCloseUnix.toNumber() <= nowUnix)
+    .reduce((max, m) => Math.max(max, nowUnix - m.account.marketCloseUnix.toNumber()), 0);
+
+  if (oldestExpiredAge > STALE_THRESHOLD_S) {
+    log.info(`Stale markets detected (oldest expired ${Math.round(oldestExpiredAge / 3600)}h ago) — skipping Yahoo market-state check`);
+  } else {
+    const isClosed = await confirmMarketClosed(marketData);
+    if (!isClosed) {
+      log.warn("Market appears still open — aborting settlement cycle (will retry next poll)");
+      return { ok: true, summary: { message: "Market still open, waiting" } };
+    }
   }
 
   // ---- Phase 2: Double-confirm closing prices ----
@@ -565,7 +581,8 @@ async function runSettlementCycle(
   await updateOracleFeeds(oracleProgram, adminKeypair, priceResult.confirmed);
 
   // ---- Phase 4: Settle expired markets ----
-  const allMarkets = await loadAllMarkets(meridianProgram);
+  // Re-use markets loaded in pre-check if available, otherwise load fresh
+  const allMarkets = allMarketsPreCheck;
   const settlementResult = await settleExpiredMarkets(meridianProgram, allMarkets, priceResult.confirmed);
 
   // ---- Phase 4b: Admin-settle timed-out tickers ----
@@ -708,6 +725,13 @@ function startTriggerServer(): void {
   const triggerToken = process.env.SETTLEMENT_TRIGGER_TOKEN ?? null;
 
   const server = http.createServer(async (req, res) => {
+    // Health endpoint for Railway and inter-service checks
+    if (req.url === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, service: "settlement" }));
+      return;
+    }
+
     if (req.url !== "/trigger") {
       res.writeHead(404, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Not found" }));
@@ -752,8 +776,9 @@ function startTriggerServer(): void {
     }
   });
 
-  server.listen(port, "127.0.0.1", () => {
-    log.info(`Settlement trigger server listening on 127.0.0.1:${port} (POST /trigger)`);
+  const host = process.env.RAILWAY_ENVIRONMENT ? "0.0.0.0" : "127.0.0.1";
+  server.listen(port, host, () => {
+    log.info(`Settlement trigger server listening on ${host}:${port} (POST /trigger)`);
   });
 }
 
@@ -770,16 +795,15 @@ function sleep(ms: number): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
-  const isSynthetic = process.env.MARKET_DATA_SOURCE === "synthetic";
+  const mode = process.env.MARKET_DATA_SOURCE ?? "live";
+  log.info(`=== Settlement Service starting (${mode} mode — poller + trigger server) ===`);
 
-  if (isSynthetic) {
-    log.info("=== Settlement Service starting in SYNTHETIC mode — trigger server ===");
-    startTriggerServer();
-    return; // Keep process alive (HTTP server)
-  }
+  // Always start the HTTP trigger server for manual/scheduler-triggered settlement
+  startTriggerServer();
 
-  // Live mode: long-running reactive poller
-  log.info("=== Settlement Service starting (live mode — reactive poller) ===");
+  // Always start the polling loop — on-chain marketCloseUnix is authoritative
+  // regardless of data source. The poller detects expired unsettled markets and
+  // settles them autonomously.
   await startPollingLoop();
 }
 

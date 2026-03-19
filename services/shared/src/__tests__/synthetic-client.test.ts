@@ -149,10 +149,10 @@ describe("SyntheticClient.getHistory", () => {
 // ---- getMarketClock ---------------------------------------------------------
 
 describe("SyntheticClient.getMarketClock", () => {
-  it("returns state = 'open'", async () => {
+  it("returns a valid market state based on current ET time", async () => {
     const client = makeClient();
     const clock = await client.getMarketClock();
-    expect(clock.state).toBe("open");
+    expect(["premarket", "open", "postmarket", "closed"]).toContain(clock.state);
   });
 
   it("has all required fields", async () => {

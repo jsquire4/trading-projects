@@ -117,13 +117,58 @@ export class SyntheticClient implements IMarketDataClient {
 
   async getMarketClock(): Promise<MarketClock> {
     const now = new Date();
+    const et = new Date(
+      now.toLocaleString("en-US", { timeZone: "America/New_York" }),
+    );
+    const day = et.getDay(); // 0=Sun, 6=Sat
+    const hours = et.getHours();
+    const minutes = et.getMinutes();
+    const totalMinutes = hours * 60 + minutes;
+
+    let state: string;
+    let description: string;
+    let next_change: string;
+    let next_state: string;
+
+    if (day === 0 || day === 6) {
+      // Weekend
+      state = "closed";
+      description = "Synthetic market - weekend";
+      next_change = "09:30";
+      next_state = "open";
+    } else if (totalMinutes < 570) {
+      // Before 9:30 ET
+      state = "premarket";
+      description = "Synthetic market - premarket";
+      next_change = "09:30";
+      next_state = "open";
+    } else if (totalMinutes < 960) {
+      // 9:30–16:00 ET
+      state = "open";
+      description = "Synthetic market - open";
+      next_change = "16:00";
+      next_state = "postmarket";
+    } else if (totalMinutes < 1200) {
+      // 16:00–20:00 ET
+      state = "postmarket";
+      description = "Synthetic market - postmarket";
+      next_change = "20:00";
+      next_state = "closed";
+    } else {
+      // After 20:00 ET
+      state = "closed";
+      description = "Synthetic market - closed";
+      next_change = "09:30";
+      next_state = "premarket";
+    }
+
     return {
       date: now.toISOString().slice(0, 10),
-      description: "Synthetic market - always open",
-      state: "open",
+      description,
+      state,
       timestamp: Math.floor(now.getTime() / 1000),
-      next_change: "16:00",
-      next_state: "closed",
+      next_change,
+      next_state,
     };
   }
 

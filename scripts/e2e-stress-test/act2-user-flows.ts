@@ -611,6 +611,16 @@ async function test8(ctx: SharedContext, m: MarketContext): Promise<TestResult> 
   const agent = await freshAgent(ctx);
   const atas = await atasFor(ctx, agent, m3);
 
+  // Bump override window to 30s so the override tx has time to land
+  try {
+    const bumpIx = buildUpdateConfigIx({
+      admin: ctx.admin.publicKey,
+      config: ctx.configPda,
+      overrideWindowSecs: 30,
+    });
+    await sendTx(ctx.connection, new Transaction().add(bumpIx), [ctx.admin]);
+  } catch { /* non-fatal */ }
+
   // Mint BEFORE market close
   await mintPairFor(ctx, agent, m3, atas, QTY);
 
@@ -656,6 +666,16 @@ async function test8(ctx: SharedContext, m: MarketContext): Promise<TestResult> 
 
   const stateAfter = await readMarketState(ctx.connection, m3.market);
   if (!stateAfter) return { passed: false, detail: "Could not read market state after override" };
+
+  // Reset override window back to 1s
+  try {
+    const resetIx = buildUpdateConfigIx({
+      admin: ctx.admin.publicKey,
+      config: ctx.configPda,
+      overrideWindowSecs: 1,
+    });
+    await sendTx(ctx.connection, new Transaction().add(resetIx), [ctx.admin]);
+  } catch { /* non-fatal */ }
 
   if (stateAfter.outcome !== stateBefore.outcome) {
     return { passed: true, detail: `Outcome flipped: ${stateBefore.outcome} → ${stateAfter.outcome}` };

@@ -341,13 +341,27 @@ export function startApiServer(port: number): http.Server {
         jsonResponse(res, 200, { signals: computeSmartMoney() }, req);
       } else if (pathname === "/api/market-tickers" && req.method === "POST") {
         let body = "";
-        req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
-        req.on("error", () => { jsonResponse(res, 400, { error: "Request stream error" }, req); });
+        let overflow = false;
+        req.on("data", (chunk: Buffer) => {
+          if (overflow) return;
+          body += chunk.toString();
+          if (body.length > 4096) { overflow = true; jsonResponse(res, 413, { error: "Body too large" }, req); }
+        });
+        req.on("error", () => { if (!overflow) jsonResponse(res, 400, { error: "Request stream error" }, req); });
         req.on("end", () => {
+          if (overflow) return;
           try {
             const { market, ticker, strike, close_unix } = JSON.parse(body);
             if (!market || !ticker) {
               jsonResponse(res, 400, { error: "Missing market or ticker" }, req);
+              return;
+            }
+            if (!/^[A-HJ-NP-Za-km-z1-9]{32,44}$/.test(market)) {
+              jsonResponse(res, 400, { error: "Invalid market address" }, req);
+              return;
+            }
+            if (!/^[A-Z]{1,8}$/.test(String(ticker))) {
+              jsonResponse(res, 400, { error: "Invalid ticker format" }, req);
               return;
             }
             upsertMarketTicker({ market, ticker: String(ticker), strike: Number(strike ?? 0), close_unix: Number(close_unix ?? 0) });

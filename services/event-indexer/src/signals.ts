@@ -157,6 +157,11 @@ export function computeMeridianIndex(): MeridianIndexResult {
   const openUnix = todayOpenUnix();
   const nowUnix = Math.floor(Date.now() / 1000);
 
+  // Wrap in a read transaction for snapshot consistency across all 7 ticker queries
+  return db.transaction(() => _computeMeridianIndexInner(db, openUnix, nowUnix))();
+}
+
+function _computeMeridianIndexInner(db: ReturnType<typeof getDb>, openUnix: number, nowUnix: number): MeridianIndexResult {
   const entries: TickerIndexEntry[] = [];
 
   for (const ticker of MAG7) {
@@ -282,6 +287,8 @@ export function computeConvictionScores(
 ): ConvictionResult[] {
   const db = getDb();
 
+  // Use a subquery to get exactly one settlement per market (the first one),
+  // preventing Cartesian products if a market has multiple settlement events.
   const query = `
     SELECT
       f.market,
@@ -292,7 +299,11 @@ export function computeConvictionScores(
       f.timestamp as fill_ts,
       CAST(json_extract(s.data, '$.outcome') AS INTEGER) as outcome
     FROM events f
-    JOIN events s ON f.market = s.market AND s.type = 'settlement'
+    JOIN (
+      SELECT market, data, MIN(rowid) as rid
+      FROM events WHERE type = 'settlement'
+      GROUP BY market
+    ) s ON f.market = s.market
     JOIN market_tickers mt ON f.market = mt.market
     WHERE f.type = 'fill'
       ${wallet ? "AND json_extract(f.data, '$.taker') = ?" : ""}
@@ -352,7 +363,7 @@ export function computeConvictionLeaders(
       trades: r.trades,
       winRate: r.winRate,
       topTicker:
-        r.byTicker.sort((a, b) => b.trades - a.trades)[0]?.ticker ?? "",
+        r.byTicker.slice().sort((a, b) => b.trades - a.trades)[0]?.ticker ?? "",
     }));
 }
 

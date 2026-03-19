@@ -17,6 +17,10 @@ import {
   useIndexHistory,
   useConvictionLeaders,
   useSmartMoney,
+  type TickerIndexEntry,
+  type IndexSnapshot,
+  type ConvictionLeader,
+  type SmartMoneySignal,
 } from "@/hooks/useSignals";
 import { COLORS, AXIS_STYLE, GRID_STYLE, TOOLTIP_STYLE } from "@/lib/chartConfig";
 
@@ -44,18 +48,26 @@ function indexBg(v: number): string {
 // Page
 // ---------------------------------------------------------------------------
 
+// Stable empty arrays to avoid defeating useMemo with new references
+const EMPTY_TICKERS: TickerIndexEntry[] = [];
+const EMPTY_SNAPSHOTS: IndexSnapshot[] = [];
+const EMPTY_LEADERS: ConvictionLeader[] = [];
+const EMPTY_SIGNALS: SmartMoneySignal[] = [];
+
 export default function SignalsPage() {
-  const { data: indexData } = useMeridianIndex();
-  const { data: historyData } = useIndexHistory("intraday");
-  const { data: leadersData } = useConvictionLeaders(20);
-  const { data: smartMoneyData } = useSmartMoney();
+  const { data: indexData, isLoading: indexLoading } = useMeridianIndex();
+  const { data: historyData, isLoading: histLoading } = useIndexHistory("intraday");
+  const { data: leadersData, isLoading: leadersLoading } = useConvictionLeaders(20);
+  const { data: smartMoneyData, isLoading: smartLoading } = useSmartMoney();
+
+  const isLoading = indexLoading || histLoading || leadersLoading || smartLoading;
 
   const index = indexData?.value ?? 50;
   const disp = indexData?.dispersion ?? 0;
-  const tickers = indexData?.tickers ?? [];
-  const snapshots = historyData?.snapshots ?? [];
-  const leaders = leadersData?.leaders ?? [];
-  const signals = smartMoneyData?.signals ?? [];
+  const tickers = indexData?.tickers ?? EMPTY_TICKERS;
+  const snapshots = historyData?.snapshots ?? EMPTY_SNAPSHOTS;
+  const leaders = leadersData?.leaders ?? EMPTY_LEADERS;
+  const signals = smartMoneyData?.signals ?? EMPTY_SIGNALS;
 
   const chartData = useMemo(
     () =>
@@ -75,6 +87,16 @@ export default function SignalsPage() {
   );
 
   const lineColor = index > 60 ? COLORS.yes : index < 40 ? COLORS.no : "#f59e0b";
+
+  if (isLoading && !indexData) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-2xl font-bold text-gradient">Signals</h1>
+        <div className="h-48 rounded-xl bg-white/5 animate-pulse" />
+        <div className="h-32 rounded-xl bg-white/5 animate-pulse" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -125,7 +147,7 @@ export default function SignalsPage() {
             <ResponsiveContainer width="100%" height={200}>
               <AreaChart data={chartData} margin={{ top: 4, right: 12, bottom: 0, left: 0 }}>
                 <defs>
-                  <linearGradient id="indexGrad" x1="0" y1="0" x2="0" y2="1">
+                  <linearGradient id={`indexGrad-${lineColor.replace("#", "")}`} x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor={lineColor} stopOpacity={0.3} />
                     <stop offset="100%" stopColor={lineColor} stopOpacity={0.02} />
                   </linearGradient>
@@ -139,7 +161,7 @@ export default function SignalsPage() {
                   dataKey="value"
                   stroke={lineColor}
                   strokeWidth={2}
-                  fill="url(#indexGrad)"
+                  fill={`url(#indexGrad-${lineColor.replace("#", "")})`}
                   dot={false}
                   isAnimationActive={false}
                 />
@@ -192,16 +214,16 @@ export default function SignalsPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-white/30 text-[10px] border-b border-white/10">
-                  <th className="pb-2 pr-4">Ticker</th>
-                  <th className="pb-2 pr-4">Direction</th>
-                  <th className="pb-2 pr-4">Strength</th>
-                  <th className="pb-2 pr-4">Fills</th>
-                  <th className="pb-2">Avg Conviction</th>
+                  <th scope="col" className="pb-2 pr-4">Ticker</th>
+                  <th scope="col" className="pb-2 pr-4">Direction</th>
+                  <th scope="col" className="pb-2 pr-4">Strength</th>
+                  <th scope="col" className="pb-2 pr-4">Fills</th>
+                  <th scope="col" className="pb-2">Avg Conviction</th>
                 </tr>
               </thead>
               <tbody>
-                {signals.map((s, i) => (
-                  <tr key={i} className="border-b border-white/5 last:border-0">
+                {signals.map((s) => (
+                  <tr key={`${s.ticker}:${s.direction}`} className="border-b border-white/5 last:border-0">
                     <td className="py-2 pr-4 font-mono text-white/80">{s.ticker}</td>
                     <td className="py-2 pr-4">
                       <span
@@ -239,12 +261,12 @@ export default function SignalsPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-white/30 text-[10px] border-b border-white/10">
-                  <th className="pb-2 pr-4">#</th>
-                  <th className="pb-2 pr-4">Wallet</th>
-                  <th className="pb-2 pr-4">Score</th>
-                  <th className="pb-2 pr-4">Trades</th>
-                  <th className="pb-2 pr-4">Win Rate</th>
-                  <th className="pb-2">Best Ticker</th>
+                  <th scope="col" className="pb-2 pr-4">#</th>
+                  <th scope="col" className="pb-2 pr-4">Wallet</th>
+                  <th scope="col" className="pb-2 pr-4">Score</th>
+                  <th scope="col" className="pb-2 pr-4">Trades</th>
+                  <th scope="col" className="pb-2 pr-4">Win Rate</th>
+                  <th scope="col" className="pb-2">Best Ticker</th>
                 </tr>
               </thead>
               <tbody>

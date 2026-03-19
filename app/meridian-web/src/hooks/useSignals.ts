@@ -56,67 +56,58 @@ export interface WalletConviction {
 // Hooks
 // ---------------------------------------------------------------------------
 
+async function fetchJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 export function useMeridianIndex() {
   return useQuery<MeridianIndexData>({
     queryKey: ["meridian-index"],
-    queryFn: async () => {
-      const res = await fetch(`${EVENT_INDEXER_URL}/api/index/current`);
-      if (!res.ok) return { value: 50, dispersion: 0, tickers: [], timestamp: Date.now() / 1000 };
-      return res.json();
-    },
-    staleTime: 30_000,
+    queryFn: () => fetchJson(`${EVENT_INDEXER_URL}/api/index/current`),
+    staleTime: 25_000,
     refetchInterval: 30_000,
+    retry: 2,
   });
 }
 
 export function useIndexHistory(period: "intraday" | "daily" = "intraday", days = 7) {
   return useQuery<{ snapshots: IndexSnapshot[]; period: string; days: number }>({
     queryKey: ["index-history", period, days],
-    queryFn: async () => {
-      const res = await fetch(`${EVENT_INDEXER_URL}/api/index/history?period=${period}&days=${days}`);
-      if (!res.ok) return { snapshots: [], period, days };
-      return res.json();
-    },
-    staleTime: 60_000,
+    queryFn: () => fetchJson(`${EVENT_INDEXER_URL}/api/index/history?period=${period}&days=${days}`),
+    staleTime: 55_000,
     refetchInterval: 60_000,
+    retry: 2,
   });
 }
 
 export function useConvictionLeaders(limit = 20) {
   return useQuery<{ leaders: ConvictionLeader[] }>({
     queryKey: ["conviction-leaders", limit],
-    queryFn: async () => {
-      const res = await fetch(`${EVENT_INDEXER_URL}/api/conviction/leaders?limit=${limit}`);
-      if (!res.ok) return { leaders: [] };
-      return res.json();
-    },
-    staleTime: 60_000,
+    queryFn: () => fetchJson(`${EVENT_INDEXER_URL}/api/conviction/leaders?limit=${limit}`),
+    staleTime: 55_000,
     refetchInterval: 60_000,
+    retry: 2,
   });
 }
 
 export function useSmartMoney() {
   return useQuery<{ signals: SmartMoneySignal[] }>({
     queryKey: ["smart-money"],
-    queryFn: async () => {
-      const res = await fetch(`${EVENT_INDEXER_URL}/api/signals/smart-money`);
-      if (!res.ok) return { signals: [] };
-      return res.json();
-    },
-    staleTime: 30_000,
+    queryFn: () => fetchJson(`${EVENT_INDEXER_URL}/api/signals/smart-money`),
+    staleTime: 25_000,
     refetchInterval: 30_000,
+    retry: 2,
   });
 }
 
 export function useWalletConviction(wallet: string | null | undefined) {
   return useQuery<WalletConviction>({
     queryKey: ["wallet-conviction", wallet],
-    queryFn: async () => {
-      const res = await fetch(`${EVENT_INDEXER_URL}/api/conviction/${wallet}`);
-      if (!res.ok) return { wallet: wallet!, score: 0, trades: 0, winRate: 0, byTicker: [] };
-      return res.json();
-    },
+    queryFn: () => fetchJson(`${EVENT_INDEXER_URL}/api/conviction/${wallet}`),
     enabled: !!wallet,
-    staleTime: 60_000,
+    staleTime: 55_000,
+    retry: 2,
   });
 }

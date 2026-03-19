@@ -60,7 +60,23 @@ function startTriggerServer(): void {
   let running = false;
 
   const server = http.createServer(async (req, res) => {
-    // Only handle /trigger
+    // CORS for admin page / inter-service
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+    if (req.method === "OPTIONS") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    if (req.url === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, service: "market-initializer" }));
+      return;
+    }
+
     if (req.url !== "/trigger") {
       res.writeHead(404, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Not found" }));
@@ -96,8 +112,9 @@ function startTriggerServer(): void {
     }
   });
 
-  server.listen(port, "127.0.0.1", () => {
-    log.info(`Trigger server listening on 127.0.0.1:${port} (POST /trigger)`);
+  const host = process.env.RAILWAY_ENVIRONMENT ? "0.0.0.0" : "127.0.0.1";
+  server.listen(port, host, () => {
+    log.info(`Trigger server listening on ${host}:${port} (POST /trigger)`);
   });
 }
 
@@ -106,22 +123,23 @@ function startTriggerServer(): void {
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
-  const isSynthetic = process.env.MARKET_DATA_SOURCE === "synthetic";
+  const mode = process.env.MARKET_DATA_SOURCE ?? "live";
+  log.info(`Market Initializer starting (${mode} mode — initial cycle + trigger server)`);
 
-  if (isSynthetic) {
-    log.info("Market Initializer starting in SYNTHETIC mode — trigger server");
-    startTriggerServer();
-    return; // Keep process alive (HTTP server)
+  // Always start the trigger server so settlement service and admin can
+  // trigger market creation via POST /trigger at any time
+  startTriggerServer();
+
+  // Run one initial cycle on startup to create any missing markets
+  try {
+    const result = await runCycle();
+    if (!result.ok) {
+      log.error("Initial market creation cycle had errors", result);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error(`Initial market creation failed: ${msg} — trigger server still running`);
   }
-
-  // Live mode: one-shot
-  log.info("Market Initializer starting (live mode)");
-  const result = await runCycle();
-
-  if (!result.ok) {
-    process.exit(1);
-  }
-  process.exit(0);
 }
 
 main().catch((err) => {

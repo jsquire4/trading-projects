@@ -9,16 +9,13 @@
 //   5. Crank cancel resting orders on settled markets
 //   5.5 Auto-redeem winning tokens for settled markets past override deadline
 //   6. Close eligible markets
-//   7. Auto-create next-day markets
+//   7. Trigger market-initializer to create next-day markets (via HTTP)
 //   8. Unpause (autonomous retry)
 //
 // Also exposes an HTTP trigger server for manual/scheduler-triggered settlement.
 // ---------------------------------------------------------------------------
 
 import http from "node:http";
-import { execFile } from "node:child_process";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 import { AnchorProvider, Program, Wallet } from "@coral-xyz/anchor";
 import BN from "bn.js";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
@@ -395,44 +392,32 @@ async function closeMarkets(
   }
 }
 
-/** Phase 6: Spawn market-initializer as a child process to create next-day markets. */
+/** Phase 6: Trigger market-initializer to create next-day markets via HTTP. */
 async function initNextDay(): Promise<void> {
   log.info("Creating markets for next trading day");
 
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  const initScript = resolve(__dirname, "../../market-initializer/src/index.ts");
-  const tsxPath = resolve(__dirname, "../../node_modules/.bin/tsx");
+  const marketInitUrl = process.env.MARKET_INIT_URL ?? "http://127.0.0.1:4001";
 
   try {
-    await new Promise<void>((resolveP, rejectP) => {
-      execFile(tsxPath, [initScript], {
-        env: { ...process.env },
-        timeout: 5 * 60 * 1000, // 5 minute timeout
-      }, (err, stdout, stderr) => {
-        if (stdout) {
-          for (const line of stdout.split("\n").filter(Boolean)) {
-            log.info(`[market-initializer] ${line}`);
-          }
-        }
-        if (stderr) {
-          for (const line of stderr.split("\n").filter(Boolean)) {
-            log.warn(`[market-initializer:stderr] ${line}`);
-          }
-        }
-        if (err) {
-          rejectP(err);
-        } else {
-          resolveP();
-        }
-      });
+    const res = await fetch(`${marketInitUrl}/trigger`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(5 * 60 * 1000), // 5 minute timeout
     });
-    log.info("Next-day market initialization completed");
+
+    const body = await res.text();
+
+    if (res.ok) {
+      log.info(`Next-day market initialization completed: ${body}`);
+    } else if (res.status === 409) {
+      log.info("Market initialization already in progress — skipping");
+    } else {
+      log.error(`Market initialization failed (HTTP ${res.status}): ${body}`);
+    }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    log.error(`Failed to create next-day markets: ${errMsg}`, {
-      stack: err instanceof Error ? err.stack : undefined,
-    });
-    // Non-fatal — settlement was successful, markets can be created by health check alert
+    log.error(`Failed to reach market-initializer: ${errMsg}`);
+    // Non-fatal — settlement was successful, markets can be created by health check
   }
 }
 

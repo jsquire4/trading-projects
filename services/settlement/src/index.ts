@@ -123,7 +123,7 @@ async function doubleConfirmPrices(
   // First poll
   const firstQuotes = await marketData.getQuotes([...remaining]);
   for (const q of firstQuotes) {
-    const price = q.prevclose ?? q.last;
+    const price = q.last > 0 ? q.last : (q.prevclose ?? 0);
     if (price > 0) {
       previousPrices.set(q.symbol, price);
     }
@@ -158,7 +158,7 @@ async function doubleConfirmPrices(
     }
     const currentPrices = new Map<string, number>();
     for (const q of quotes) {
-      const price = q.prevclose ?? q.last;
+      const price = q.last > 0 ? q.last : (q.prevclose ?? 0);
       if (price > 0) {
         currentPrices.set(q.symbol, price);
       }
@@ -574,8 +574,8 @@ async function runSettlementCycle(
   await updateOracleFeeds(oracleProgram, adminKeypair, priceResult.confirmed);
 
   // ---- Phase 4: Settle expired markets ----
-  // Re-use markets loaded in pre-check if available, otherwise load fresh
-  const allMarkets = allMarketsPreCheck;
+  // Re-fetch markets fresh — price confirmation may have taken minutes
+  const allMarkets = await loadAllMarkets(meridianProgram);
   const settlementResult = await settleExpiredMarkets(meridianProgram, allMarkets, priceResult.confirmed);
 
   // ---- Phase 4b: Admin-settle timed-out tickers ----
@@ -654,18 +654,11 @@ async function startPollingLoop(): Promise<never> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const meridianProgram = new Program(meridianIdl as any, provider);
 
-  // `settling` guards the polling loop: prevents a second settlement cycle
-  // from starting while one is already running. Scoped to this loop only.
-  // (M-18: there is also a separate `running` flag in the HTTP trigger server —
-  //  that one guards the trigger endpoint independently. Both locks serve distinct
-  //  purposes and are intentionally not shared.)
-  let settling = false;
-
   log.info(`Settlement poller started — checking every ${POLL_INTERVAL_MS / 1000}s`);
 
   while (true) {
     try {
-      if (!settling) {
+      if (!settlementLock) {
         const allMarkets = await loadAllMarkets(meridianProgram);
         const now = Math.floor(Date.now() / 1000);
         const expired = findExpiredUnsettled(allMarkets, now);
@@ -674,7 +667,7 @@ async function startPollingLoop(): Promise<never> {
           const tickers = [...new Set(expired.map((m) => tickerFromBytes(m.account.ticker)))];
           log.info(`Detected ${expired.length} expired unsettled markets for tickers: ${tickers.join(", ")}`);
 
-          settling = true;
+          settlementLock = true;
           try {
             // Pass the pre-built connection and keypair so runSettlementCycle
             // doesn't recreate them on every cycle (avoids redundant WebSocket
@@ -689,7 +682,7 @@ async function startPollingLoop(): Promise<never> {
               stack: err instanceof Error ? err.stack : undefined,
             });
           } finally {
-            settling = false;
+            settlementLock = false;
           }
         }
       }
@@ -701,6 +694,13 @@ async function startPollingLoop(): Promise<never> {
     await sleep(POLL_INTERVAL_MS);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Shared settlement lock — prevents concurrent settlement cycles from
+// both the polling loop and HTTP trigger server
+// ---------------------------------------------------------------------------
+
+let settlementLock = false;
 
 // ---------------------------------------------------------------------------
 // Market state override — allows admin to force market phase for testing
@@ -742,12 +742,6 @@ function setMarketStateWithTimer(phase: MarketPhase): void {
 
 function startTriggerServer(): void {
   const port = parseInt(process.env.TRIGGER_PORT ?? "4002", 10);
-  // `running` guards the HTTP trigger endpoint: prevents concurrent settlement
-  // cycles triggered via POST /trigger. Intentionally separate from the polling
-  // loop's `settling` flag — the two code paths are independent and may both be
-  // active at once (e.g. a manual trigger during an autonomous poll cycle).
-  // (M-18: see also `settling` in startPollingLoop for the other lock.)
-  let running = false;
 
   const triggerToken = process.env.SETTLEMENT_TRIGGER_TOKEN ?? null;
 
@@ -825,13 +819,13 @@ function startTriggerServer(): void {
       }
     }
 
-    if (running) {
+    if (settlementLock) {
       res.writeHead(409, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Settlement cycle already in progress" }));
       return;
     }
 
-    running = true;
+    settlementLock = true;
     try {
       const result = await runSettlementCycle();
       const status = result.ok ? 200 : 500;
@@ -843,7 +837,7 @@ function startTriggerServer(): void {
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: false, error: msg }));
     } finally {
-      running = false;
+      settlementLock = false;
     }
   });
 

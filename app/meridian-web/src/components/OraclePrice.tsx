@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { findPriceFeed } from "@/lib/pda";
+import { useGlobalConfig } from "@/hooks/useGlobalConfig";
 
 interface PriceFeedData {
   ticker: string;
@@ -89,9 +90,11 @@ export function OraclePrice({ ticker }: OraclePriceProps) {
     };
   }, [connection, ticker, handleAccountChange]);
 
+  const { data: globalConfig } = useGlobalConfig();
+  const stalenessThreshold = globalConfig ? Number(globalConfig.stalenessThreshold) : 600;
   const priceDollars = feed ? (feed.price / 1_000_000).toFixed(2) : "--";
   const oracleAgeSecs = feed ? (Date.now() / 1000 - feed.timestamp) : 0;
-  const isStale = feed ? oracleAgeSecs > 600 : false;
+  const isStale = feed ? oracleAgeSecs > stalenessThreshold : false;
 
   // Determine market session from current ET time, not oracle age
   const marketSession = (() => {

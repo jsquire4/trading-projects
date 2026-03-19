@@ -247,6 +247,7 @@ export class Scheduler {
       const response = await fetch(`${settlementUrl}/trigger`, {
         method: "POST",
         headers,
+        signal: AbortSignal.timeout(10 * 60 * 1000), // 10 min timeout
       });
 
       const body = await response.text();

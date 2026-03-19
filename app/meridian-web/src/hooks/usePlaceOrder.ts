@@ -309,31 +309,16 @@ export function usePlaceOrder(): UsePlaceOrderReturn {
           .instruction();
         instructions.push(sellYesIx);
 
-        // For market orders, add pair-burn cleanup
-        if (orderType === "market") {
-          const redeemIx = await program.methods
-            .redeem(0, new BN(quantityLamports))
-            .accountsPartial({
-              user,
-              config,
-              market: marketPubkey,
-              yesMint,
-              noMint,
-              usdcVault,
-              userUsdcAta,
-              userYesAta,
-              userNoAta,
-              tokenProgram: TOKEN_PROGRAM_ID,
-            })
-            .instruction();
-          instructions.push(redeemIx);
-        }
+        // Note: Any unfilled Yes tokens from the sell_yes leg remain in the
+        // user's wallet and can be burned via the RedeemPanel pair-burn (mode=0).
+        // Previously this included an atomic pair-burn, but that fails on partial
+        // fills when the sell_yes leg only partially executes.
 
         const tx = await buildVersionedTx(connection, user, instructions, alt);
         const signature = await sendTransaction(tx, { description: "Buy No (Atomic)" });
         if (signature) {
           queryClient.invalidateQueries({ queryKey: ["positions"] });
-          queryClient.invalidateQueries({ queryKey: ["order-book", marketKey] });
+          queryClient.invalidateQueries({ queryKey: ["orderbook"] });
           queryClient.invalidateQueries({ queryKey: ["cost-basis"] });
         }
         return signature;
@@ -385,7 +370,7 @@ export function usePlaceOrder(): UsePlaceOrderReturn {
       });
       if (signature) {
         queryClient.invalidateQueries({ queryKey: ["positions"] });
-        queryClient.invalidateQueries({ queryKey: ["order-book", marketKey] });
+        queryClient.invalidateQueries({ queryKey: ["orderbook"] });
         queryClient.invalidateQueries({ queryKey: ["cost-basis"] });
       }
       return signature;

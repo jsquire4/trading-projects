@@ -24,23 +24,27 @@ const _readOnlyKeypair = Keypair.generate();
 
 const MIN_ADMIN_SOL = 0.1;
 const ORACLE_STALE_THRESHOLD_S = 10 * 60; // 10 minutes
-const CLOSE_ELIGIBILITY_DAYS = 90;
-const CLOSE_ELIGIBILITY_S = CLOSE_ELIGIBILITY_DAYS * 24 * 60 * 60;
 
 /** Check if current time is within US market hours (M-F 9:30-16:00 ET). */
 function isDuringMarketHours(): boolean {
   const now = new Date();
-  // Convert to ET
-  const et = new Date(
-    now.toLocaleString("en-US", { timeZone: "America/New_York" }),
-  );
-  const day = et.getDay(); // 0=Sun, 6=Sat
+  // Use Intl.DateTimeFormat.formatToParts for spec-safe timezone parsing
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+  const get = (t: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === t)?.value ?? "0";
+  const weekdayMap: Record<string, number> = {
+    Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
+  };
+  const day = weekdayMap[get("weekday")] ?? 0;
   if (day === 0 || day === 6) return false;
 
-  const hours = et.getHours();
-  const minutes = et.getMinutes();
-  const totalMinutes = hours * 60 + minutes;
-
+  const totalMinutes = parseInt(get("hour"), 10) * 60 + parseInt(get("minute"), 10);
   // 9:30 = 570 min, 16:00 = 960 min
   return totalMinutes >= 570 && totalMinutes <= 960;
 }
@@ -153,23 +157,22 @@ export async function runChecks(): Promise<void> {
   }
 
   // ------------------------------------------------------------------
-  // Check 4: Closeable markets (settled + 90 days)
+  // Check 4: Closeable markets (override deadline passed — matches closer.ts)
   // ------------------------------------------------------------------
   const closeable = allMarkets.filter((m) => {
     const isSettled = m.account.isSettled as boolean;
-    // isClosed was removed — use settledAt > 0 as proxy for "settled but not yet closed"
-    const settledAt = (m.account.settledAt as BN | undefined)?.toNumber?.() ?? 0;
-    return isSettled && settledAt > 0 && (settledAt + CLOSE_ELIGIBILITY_S) < now;
+    const overrideDeadline = (m.account.overrideDeadline as BN | undefined)?.toNumber?.() ?? 0;
+    return isSettled && overrideDeadline > 0 && overrideDeadline < now;
   });
 
   if (closeable.length > 0) {
     for (const m of closeable) {
       const ticker = tickerFromBytes(m.account.ticker as number[]);
-      const settledAt = (m.account.settledAt as BN | undefined)?.toNumber?.() ?? 0;
-      const daysSinceSettlement = Math.floor((now - settledAt) / 86400);
-      log.info(`Market eligible for close: ${ticker} (settled ${daysSinceSettlement} days ago)`, {
+      const overrideDeadline = (m.account.overrideDeadline as BN | undefined)?.toNumber?.() ?? 0;
+      const secsSinceDeadline = now - overrideDeadline;
+      log.info(`Market eligible for close: ${ticker} (override deadline passed ${secsSinceDeadline}s ago)`, {
         market: m.publicKey.toBase58(),
-        settledAt,
+        overrideDeadline,
       });
     }
   } else {

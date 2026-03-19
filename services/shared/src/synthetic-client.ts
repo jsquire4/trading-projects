@@ -117,13 +117,22 @@ export class SyntheticClient implements IMarketDataClient {
 
   async getMarketClock(): Promise<MarketClock> {
     const now = new Date();
-    const et = new Date(
-      now.toLocaleString("en-US", { timeZone: "America/New_York" }),
-    );
-    const day = et.getDay(); // 0=Sun, 6=Sat
-    const hours = et.getHours();
-    const minutes = et.getMinutes();
-    const totalMinutes = hours * 60 + minutes;
+    // Use Intl.DateTimeFormat.formatToParts for spec-safe timezone parsing
+    // (avoids implementation-defined new Date(toLocaleString()) pattern)
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(now);
+    const get = (t: Intl.DateTimeFormatPartTypes) =>
+      parts.find((p) => p.type === t)?.value ?? "0";
+    const weekdayMap: Record<string, number> = {
+      Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
+    };
+    const day = weekdayMap[get("weekday")] ?? 0;
+    const totalMinutes = parseInt(get("hour"), 10) * 60 + parseInt(get("minute"), 10);
 
     let state: string;
     let description: string;

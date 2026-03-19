@@ -154,7 +154,7 @@ export async function startFeeder(
     if (circuitBreakerTripped) return;
 
     log.critical(`Tripping circuit breaker: ${reason}`);
-    circuitBreakerTripped = true;
+    // Don't set flag yet — wait for RPC confirmation
 
     const [configPda] = findGlobalConfig();
 
@@ -167,13 +167,16 @@ export async function startFeeder(
         })
         .rpc();
 
+      circuitBreakerTripped = true;
       log.critical("Circuit breaker activated — platform paused", { reason });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // AlreadyPaused (6023) is fine — someone else paused it
       if (msg.includes("AlreadyPaused") || msg.includes("6023")) {
+        circuitBreakerTripped = true;
         log.info("Platform already paused — circuit breaker is a no-op");
       } else {
+        // Flag NOT set — will retry on next state check interval
         log.critical(`Failed to trip circuit breaker: ${msg}`, { reason });
       }
     }

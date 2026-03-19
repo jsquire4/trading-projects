@@ -186,6 +186,13 @@ export async function runBackfill(
       totalEvents,
       failedCount: failedSigs.length,
     });
+
+    // Incremental checkpoint: persist progress after each batch so a crash
+    // doesn't restart from scratch. newestSignature is the most-recent tx
+    // seen (set on the first batch), which is where we'd resume from.
+    if (newestSignature) {
+      upsertCheckpoint(newestSignature.signature, newestSignature.slot);
+    }
   }
 
   // Retry failed signatures once before checkpointing

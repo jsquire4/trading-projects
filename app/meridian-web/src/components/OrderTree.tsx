@@ -78,8 +78,8 @@ function buildRows(orderBookData: OrderBookData | null | undefined): TreeRow[] {
       row.yesQty += qty;
       row.yesOrders += 1;
     } else if (order.side === Side.UsdcBid) {
-      row.noQty += qty;
-      row.noOrders += 1;
+      row.yesQty += qty;       // Buy-Yes orders: USDC bids belong in Yes column
+      row.yesOrders += 1;
     } else if (order.side === Side.NoBackedBid) {
       row.noQty += qty;
       row.noOrders += 1;

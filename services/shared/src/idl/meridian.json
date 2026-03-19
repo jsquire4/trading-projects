@@ -127,6 +127,7 @@
         },
         {
           "name": "config",
+          "writable": true,
           "relations": [
             "market"
           ]
@@ -166,6 +167,7 @@
         },
         {
           "name": "config",
+          "writable": true,
           "relations": [
             "market"
           ]
@@ -1735,6 +1737,7 @@
         },
         {
           "name": "config",
+          "writable": true,
           "relations": [
             "market"
           ]

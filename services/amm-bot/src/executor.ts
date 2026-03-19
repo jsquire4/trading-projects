@@ -12,6 +12,7 @@ import {
   TOKEN_PROGRAM_ID,
   getAssociatedTokenAddress,
 } from "@solana/spl-token";
+import { parseOrderBook } from "../../shared/src/order-book.js";
 import {
   findGlobalConfig,
   findOrderBook,
@@ -115,7 +116,6 @@ export async function cancelBotOrders(
     return 0;
   }
 
-  const { parseOrderBook } = await import("../../shared/src/order-book.js");
   const activeOrders = parseOrderBook(Buffer.from(obAccountInfo.data));
 
   const accounts = await deriveOrderAccounts(

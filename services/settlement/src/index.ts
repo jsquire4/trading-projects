@@ -632,6 +632,13 @@ async function runSettlementCycle(
 }
 
 // ---------------------------------------------------------------------------
+// Shared settlement lock — prevents concurrent settlement cycles from
+// both the polling loop and HTTP trigger server
+// ---------------------------------------------------------------------------
+
+let settlementLock = false;
+
+// ---------------------------------------------------------------------------
 // Reactive polling loop
 // ---------------------------------------------------------------------------
 
@@ -694,13 +701,6 @@ async function startPollingLoop(): Promise<never> {
     await sleep(POLL_INTERVAL_MS);
   }
 }
-
-// ---------------------------------------------------------------------------
-// Shared settlement lock — prevents concurrent settlement cycles from
-// both the polling loop and HTTP trigger server
-// ---------------------------------------------------------------------------
-
-let settlementLock = false;
 
 // ---------------------------------------------------------------------------
 // Market state override — allows admin to force market phase for testing
@@ -776,6 +776,10 @@ function startTriggerServer(): void {
       if (req.method === "POST") {
         let body = "";
         req.on("data", (chunk) => { body += chunk; });
+        req.on("error", () => {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Request body stream error" }));
+        });
         req.on("end", () => {
           try {
             const { state } = JSON.parse(body);

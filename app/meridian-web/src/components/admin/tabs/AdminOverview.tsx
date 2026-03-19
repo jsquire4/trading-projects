@@ -171,11 +171,16 @@ function AdminSettlePanel({ markets }: { markets: ParsedMarket[] }) {
       setSettleAllProgress("Triggering backend settlement...");
       try {
         // Set market clock to postmarket so settlement proceeds
-        await fetch("/api/market-state", {
+        const clockRes = await fetch("/api/market-state", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ state: "postmarket" }),
         });
+        if (!clockRes.ok) {
+          setSettleAllProgress("Failed to set market clock — settlement service may be unreachable");
+          setTimeout(() => setSettleAllProgress(null), 5000);
+          return;
+        }
 
         // Also fire the trigger endpoint for immediate execution
         const SETTLEMENT_URL =

@@ -60,7 +60,7 @@ pub fn handle_update_config(
     }
 
     if let Some(v) = override_window_secs {
-        require!(v >= 1 && v <= 3600, MeridianError::ArithmeticOverflow); // 1s to 1h
+        require!(v >= 1 && v <= 3600, MeridianError::InvalidOverrideWindow);
         config.override_window_secs = v;
     }
 

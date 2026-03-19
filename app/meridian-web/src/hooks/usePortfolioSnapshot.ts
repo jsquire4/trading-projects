@@ -260,14 +260,16 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
     }
   }
 
-  // Adjust the last day (today) to include unrealized mark-to-market value
+  // Adjust the last day (today) to include unrealized P&L (mark-to-market
+  // value minus cost basis). Using todayPnl which is liveValue - totalCostFromApi.
+  const unrealizedPnl = apiPositions.length > 0 ? liveValue - totalCostFromApi : 0;
   const adjustedDailySummaries = useMemo(() => {
-    if (dailySummaries.length === 0 || liveValue === 0) return dailySummaries;
+    if (dailySummaries.length === 0) return dailySummaries;
     const result = [...dailySummaries];
     const last = result[result.length - 1];
-    result[result.length - 1] = { ...last, pnl: last.pnl + liveValue };
+    result[result.length - 1] = { ...last, pnl: last.pnl + unrealizedPnl };
     return result;
-  }, [dailySummaries, liveValue]);
+  }, [dailySummaries, unrealizedPnl]);
 
   return {
     intradayData,

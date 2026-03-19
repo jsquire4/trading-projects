@@ -167,10 +167,11 @@ fn handle_pair_burn(ctx: Context<Redeem>, quantity: u64) -> Result<()> {
         .ok_or(MeridianError::ArithmeticOverflow)?;
 
     // Pair burn removes one Yes + one No token from circulation.
-    // If the market is settled, this reduces the outstanding obligations
-    // (which were set to total_minted - total_redeemed at settlement time).
-    // Without this, obligations would be permanently inflated after pair burns,
-    // locking treasury USDC that is no longer owed to anyone.
+    // For settled markets, this reduces outstanding obligations (which were
+    // set to total_minted - total_redeemed at settlement time). For unsettled
+    // markets, obligations is 0 and saturating_sub is a no-op — correct
+    // because settlement will compute a smaller outstanding value since
+    // total_redeemed was already incremented above.
     let config = &mut ctx.accounts.config;
     config.obligations = config.obligations.saturating_sub(quantity);
 

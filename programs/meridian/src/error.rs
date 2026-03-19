@@ -218,4 +218,7 @@ pub enum MeridianError {
     // 174 reserved (max slots cap removed)
     #[msg("Order book already initialized")]
     OrderBookAlreadyInitialized = 175,
+
+    #[msg("Override window must be 1-3600 seconds")]
+    InvalidOverrideWindow = 176,
 }

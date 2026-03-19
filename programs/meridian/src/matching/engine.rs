@@ -201,7 +201,11 @@ fn match_at_level_both_sides(
             if cnt > 0 {
                 set_level_count(data, loff, cnt - 1);
             }
-            // Free level if fully drained by matching
+            // Free level if fully drained by matching.
+            // SAFETY: free_level zeros LVL_SLOT_COUNT, which causes the outer
+            // loop to find no more active slots and break. The pre-captured
+            // slot_cnt local is stale after this call, but all remaining slots
+            // were already deactivated, so the inner scan exits cleanly.
             if level_count(data, loff) == 0 {
                 free_level(data, loff);
             }
@@ -270,7 +274,7 @@ fn match_at_level_for_side(
             if cnt > 0 {
                 set_level_count(data, loff, cnt - 1);
             }
-            // Free level if fully drained by matching
+            // Free level if fully drained by matching (see SAFETY note above).
             if level_count(data, loff) == 0 {
                 free_level(data, loff);
             }

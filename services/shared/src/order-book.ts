@@ -33,6 +33,10 @@ const UNALLOCATED = 0xffff;
  * level begins. A value of 0xFFFF means unallocated.
  */
 export function parseOrderBook(data: Buffer): ParsedOrder[] {
+  // Minimum valid size: header must contain price_map (48 + 99*2 = 246 bytes)
+  const MIN_BUFFER_SIZE = PRICE_MAP_OFFSET + PRICE_MAP_LEN * 2;
+  if (data.length < MIN_BUFFER_SIZE) return [];
+
   const orders: ParsedOrder[] = [];
 
   for (let priceIdx = 0; priceIdx < PRICE_MAP_LEN; priceIdx++) {

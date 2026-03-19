@@ -2661,6 +2661,11 @@
       "code": 6175,
       "name": "OrderBookAlreadyInitialized",
       "msg": "Order book already initialized"
+    },
+    {
+      "code": 6176,
+      "name": "InvalidOverrideWindow",
+      "msg": "Override window must be 1-3600 seconds"
     }
   ],
   "types": [

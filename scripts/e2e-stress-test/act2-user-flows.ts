@@ -775,11 +775,22 @@ async function test11(ctx: SharedContext, m: MarketContext): Promise<TestResult>
 // ── T12: Circuit breaker halts trading ───────────────────────────────────────
 
 async function test12(ctx: SharedContext, m: MarketContext): Promise<TestResult> {
-  // Ensure platform is unpaused before testing circuit breaker
+  // Ensure platform is unpaused before testing circuit breaker.
+  // The admin may have been transferred in T9 — re-read config to get current admin.
+  // Also, the platform may be in an unexpected pause state from prior tests.
   try {
     const unpIx = buildUnpauseIx({ admin: ctx.admin.publicKey, config: ctx.configPda });
     await sendTx(ctx.connection, new Transaction().add(unpIx), [ctx.admin]);
-  } catch { /* may already be unpaused — NotPaused error is fine */ }
+  } catch (e: any) {
+    // NotPaused (6024) is fine — platform was already unpaused
+    // Unauthorized means admin was transferred — skip test
+    if (e.message?.includes("Unauthorized") || e.message?.includes("2012")) {
+      return { passed: false, detail: "Admin role may have been transferred — circuit breaker test cannot run" };
+    }
+  }
+
+  // Small delay to ensure unpause is confirmed before placing orders
+  await sleep(500);
 
   // Place a resting order first
   const agent = await freshAgent(ctx);
@@ -791,11 +802,24 @@ async function test12(ctx: SharedContext, m: MarketContext): Promise<TestResult>
   await sendTx(ctx.connection, new Transaction().add(bidIx), [agent]);
 
   // Fire circuit breaker (global pause only)
-  const cbIx = buildCircuitBreakerIx({
-    admin: ctx.admin.publicKey,
-    config: ctx.configPda,
-  });
-  await sendTx(ctx.connection, new Transaction().add(cbIx), [ctx.admin]);
+  // If somehow already paused, unpause first
+  try {
+    const cbIx = buildCircuitBreakerIx({
+      admin: ctx.admin.publicKey,
+      config: ctx.configPda,
+    });
+    await sendTx(ctx.connection, new Transaction().add(cbIx), [ctx.admin]);
+  } catch (e: any) {
+    if (e.message?.includes("AlreadyPaused") || e.message?.includes("0x1789")) {
+      // Platform was already paused — unpause, then re-pause via circuit breaker
+      const unpIx2 = buildUnpauseIx({ admin: ctx.admin.publicKey, config: ctx.configPda });
+      await sendTx(ctx.connection, new Transaction().add(unpIx2), [ctx.admin]);
+      const cbRetry = buildCircuitBreakerIx({ admin: ctx.admin.publicKey, config: ctx.configPda });
+      await sendTx(ctx.connection, new Transaction().add(cbRetry), [ctx.admin]);
+    } else {
+      throw e;
+    }
+  }
 
   // Verify orders are still on the book (circuit breaker doesn't deactivate orders)
   const orders = await readBook(ctx, m);

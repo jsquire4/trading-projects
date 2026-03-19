@@ -131,7 +131,8 @@ pub fn handle_initialize_config(
     config.operating_reserve = 0;
     config.obligations = 0;
     config.settlement_blackout_minutes = 0;
-    config._padding2 = [0; 6];
+    config.override_window_secs = 1; // default: 1 second (instant finality)
+    config._padding2 = [0; 4];
     config.sol_treasury = expected_sol_treasury;
     config.slot_rent_markup = 0;
 

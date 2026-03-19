@@ -9,7 +9,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import * as fs from "fs";
 import * as os from "os";
 
-const RPC = "https://api.devnet.solana.com";
+const RPC = process.env.RPC_URL ?? "https://api.devnet.solana.com";
 const MERIDIAN = new PublicKey("G5zZw1GMzqwjfbRMjTi2qUXDwoUwLw83hjEuwLfVCZvy");
 const MOCK_ORACLE = new PublicKey("Az6BVaQwfoSqDyyn3TyvgfavoVKN4Qm8wLbMWm5EceFC");
 

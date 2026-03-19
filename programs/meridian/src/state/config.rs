@@ -41,8 +41,10 @@ pub struct GlobalConfig {
     pub obligations: u64,
     /// Settlement blackout window in minutes (0 = no blackout)
     pub settlement_blackout_minutes: u16,
+    /// Override window in seconds (default 1). Admin-configurable via update_config.
+    pub override_window_secs: u16,
     /// Padding for 8-byte alignment
-    pub _padding2: [u8; 6],
+    pub _padding2: [u8; 4],
     /// SOL Treasury PDA pubkey
     pub sol_treasury: Pubkey,
     /// Configurable SOL markup per order slot (covers lifecycle tx fees)
@@ -70,8 +72,10 @@ impl GlobalConfig {
         ADMIN_SETTLE_DELAY_SECS
     }
 
-    /// Override window: 1 second for all oracle types.
+    /// Override window in seconds. Defaults to 1 if field is 0 (for accounts
+    /// created before this field was added — their padding bytes are zeroed).
     pub fn override_window(&self) -> i64 {
-        OVERRIDE_WINDOW_SECS
+        let v = self.override_window_secs;
+        if v == 0 { OVERRIDE_WINDOW_SECS } else { v as i64 }
     }
 }

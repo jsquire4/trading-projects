@@ -24,6 +24,7 @@ pub fn handle_update_config(
     operating_reserve: Option<u64>,
     settlement_blackout_minutes: Option<u16>,
     slot_rent_markup: Option<u64>,
+    override_window_secs: Option<u16>,
 ) -> Result<()> {
     let config = &mut ctx.accounts.config;
 
@@ -56,6 +57,11 @@ pub fn handle_update_config(
         // instruction. Reserved for future use: intended to cover per-order
         // lifecycle transaction fees charged at order placement.
         config.slot_rent_markup = v;
+    }
+
+    if let Some(v) = override_window_secs {
+        require!(v >= 1 && v <= 3600, MeridianError::ArithmeticOverflow); // 1s to 1h
+        config.override_window_secs = v;
     }
 
     msg!("Config updated by admin={}", ctx.accounts.admin.key());

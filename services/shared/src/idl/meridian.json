@@ -1876,6 +1876,12 @@
           "type": {
             "option": "u64"
           }
+        },
+        {
+          "name": "override_window_secs",
+          "type": {
+            "option": "u16"
+          }
         }
       ]
     },
@@ -2925,6 +2931,13 @@
             "type": "u16"
           },
           {
+            "name": "override_window_secs",
+            "docs": [
+              "Override window in seconds (default 1). Admin-configurable via update_config."
+            ],
+            "type": "u16"
+          },
+          {
             "name": "_padding2",
             "docs": [
               "Padding for 8-byte alignment"
@@ -2932,7 +2945,7 @@
             "type": {
               "array": [
                 "u8",
-                6
+                4
               ]
             }
           },

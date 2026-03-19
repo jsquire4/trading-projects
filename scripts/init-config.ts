@@ -24,7 +24,13 @@ import * as fs from "fs";
 import * as path from "path";
 import BN from "bn.js";
 
-import { MERIDIAN_PROGRAM_ID, MOCK_ORACLE_PROGRAM_ID } from "./shared";
+import {
+  MERIDIAN_PROGRAM_ID,
+  MOCK_ORACLE_PROGRAM_ID,
+  loadKeypair,
+  readEnv,
+  anchorDiscriminator,
+} from "./shared";
 
 const RPC_URL = process.env.RPC_URL ?? "http://127.0.0.1:8899";
 const ENV_PATH = path.resolve(__dirname, "..", ".env");
@@ -35,38 +41,11 @@ const ADMIN_KEYPAIR_PATH = path.resolve(
 
 const MAG7_TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"];
 
-function loadKeypair(filePath: string): Keypair {
-  const raw = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-  return Keypair.fromSecretKey(Uint8Array.from(raw));
-}
-
-function readEnv(): Record<string, string> {
-  if (!fs.existsSync(ENV_PATH)) return {};
-  const lines = fs.readFileSync(ENV_PATH, "utf-8").split("\n");
-  const env: Record<string, string> = {};
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eqIdx = trimmed.indexOf("=");
-    if (eqIdx === -1) continue;
-    env[trimmed.slice(0, eqIdx)] = trimmed.slice(eqIdx + 1);
-  }
-  return env;
-}
-
 /** Pad a ticker string to exactly 8 bytes (zero-padded). */
 function tickerBytes(ticker: string): Buffer {
   const buf = Buffer.alloc(8, 0);
   buf.write(ticker, "utf-8");
   return buf;
-}
-
-/** Compute Anchor instruction discriminator: first 8 bytes of SHA256("global:<instruction_name>"). */
-function anchorDiscriminator(instructionName: string): Buffer {
-  const hash = createHash("sha256")
-    .update(`global:${instructionName}`)
-    .digest();
-  return hash.subarray(0, 8);
 }
 
 (async () => {
@@ -75,7 +54,7 @@ function anchorDiscriminator(instructionName: string): Buffer {
   console.log(`Admin: ${admin.publicKey.toBase58()}`);
 
   // ── Read USDC_MINT from .env ───────────────────────────────────────────────
-  const env = readEnv();
+  const env = readEnv(ENV_PATH);
   if (!env["USDC_MINT"]) {
     console.error("ERROR: USDC_MINT not found in .env. Run create-mock-usdc.ts first.");
     process.exit(1);

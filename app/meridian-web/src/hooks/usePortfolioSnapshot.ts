@@ -107,10 +107,14 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
           closeValue: 0,
           highValue: 0,
           lowValue: 0,
-          pnl: -d.netCostBasis / (1_000_000 * 100), // negate: spending = negative P&L
+          pnl: -d.netCostBasis / (1_000_000 * 100), // realized cash-flow P&L
           positionCount: d.fillCount,
         }));
 
+        // Mark-to-market adjustment: the last day (today) gets unrealized P&L
+        // added from liveValue, which is computed from on-chain positions + mid
+        // prices. This is deferred to a useMemo below since liveValue depends
+        // on positions which load asynchronously.
         setDailySummaries(mappedSummaries);
         setUnavailable(false);
         setIsReady(true);
@@ -256,9 +260,18 @@ export function usePortfolioSnapshot(midPrices?: Map<string, number>) {
     }
   }
 
+  // Adjust the last day (today) to include unrealized mark-to-market value
+  const adjustedDailySummaries = useMemo(() => {
+    if (dailySummaries.length === 0 || liveValue === 0) return dailySummaries;
+    const result = [...dailySummaries];
+    const last = result[result.length - 1];
+    result[result.length - 1] = { ...last, pnl: last.pnl + liveValue };
+    return result;
+  }, [dailySummaries, liveValue]);
+
   return {
     intradayData,
-    dailySummaries,
+    dailySummaries: adjustedDailySummaries,
     todayPnl,
     currentValue,
     topPerformer,

@@ -107,8 +107,16 @@ export async function cancelBotOrders(
   const { marketPubkey, usdcMint } = marketAccounts;
   const [orderBookPda] = findOrderBook(marketPubkey);
 
-  // Fetch raw order book data
-  const obAccount = await program.account.orderBook.fetch(orderBookPda);
+  // Fetch raw order book bytes and parse with binary parser
+  // (Anchor's auto-deserialization doesn't handle the sparse layout correctly)
+  const obAccountInfo = await program.provider.connection.getAccountInfo(orderBookPda);
+  if (!obAccountInfo) {
+    log.warn(`Order book account not found for ${marketPubkey.toBase58()}`);
+    return 0;
+  }
+
+  const { parseOrderBook } = await import("../../shared/src/order-book.js");
+  const activeOrders = parseOrderBook(Buffer.from(obAccountInfo.data));
 
   const accounts = await deriveOrderAccounts(
     marketPubkey,
@@ -119,58 +127,37 @@ export async function cancelBotOrders(
   let cancelled = 0;
 
   // NOTE (M-16): Each cancel_order call below is a separate RPC transaction.
-  // For high-frequency or high-order-count scenarios this is a known performance
-  // bottleneck. Future improvement: batch multiple cancel_order instructions into
-  // a single versioned transaction using Address Lookup Tables.
+  // Future improvement: batch into versioned transactions with ALTs.
 
-  // Iterate price levels from the deserialized order book.
-  // NOTE: With the sparse order book layout, Anchor's auto-deserialization may
-  // return a truncated or empty `levels` array. The AMM bot relies on
-  // `create-test-markets.ts` for initial liquidity seeding; this cancel loop
-  // is best-effort and will gracefully skip if the layout doesn't match.
-  const levelCount = Array.isArray(obAccount.levels) ? (obAccount.levels as any[]).length : 99;
-  for (let levelIdx = 0; levelIdx < levelCount; levelIdx++) {
-    const level = (obAccount.levels as any)[levelIdx];
-    if (!level || level.count === 0) continue;
+  for (const order of activeOrders) {
+    if (!order.owner.equals(admin.publicKey)) continue;
 
-    const orders = level.orders as any[];
-    for (const order of orders) {
-      // Check: active order owned by admin
-      if (
-        Number(order.isActive) === 1 &&
-        order.owner.equals(admin.publicKey)
-      ) {
-        const price = levelIdx + 1; // price levels are 1-indexed
-        const orderId = order.orderId;
+    try {
+      await program.methods
+        .cancelOrder(order.priceLevel, new BN(order.orderId.toString()))
+        .accounts({
+          user: admin.publicKey,
+          config: accounts.config,
+          market: marketPubkey,
+          orderBook: accounts.orderBook,
+          escrowVault: accounts.escrowVault,
+          yesEscrow: accounts.yesEscrow,
+          noEscrow: accounts.noEscrow,
+          userUsdcAta: accounts.userUsdcAta,
+          userYesAta: accounts.userYesAta,
+          userNoAta: accounts.userNoAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([admin])
+        .rpc();
 
-        try {
-          await program.methods
-            .cancelOrder(price, new BN(orderId.toString()))
-            .accounts({
-              user: admin.publicKey,
-              config: accounts.config,
-              market: marketPubkey,
-              orderBook: accounts.orderBook,
-              escrowVault: accounts.escrowVault,
-              yesEscrow: accounts.yesEscrow,
-              noEscrow: accounts.noEscrow,
-              userUsdcAta: accounts.userUsdcAta,
-              userYesAta: accounts.userYesAta,
-              userNoAta: accounts.userNoAta,
-              tokenProgram: TOKEN_PROGRAM_ID,
-            })
-            .signers([admin])
-            .rpc();
-
-          cancelled++;
-          log.info(`Cancelled order ${orderId} at price ${price}`);
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.warn(`Failed to cancel order ${orderId} at price ${price}`, {
-            error: msg,
-          });
-        }
-      }
+      cancelled++;
+      log.info(`Cancelled order ${order.orderId} at price ${order.priceLevel}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`Failed to cancel order ${order.orderId} at price ${order.priceLevel}`, {
+        error: msg,
+      });
     }
   }
 

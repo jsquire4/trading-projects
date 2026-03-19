@@ -1067,6 +1067,7 @@ export interface UpdateConfigParams {
   operatingReserve?: BN | null;
   settlementBlackoutMinutes?: number | null;
   slotRentMarkup?: BN | null;
+  overrideWindowSecs?: number | null;
 }
 
 /** Encode Anchor Option<u64>: 0x00 = None, 0x01 + le_bytes = Some */
@@ -1096,6 +1097,7 @@ export function buildUpdateConfigIx(
     optU64(params.operatingReserve),
     optU16(params.settlementBlackoutMinutes),
     optU64(params.slotRentMarkup),
+    optU16(params.overrideWindowSecs),
   ]);
 
   const keys = [

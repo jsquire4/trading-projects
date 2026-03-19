@@ -203,7 +203,7 @@ export function parseOrderBook(data: Buffer): ParsedOrder[] {
     const byteOffset = data.readUInt16LE(PRICE_MAP_OFFSET + priceIdx * 2);
     if (byteOffset === UNALLOCATED) continue;
 
-    const levelOffset = HEADER_SIZE + byteOffset;
+    const levelOffset = byteOffset; // price_map stores absolute byte offsets
     if (levelOffset + LEVEL_HEADER_SIZE > data.length) continue;
 
     const activeCount = data[levelOffset + 1];

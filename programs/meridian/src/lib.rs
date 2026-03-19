@@ -199,6 +199,7 @@ pub mod meridian {
         operating_reserve: Option<u64>,
         settlement_blackout_minutes: Option<u16>,
         slot_rent_markup: Option<u64>,
+        override_window_secs: Option<u16>,
     ) -> Result<()> {
         instructions::update_config::handle_update_config(
             ctx,
@@ -208,6 +209,7 @@ pub mod meridian {
             operating_reserve,
             settlement_blackout_minutes,
             slot_rent_markup,
+            override_window_secs,
         )
     }
 

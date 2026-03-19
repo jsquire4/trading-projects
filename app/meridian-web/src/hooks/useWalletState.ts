@@ -62,7 +62,7 @@ export const WALLET_REFRESH_EVENT = "wallet-balance-refresh";
  * real-time balance updates. Falls back to polling if WebSocket fails
  * 3 consecutive times with exponential backoff (1s -> 2s -> 4s -> 8s -> cap 30s).
  */
-export function useWalletState(): UseWalletStateReturn {
+export function useWalletState(knownMeridianMints?: Set<string>): UseWalletStateReturn {
   const { connection } = useConnection();
   const { publicKey, connected } = useWallet();
 
@@ -103,12 +103,11 @@ export function useWalletState(): UseWalletStateReturn {
         if (mint.equals(USDC_MINT)) {
           usdc = Number(amount) / 1e6;
         } else if (amount > BigInt(0)) {
-          // NOTE (M-13): This counts ALL non-USDC token accounts with a balance,
-          // not just Meridian Yes/No tokens. A more precise check would filter to
-          // only mints that match a known market's yesMint or noMint. For now this
-          // is a reasonable proxy — false positives (unrelated tokens) are unlikely
-          // in the test/devnet environment this targets.
-          nonUsdcTokensWithBalance++;
+          // Only count Meridian Yes/No tokens if knownMeridianMints is provided.
+          // Falls back to counting all non-USDC tokens if mints aren't loaded yet.
+          if (!knownMeridianMints || knownMeridianMints.has(mint.toBase58())) {
+            nonUsdcTokensWithBalance++;
+          }
         }
       }
 

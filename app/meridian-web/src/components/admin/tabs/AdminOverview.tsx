@@ -157,9 +157,50 @@ function AdminSettlePanel({ markets }: { markets: ParsedMarket[] }) {
   const { data: quotes = [] } = useQuotes(tickers);
   const priceMap = new Map(quotes.map((q) => [q.symbol, q.last]));
 
+  const isSyntheticMode = process.env.NEXT_PUBLIC_MARKET_DATA_SOURCE === "synthetic";
+
   const handleSettleAll = useCallback(async () => {
     if (!program || !publicKey) return;
     setError(null);
+
+    if (isSyntheticMode) {
+      // In synthetic mode, trigger the backend settlement service instead of
+      // wallet-signed transactions. This sets market state to "postmarket"
+      // which causes the settlement poller to settle all expired markets
+      // using the server-side admin keypair — no wallet popups.
+      setSettleAllProgress("Triggering backend settlement...");
+      try {
+        // Set market clock to postmarket so settlement proceeds
+        await fetch("/api/market-state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ state: "postmarket" }),
+        });
+
+        // Also fire the trigger endpoint for immediate execution
+        const SETTLEMENT_URL =
+          process.env.NEXT_PUBLIC_SETTLEMENT_TRIGGER_URL ?? "http://localhost:4002/trigger";
+        const triggerRes = await fetch(SETTLEMENT_URL, { method: "POST" });
+        const triggerData = await triggerRes.json().catch(() => ({}));
+
+        if (triggerRes.ok && triggerData.ok) {
+          const count = triggerData.summary?.settled?.length ?? "all";
+          setSettleAllProgress(`Settlement triggered — ${count} markets settling via backend`);
+        } else if (triggerRes.status === 409) {
+          setSettleAllProgress("Settlement already in progress — backend is handling it");
+        } else {
+          setSettleAllProgress(`Backend settlement returned: ${triggerData.error ?? `HTTP ${triggerRes.status}`}`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Connection failed";
+        setSettleAllProgress(`Failed to reach settlement service: ${msg}`);
+      }
+      queryClient.invalidateQueries({ queryKey: ["markets"] });
+      setTimeout(() => setSettleAllProgress(null), 8000);
+      return;
+    }
+
+    // Live mode: wallet-signed admin_settle per market (fallback)
     setSettleAllProgress(`Settling 0/${unsettledMarkets.length}...`);
 
     let settled = 0;
@@ -195,7 +236,7 @@ function AdminSettlePanel({ markets }: { markets: ParsedMarket[] }) {
     queryClient.invalidateQueries({ queryKey: ["markets"] });
     setSettleAllProgress(`Done: ${settled} settled, ${failed} failed`);
     setTimeout(() => setSettleAllProgress(null), 5000);
-  }, [program, publicKey, unsettledMarkets, priceMap, configPda, sendTransaction, queryClient]);
+  }, [program, publicKey, unsettledMarkets, priceMap, configPda, sendTransaction, queryClient, isSyntheticMode]);
 
   if (!program || !publicKey || unsettledMarkets.length === 0) return null;
 
@@ -203,8 +244,9 @@ function AdminSettlePanel({ markets }: { markets: ParsedMarket[] }) {
     <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4 space-y-3">
       <p className="text-xs font-semibold text-amber-400">Admin Settle (Force)</p>
       <p className="text-[10px] text-amber-300/60">
-        Force-settle markets. Use for testing the full settlement → crank → redeem → init cycle.
-        Requires admin_settle_delay (5 min) to have passed since market close.
+        {isSyntheticMode
+          ? "Triggers the backend settlement pipeline (settle → crank → redeem → create next-day markets). No wallet signatures needed."
+          : "Force-settle markets via wallet. Requires admin_settle_delay (5 min) to have passed since market close."}
       </p>
 
       {/* Settle All button */}
@@ -214,7 +256,9 @@ function AdminSettlePanel({ markets }: { markets: ParsedMarket[] }) {
           disabled={settleAllProgress !== null || tickers.some((t) => !priceMap.get(t))}
           className="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs font-semibold text-amber-400 hover:bg-amber-500/20 disabled:opacity-30 transition-colors"
         >
-          {settleAllProgress ?? `Settle All ${unsettledMarkets.length} Markets at Current Price`}
+          {settleAllProgress ?? (isSyntheticMode
+            ? `Settle All ${unsettledMarkets.length} Markets (Backend)`
+            : `Settle All ${unsettledMarkets.length} Markets at Current Price`)}
         </button>
         {tickers.map((t) => {
           const p = priceMap.get(t);

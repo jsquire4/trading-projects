@@ -708,10 +708,32 @@ async function startPollingLoop(): Promise<never> {
 
 type MarketPhase = "auto" | "premarket" | "open" | "postmarket" | "closed";
 let marketStateOverride: MarketPhase = "auto";
+let overrideResetTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** Returns the overridden market state, or null if set to "auto" (use real clock). */
+const OVERRIDE_RESET_MS = 30 * 60 * 1000; // 30 minutes
+
+/** Returns the overridden market state, or "auto" to use real clock. */
 export function getMarketStateOverride(): MarketPhase {
   return marketStateOverride;
+}
+
+function setMarketStateWithTimer(phase: MarketPhase): void {
+  // Clear any existing reset timer
+  if (overrideResetTimer) {
+    clearTimeout(overrideResetTimer);
+    overrideResetTimer = null;
+  }
+
+  marketStateOverride = phase;
+
+  // Auto-reset to "auto" after 30 minutes (unless already "auto")
+  if (phase !== "auto") {
+    overrideResetTimer = setTimeout(() => {
+      log.info("Market state override expired after 30 minutes — resetting to auto");
+      marketStateOverride = "auto";
+      overrideResetTimer = null;
+    }, OVERRIDE_RESET_MS);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -768,8 +790,8 @@ function startTriggerServer(): void {
               res.end(JSON.stringify({ error: `Invalid state. Valid: ${VALID_PHASES.join(", ")}` }));
               return;
             }
-            marketStateOverride = state;
-            log.info(`Market state override set to: ${state}`);
+            setMarketStateWithTimer(state);
+            log.info(`Market state override set to: ${state} (resets to auto in 30m)`);
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ ok: true, state: marketStateOverride }));
           } catch {

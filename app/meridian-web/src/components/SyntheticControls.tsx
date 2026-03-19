@@ -51,6 +51,7 @@ function SyntheticControlsInner() {
   const setMarketPhase = useCallback(async (phase: MarketPhase) => {
     setPhaseLoading(true);
     try {
+      // Set the market clock override
       const res = await fetch("/api/market-state", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -59,6 +60,16 @@ function SyntheticControlsInner() {
       const data = await res.json();
       if (res.ok && data.ok) {
         setActivePhase(phase);
+      }
+
+      // For non-auto phases, ensure markets exist — trigger initialization if needed
+      if (phase !== "auto" && phase !== "closed") {
+        try {
+          await fetch(MARKET_INIT_URL, { method: "POST" });
+          // market-initializer is idempotent — skips existing markets
+        } catch {
+          // Non-critical: markets may already exist
+        }
       }
     } catch {
       // silent fail

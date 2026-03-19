@@ -127,7 +127,6 @@
         },
         {
           "name": "config",
-          "writable": true,
           "relations": [
             "market"
           ]
@@ -532,6 +531,7 @@
         },
         {
           "name": "config",
+          "writable": true,
           "relations": [
             "market"
           ]
@@ -1613,6 +1613,7 @@
         },
         {
           "name": "config",
+          "writable": true,
           "relations": [
             "market"
           ]
@@ -2536,11 +2537,6 @@
       "msg": "Oracle type flag not recognized"
     },
     {
-      "code": 6115,
-      "name": "PythFeedMismatch",
-      "msg": "Pyth price feed ID doesn't match expected stock"
-    },
-    {
       "code": 6117,
       "name": "MintSupplyNotZero",
       "msg": "Cannot close market — tokens still outstanding"
@@ -2846,7 +2842,7 @@
           {
             "name": "tickers",
             "docs": [
-              "Supported tickers (7 MAG7, padded to 8 bytes each) — legacy, use TickerRegistry"
+              "Supported tickers (7 MAG7, padded to 8 bytes each)"
             ],
             "type": {
               "array": [
@@ -2863,7 +2859,7 @@
           {
             "name": "ticker_count",
             "docs": [
-              "Number of active tickers — legacy, use TickerRegistry"
+              "Number of active tickers"
             ],
             "type": "u8"
           },

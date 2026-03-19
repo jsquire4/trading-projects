@@ -68,9 +68,9 @@ A Solana keypair at `~/.config/solana/id.json` is required. Create one with `sol
 | Service | Purpose |
 |---------|---------|
 | `oracle-feeder` | Pushes stock prices on-chain every 30s (Yahoo Finance or synthetic mode) |
-| `settlement` | Reactive poller: settles expired markets, cranks cancels/redeems, closes markets |
-| `market-initializer` | Creates daily strike markets for all 7 tickers |
-| `automation` | Morning health check, schedule coordination |
+| `settlement` | Reactive poller + HTTP trigger: settles expired markets, cranks, redeems, triggers market creation |
+| `market-initializer` | Persistent trigger server: creates daily strike markets for all 7 tickers on demand |
+| `automation` | Morning health check (8:30 AM ET), settlement trigger (4:05 PM ET), midnight recalc |
 | `monitor` | SOL balance alerts, oracle staleness checks |
 | `event-indexer` | Listens for on-chain events, stores in SQLite, exposes REST API |
 | `amm-bot` | Seeds liquidity using Black-Scholes pricing (optional, for demos) |
@@ -163,17 +163,17 @@ See [.env.example](.env.example) for the full list with comments.
 
 ## Daily Lifecycle
 
-1. **~8:00 AM ET** — Market initializer reads previous close, generates ±3/6/9% strikes, creates on-chain markets
-2. **9:00 AM ET** — Markets visible on frontend, minting and trading enabled
-3. **9:30 AM–4:00 PM ET** — Live trading on the order book
-4. **~4:05 PM ET** — Settlement service reads oracle closing price, settles all contracts
-5. **Post-settlement** — Crank cancel (refund resting orders), crank redeem (auto-redeem winners), close markets (recover rent)
+1. **Post-settlement** — Market initializer auto-creates next-day markets immediately after settlement completes, allowing overnight/weekend trading
+2. **8:30 AM ET** — Automation health check verifies markets exist (fallback creates if missing)
+3. **9:30 AM–4:00 PM ET** — Live trading on the order book, oracle feeder pushes prices every 30s
+4. **~4:05 PM ET** — Settlement service detects expired markets, confirms closing prices (double-poll), settles all contracts
+5. **Settlement pipeline** — Settle → crank cancel (refund resting orders) → auto-redeem (winners) → close markets → create next-day markets → unpause
 
 ## Known Risks & Limitations
 
 ### On-Chain
 - **Mock oracle only.** `settle_market` supports `oracle_type=0` (mock). Pyth integration (type=1) requires `admin_settle` fallback. Not a blocker for devnet.
-- **Override window is 1 second.** Effectively instant finality — admin has minimal dispute time. Intentional for devnet; should be configurable for mainnet.
+- **Override window defaults to 1 second.** Configurable via `update_config` (1–3600s). Stored in `GlobalConfig.override_window_secs`. Effectively instant finality on devnet.
 - **Position constraints enforced.** Users cannot hold both Yes and No tokens for the same strike from trading (pair-burn is the exit). This blocks same-strike straddles by design.
 - **Early close dates hardcoded through 2028.** NYSE half-day schedule. Falls back to 4 PM if stale.
 
@@ -183,7 +183,8 @@ See [.env.example](.env.example) for the full list with comments.
 - **Circuit breaker checks on-chain pause at startup.** If the platform is paused, the oracle feeder starts in paused mode.
 
 ### Frontend
-- **`todayPnl` is all-time unrealized P&L**, not intraday. The label is documented; true daily P&L requires intraday snapshots not yet implemented.
+- **Daily P&L includes mark-to-market adjustment** for the current day's open positions. Historical days show realized cash-flow P&L only (no intraday snapshots).
+- **Synthetic mode** includes admin market clock override (premarket/open/postmarket/closed) and backend-driven "Settle All" (no wallet signatures needed).
 
 ## License
 

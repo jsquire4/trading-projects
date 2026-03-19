@@ -775,6 +775,12 @@ async function test11(ctx: SharedContext, m: MarketContext): Promise<TestResult>
 // ── T12: Circuit breaker halts trading ───────────────────────────────────────
 
 async function test12(ctx: SharedContext, m: MarketContext): Promise<TestResult> {
+  // Ensure platform is unpaused before testing circuit breaker
+  try {
+    const unpIx = buildUnpauseIx({ admin: ctx.admin.publicKey, config: ctx.configPda });
+    await sendTx(ctx.connection, new Transaction().add(unpIx), [ctx.admin]);
+  } catch { /* may already be unpaused — NotPaused error is fine */ }
+
   // Place a resting order first
   const agent = await freshAgent(ctx);
   const atas = await atasFor(ctx, agent, m);
